@@ -173,7 +173,7 @@ cp admin/.env.example admin/.env
 If no `.env.example` exists, create `admin/.env` with:
 
 ```env
-VITE_WP_API_URL=http://induction-platform.local/wp-json
+VITE_WP_REST_URL=http://induction-platform.local/wp-json
 ```
 
 Replace `http://induction-platform.local` with your Local site URL.
