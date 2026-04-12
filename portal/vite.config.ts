@@ -9,7 +9,7 @@ export default defineConfig({
   build: {
     // Output goes into the WordPress plugin's assets folder so the plugin
     // can enqueue the built files directly with wp_enqueue_script().
-    outDir: resolve(__dirname, '../wp-plugin/assets'),
+    outDir: resolve(__dirname, '../wp-plugin/assets/portal'),
     emptyOutDir: true,
 
     rollupOptions: {

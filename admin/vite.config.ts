@@ -1,9 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { resolve } from 'path';
 
-// The admin app is a standalone SPA — it is NOT embedded in WordPress.
-// It can be deployed to any static host (Vercel, Netlify, etc.) or a
-// subdirectory/subdomain of the existing WP server.
+
+// Config to build the admin panel app, outputting to the WordPress plugin's assets folder for implementation into plugin.
+
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -11,15 +12,14 @@ export default defineConfig({
     cors: true,
   },
   build: {
+    outDir: resolve(__dirname, '../wp-plugin/assets/admin'),
+    emptyOutDir: true,
     rollupOptions: {
       output: {
-        manualChunks: {
-          'vendor-react':   ['react', 'react-dom', 'react-router-dom'],
-          'vendor-query':   ['@tanstack/react-query'],
-          'vendor-form':    ['react-hook-form', 'zod', '@hookform/resolvers'],
-          'vendor-editor':  ['@tiptap/react', '@tiptap/starter-kit', '@tiptap/extension-placeholder', '@tiptap/extension-link', '@tiptap/extension-image'],
-          'vendor-charts':  ['recharts'],
-        },
+        entryFileNames: 'admin.js',
+        chunkFileNames: 'admin-[name].js',
+        assetFileNames: (info) =>
+          info.name?.endsWith('.css') ? 'admin.css' : 'assets/[name][extname]',
       },
     },
   },

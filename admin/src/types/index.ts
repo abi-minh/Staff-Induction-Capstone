@@ -1,16 +1,9 @@
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
-export interface AuthToken {
-  token: string;
-  userEmail: string;
-  userNicename: string;
-  userDisplayName: string;
-}
-
 export interface AdminUser {
   id: number;
   name: string;
-  email: string;
+  email?: string;
   roles: string[];
 }
 

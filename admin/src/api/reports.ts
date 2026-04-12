@@ -22,7 +22,7 @@ interface WPReportSummary {
 }
 
 export async function fetchReportSummary(): Promise<ReportSummary> {
-  const { data } = await client.get<WPReportSummary>('induction/v1/reports/summary');
+  const { data } = await client.get<WPReportSummary>('reports/summary');
   return {
     totalModules: data.total_modules,
     totalStaff: data.total_staff,

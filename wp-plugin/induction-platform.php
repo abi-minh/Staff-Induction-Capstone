@@ -36,6 +36,8 @@ add_action( 'rest_api_init',   'induction_register_routes' );
 add_action( 'wp_enqueue_scripts', 'induction_maybe_enqueue_portal' );
 add_action( 'plugins_loaded',  'induction_create_tables' );
 add_shortcode( 'induction_portal', 'induction_portal_shortcode' );
+add_shortcode( 'induction_admin', 'induction_admin_shortcode' );
+add_action( 'wp_enqueue_scripts', 'induction_maybe_enqueue_admin' );
 
 // ─── Custom Post Types ───────────────────────────────────────────────────────
 
@@ -466,6 +468,20 @@ function induction_portal_shortcode(): string {
     return '<div id="induction-portal-root" style="min-height:600px"></div>';
 }
 
+// Function to render the admin portal shortcode, which is similar to the staff portal
+function induction_admin_shortcode(): string {
+    if ( ! is_user_logged_in() ) {
+        $login_url = wp_login_url( get_permalink() );
+        return '<p>Please <a href="' . esc_url( $login_url ) . '">log in</a> to access the admin portal.</p>';
+    }
+
+    if ( ! current_user_can( 'manage_induction' ) ) {
+        return '<p>You do not have permission to access the admin portal.</p>';
+    }
+
+    return '<div id="induction-admin-root" style="min-height:600px"></div>';
+}
+
 function induction_maybe_enqueue_portal(): void {
     global $post;
     // Only enqueue on pages that contain the shortcode.
@@ -476,16 +492,16 @@ function induction_maybe_enqueue_portal(): void {
         return;
     }
 
-    $js_path  = INDUCTION_DIR . 'assets/portal.js';
-    $css_path = INDUCTION_DIR . 'assets/portal.css';
+    $js_path  = INDUCTION_DIR . 'assets/portal/portal.js';
+    $css_path = INDUCTION_DIR . 'assets/portal/portal.css';
 
     // Bail if the built assets don't exist yet (pre-build).
     if ( ! file_exists( $js_path ) ) {
         return;
     }
 
-    $js_url  = INDUCTION_URL . 'assets/portal.js';
-    $css_url = INDUCTION_URL . 'assets/portal.css';
+    $js_url  = INDUCTION_URL . 'assets/portal/portal.js';
+    $css_url = INDUCTION_URL . 'assets/portal/portal.css';
 
     wp_enqueue_script(
         'induction-portal',
@@ -510,6 +526,55 @@ function induction_maybe_enqueue_portal(): void {
             'email'     => $current_user->user_email,
             'roles'     => $current_user->roles,
             'avatarUrl' => get_avatar_url( $current_user->ID, [ 'size' => 48 ] ),
+        ],
+    ] );
+}
+
+
+function induction_maybe_enqueue_admin(): void {
+    global $post;
+
+    if ( ! is_a( $post, 'WP_Post' ) || ! has_shortcode( $post->post_content, 'induction_admin' ) ) {
+        return;
+    }
+
+    if ( ! is_user_logged_in() || ! current_user_can( 'manage_induction' ) ) {
+        return;
+    }
+
+    $js_path  = INDUCTION_DIR . 'assets/admin/admin.js';
+    $css_path = INDUCTION_DIR . 'assets/admin/admin.css';
+
+    if ( ! file_exists( $js_path ) ) {
+        return;
+    }
+
+    wp_enqueue_script(
+        'induction-admin',
+        INDUCTION_URL . 'assets/admin/admin.js',
+        [],
+        filemtime( $js_path ),
+        true
+    );
+
+    if ( file_exists( $css_path ) ) {
+        wp_enqueue_style(
+            'induction-admin',
+            INDUCTION_URL . 'assets/admin/admin.css',
+            [],
+            filemtime( $css_path )
+        );
+    }
+
+    $current_user = wp_get_current_user();
+
+    wp_localize_script( 'induction-admin', 'InductionAdmin', [
+        'nonce'       => wp_create_nonce( 'wp_rest' ),
+        'restUrl'     => esc_url_raw( rest_url() ),
+        'currentUser' => [
+            'id'    => $current_user->ID,
+            'name'  => $current_user->display_name,
+            'roles' => $current_user->roles,
         ],
     ] );
 }

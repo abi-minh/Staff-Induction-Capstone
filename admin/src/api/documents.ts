@@ -1,4 +1,4 @@
-import client from './client';
+import { wpClient } from './client';
 import type { Document, DocumentFormValues, WPMedia } from '../types';
 
 interface WPDocument {
@@ -29,14 +29,14 @@ function normalise(wp: WPDocument, fileUrl?: string): Document {
 }
 
 export async function fetchDocuments(): Promise<Document[]> {
-  const { data } = await client.get<WPDocument[]>('wp/v2/induction_document', {
+  const { data } = await wpClient.get<WPDocument[]>('wp/v2/induction_document', {
     params: { per_page: 100, status: 'any', context: 'edit' },
   });
   return data.map((wp) => normalise(wp));
 }
 
 export async function createDocument(values: DocumentFormValues): Promise<Document> {
-  const { data } = await client.post<WPDocument>('wp/v2/induction_document', {
+  const { data } = await wpClient.post<WPDocument>('wp/v2/induction_document', {
     title: values.title,
     status: values.status,
     meta: {
@@ -49,7 +49,7 @@ export async function createDocument(values: DocumentFormValues): Promise<Docume
 }
 
 export async function updateDocument(id: number, values: Partial<DocumentFormValues>): Promise<Document> {
-  const { data } = await client.post<WPDocument>(`wp/v2/induction_document/${id}`, {
+  const { data } = await wpClient.post<WPDocument>(`wp/v2/induction_document/${id}`, {
     ...(values.title !== undefined && { title: values.title }),
     ...(values.status !== undefined && { status: values.status }),
     meta: {
@@ -62,7 +62,7 @@ export async function updateDocument(id: number, values: Partial<DocumentFormVal
 }
 
 export async function deleteDocument(id: number): Promise<void> {
-  await client.delete(`wp/v2/induction_document/${id}`, { params: { force: true } });
+  await wpClient.delete(`wp/v2/induction_document/${id}`, { params: { force: true } });
 }
 
 // ── Media upload ──────────────────────────────────────────────────────────────
@@ -72,7 +72,7 @@ export async function uploadMedia(file: File): Promise<WPMedia> {
   formData.append('file', file);
   formData.append('title', file.name);
 
-  const { data } = await client.post<{ id: number; source_url: string; mime_type: string; title: { rendered: string } }>(
+  const { data } = await wpClient.post<{ id: number; source_url: string; mime_type: string; title: { rendered: string } }>(
     'wp/v2/media',
     formData,
     { headers: { 'Content-Type': 'multipart/form-data' } }

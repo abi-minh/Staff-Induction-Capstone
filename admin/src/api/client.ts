@@ -1,34 +1,48 @@
-import axios, { AxiosError } from 'axios';
+import axios from 'axios';
+import type { AdminUser } from '../types';
 
-const BASE_URL = import.meta.env.VITE_WP_REST_URL ?? 'http://localhost:8080/wp-json/';
+interface InductionAdminRuntime {
+  nonce: string;
+  restUrl: string;
+  currentUser: AdminUser | null;
+}
 
-export const client = axios.create({
-  baseURL: BASE_URL,
-  headers: { 'Content-Type': 'application/json' },
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith('/') ? value : `${value}/`;
+}
+
+const fallbackRuntime: InductionAdminRuntime = {
+  nonce: '',
+  restUrl: import.meta.env.VITE_WP_REST_URL ?? 'http://localhost:8080/wp-json/',
+  currentUser: {
+    id: 0,
+    name: 'Dev Admin',
+    email: 'dev@example.com',
+    roles: ['administrator'],
+  },
+};
+
+const wpRuntime: InductionAdminRuntime = window.InductionAdmin ?? fallbackRuntime;
+
+export const currentUser = wpRuntime.currentUser;
+export const restUrl = ensureTrailingSlash(wpRuntime.restUrl);
+
+const sharedConfig = {
+  headers: {
+    'Content-Type': 'application/json',
+    'X-WP-Nonce': wpRuntime.nonce,
+  },
+  withCredentials: true,
+};
+
+export const wpClient = axios.create({
+  ...sharedConfig,
+  baseURL: restUrl,
 });
 
-// ── Request interceptor — attach JWT from localStorage on every request ───────
-client.interceptors.request.use((config) => {
-  const token = localStorage.getItem('induction_admin_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
+const client = axios.create({
+  ...sharedConfig,
+  baseURL: `${restUrl}induction/v1/`,
 });
-
-// ── Response interceptor — normalise errors, handle 401 ──────────────────────
-client.interceptors.response.use(
-  (res) => res,
-  (error: AxiosError<{ message?: string; code?: string }>) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('induction_admin_token');
-      localStorage.removeItem('induction_admin_user');
-      // Reload so the app re-renders the login screen.
-      window.location.reload();
-    }
-    const message = error.response?.data?.message ?? error.message ?? 'An error occurred';
-    return Promise.reject(new Error(message));
-  }
-);
 
 export default client;

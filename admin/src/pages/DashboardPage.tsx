@@ -1,11 +1,10 @@
-import { Link }         from 'react-router-dom';
-import { useModules }   from '../hooks/useModules';
-import { useStaff }     from '../hooks/useStaff';
-import { useReports }   from '../hooks/useReports';
-import { useAuthStore } from '../store/authStore';
+import { Link }        from 'react-router-dom';
+import { currentUser } from '../api/client';
+import { useModules }  from '../hooks/useModules';
+import { useStaff }    from '../hooks/useStaff';
+import { useReports }  from '../hooks/useReports';
 
 export default function DashboardPage() {
-  const user                          = useAuthStore((s) => s.user);
   const { data: modules }             = useModules();
   const { data: staff }               = useStaff();
   const { data: reports, isLoading }  = useReports();
@@ -13,7 +12,7 @@ export default function DashboardPage() {
   return (
     <div>
       <h1>Dashboard</h1>
-      <p>Signed in as {user?.name}</p>
+      <p>Signed in as {currentUser?.name}</p>
 
       {/* Stats — wire to your UI */}
       <ul>

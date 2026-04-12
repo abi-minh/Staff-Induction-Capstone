@@ -1,3 +1,19 @@
+# WordPress Admin App as plugin
+
+The admin app now runs inside the existing `Induction Platform` WordPress plugin and uses wordpress auth:
+- Admin assets are built into:
+   - `wp-plugin/assets/admin/`
+- Portal assets are built into:
+  - `wp-plugin/assets/portal/`
+
+To update the plugin:
+1. Build both the admin and portal app (npm run build).
+2. Transfer contents of `wp-plugin` directory (assets and induction-platform.php) to induction-platform folder in Local wordpress plugin folder
+3. implement both shortcode into different pages:
+   - `[induction_portal]`
+   - `[induction_admin]`
+
+
 # Induction Platform — Setup Guide
 
 A staff onboarding and training platform built with React + WordPress. The **portal** embeds into WordPress via a shortcode; the **admin** app is a standalone React SPA.
