@@ -7,7 +7,7 @@ The admin app now runs inside the existing `Induction Platform` WordPress plugin
   - `wp-plugin/assets/portal/`
 
 To update the plugin:
-1. Build both the admin and portal app (npm run build).
+1. Build both the admin and portal app ('npm install' and 'npm run build').
 2. Copy the contents of `wp-plugin/` into the WordPress plugin folder.
 3. Implement both shortcode into different pages:
    - `[induction_portal]`
