@@ -13,6 +13,7 @@ interface WPModule {
     module_role_targets: string[];
     module_estimated_minutes: number;
     module_order: number;
+    module_blocks: string;
   };
 }
 
@@ -29,6 +30,7 @@ function normalise(wp: WPModule): Module {
       module_role_targets: wp.meta?.module_role_targets ?? [],
       module_estimated_minutes: wp.meta?.module_estimated_minutes ?? 0,
       module_order: wp.meta?.module_order ?? 0,
+      module_blocks: wp.meta?.module_blocks ?? '[]',
     },
   };
 }
@@ -57,6 +59,7 @@ export async function createModule(values: ModuleFormValues): Promise<Module> {
       module_role_targets: values.module_role_targets,
       module_estimated_minutes: values.module_estimated_minutes,
       module_order: values.module_order,
+      ...(values.module_blocks !== undefined && { module_blocks: values.module_blocks }),
     },
   });
   return normalise(data);
@@ -72,6 +75,7 @@ export async function updateModule(id: number, values: Partial<ModuleFormValues>
       ...(values.module_role_targets !== undefined && { module_role_targets: values.module_role_targets }),
       ...(values.module_estimated_minutes !== undefined && { module_estimated_minutes: values.module_estimated_minutes }),
       ...(values.module_order !== undefined && { module_order: values.module_order }),
+      ...(values.module_blocks !== undefined && { module_blocks: values.module_blocks }),
     },
   });
   return normalise(data);

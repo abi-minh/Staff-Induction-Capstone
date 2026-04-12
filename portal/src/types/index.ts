@@ -39,6 +39,7 @@ export interface ModuleMeta {
   module_role_targets: string[];
   module_estimated_minutes: number;
   module_order: number;
+  module_blocks: string; // JSON-encoded Block[]
 }
 
 // ─── Documents (Reference Library) ───────────────────────────────────────────
@@ -90,4 +91,70 @@ export interface WPRestError {
   code: string;
   message: string;
   data: { status: number };
+}
+
+// ─── Blocks (Page Builder) ───────────────────────────────────────────────────
+
+export type HeadingLevel = 1 | 2 | 3 | 4;
+export type ListStyle = 'ordered' | 'unordered';
+
+export interface HeadingBlock {
+  id: string;
+  type: 'heading';
+  data: { level: HeadingLevel; text: string };
+}
+
+export interface TextBlock {
+  id: string;
+  type: 'text';
+  data: { html: string };
+}
+
+export interface ImageBlock {
+  id: string;
+  type: 'image';
+  data: { mediaId: number; url: string; alt: string; caption: string };
+}
+
+export interface VideoBlock {
+  id: string;
+  type: 'video';
+  data: { mediaId: number; url: string; caption: string };
+}
+
+export interface ListBlock {
+  id: string;
+  type: 'list';
+  data: { style: ListStyle; items: string[] };
+}
+
+export interface MultipleChoiceBlock {
+  id: string;
+  type: 'multiple_choice';
+  data: {
+    question: string;
+    options: string[];
+    explanation: string;
+  };
+}
+
+export interface TrueFalseBlock {
+  id: string;
+  type: 'true_false';
+  data: {
+    question: string;
+    explanation: string;
+  };
+}
+
+export type Block = HeadingBlock | TextBlock | ImageBlock | VideoBlock | ListBlock | MultipleChoiceBlock | TrueFalseBlock;
+
+export type BlockType = Block['type'];
+
+// ─── Quiz ────────────────────────────────────────────────────────────────────
+
+export interface QuizResponse {
+  blockId: string;
+  answer: string;
+  isCorrect: boolean | null;
 }

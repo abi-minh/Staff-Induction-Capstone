@@ -1,7 +1,9 @@
 import { useEffect, useState }              from 'react';
 import { useParams, useNavigate, Link }     from 'react-router-dom';
 import { useModule, useCreateModule, useUpdateModule } from '../hooks/useModules';
-import type { ModuleFormValues }            from '../types';
+import BlockEditor                          from '../blocks/BlockEditor';
+import { blocksToHtml }                     from '../blocks/utils';
+import type { ModuleFormValues, Block }     from '../types';
 
 const ROLES = ['staff', 'manager', 'casual', 'all'];
 
@@ -21,6 +23,7 @@ export default function ModuleEditPage() {
   const updateModule = useUpdateModule(moduleId);
 
   const [form, setForm] = useState<ModuleFormValues>(empty);
+  const [blocks, setBlocks] = useState<Block[]>([]);
 
   useEffect(() => {
     if (existing) {
@@ -33,6 +36,13 @@ export default function ModuleEditPage() {
         module_estimated_minutes:   existing.meta.module_estimated_minutes,
         module_order:               existing.meta.module_order,
       });
+
+      try {
+        const parsed = JSON.parse(existing.meta.module_blocks);
+        if (Array.isArray(parsed)) setBlocks(parsed);
+      } catch {
+        setBlocks([]);
+      }
     }
   }, [existing]);
 
@@ -51,11 +61,17 @@ export default function ModuleEditPage() {
   }
 
   async function handleSave() {
+    const values = {
+      ...form,
+      content: blocksToHtml(blocks),
+      module_blocks: JSON.stringify(blocks),
+    };
+
     if (isNew) {
-      const created = await createModule.mutateAsync(form);
+      const created = await createModule.mutateAsync(values);
       navigate(`/modules/${created.id}`, { replace: true });
     } else {
-      await updateModule.mutateAsync(form);
+      await updateModule.mutateAsync(values);
     }
   }
 
@@ -66,24 +82,17 @@ export default function ModuleEditPage() {
       <p><Link to="/modules">← Modules</Link></p>
       <h1>{isNew ? 'New module' : 'Edit module'}</h1>
 
-      {/* Module form — wire to your UI / add your rich text editor here */}
       <div>
         <label>Title</label>
         <input value={form.title} onChange={(e) => set('title', e.target.value)} />
       </div>
 
-      <div>
-        <label>Content (HTML)</label>
-        {/* Replace this textarea with your rich text editor */}
-        <textarea
-          rows={12}
-          value={form.content}
-          onChange={(e) => set('content', e.target.value)}
-          style={{ width: '100%', fontFamily: 'monospace' }}
-        />
+      <div style={{ marginTop: '1rem' }}>
+        <label>Content</label>
+        <BlockEditor blocks={blocks} onChange={setBlocks} />
       </div>
 
-      <div>
+      <div style={{ marginTop: '1rem' }}>
         <label>Excerpt</label>
         <textarea
           rows={3}

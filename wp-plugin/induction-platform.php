@@ -55,6 +55,8 @@ function induction_register_post_types(): void {
     register_post_meta( 'induction_module', 'module_role_targets',        [ 'type' => 'array',   'single' => true, 'show_in_rest' => [ 'schema' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ] ], 'default' => [] ] );
     register_post_meta( 'induction_module', 'module_estimated_minutes',   [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0 ] );
     register_post_meta( 'induction_module', 'module_order',               [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0 ] );
+    register_post_meta( 'induction_module', 'module_blocks',              [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '[]', 'sanitize_callback' => 'induction_sanitize_blocks_json' ] );
+    register_post_meta( 'induction_module', 'quiz_pass_threshold',        [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 70 ] );
 
     // Reference documents
     register_post_type( 'induction_document', [
@@ -71,6 +73,18 @@ function induction_register_post_types(): void {
     register_post_meta( 'induction_document', 'document_category',      [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '' ] );
     register_post_meta( 'induction_document', 'document_file_id',       [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0 ] );
     register_post_meta( 'induction_document', 'document_role_targets',  [ 'type' => 'array',   'single' => true, 'show_in_rest' => [ 'schema' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ] ], 'default' => [] ] );
+}
+
+// ─── Sanitization ───────────────────────────────────────────────────────────
+
+function induction_sanitize_blocks_json( string $value ): string {
+    $decoded = json_decode( $value, true );
+    // Must be a valid JSON array; reject anything else.
+    if ( ! is_array( $decoded ) || json_last_error() !== JSON_ERROR_NONE ) {
+        return '[]';
+    }
+    // Re-encode to ensure clean JSON (no trailing commas, etc.).
+    return wp_json_encode( $decoded );
 }
 
 // ─── Roles ───────────────────────────────────────────────────────────────────
@@ -104,31 +118,54 @@ function induction_register_roles(): void {
 
 function induction_create_tables(): void {
     global $wpdb;
-    $table   = $wpdb->prefix . 'induction_progress';
     $charset = $wpdb->get_charset_collate();
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
-    // Only run if the table doesn't exist yet.
-    if ( $wpdb->get_var( "SHOW TABLES LIKE '$table'" ) === $table ) {
-        return;
+    // Progress table
+    $progress_table = $wpdb->prefix . 'induction_progress';
+    if ( $wpdb->get_var( "SHOW TABLES LIKE '$progress_table'" ) !== $progress_table ) {
+        dbDelta( "CREATE TABLE $progress_table (
+            id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            user_id      BIGINT UNSIGNED NOT NULL,
+            module_id    BIGINT UNSIGNED NOT NULL,
+            status       ENUM('not_started','in_progress','completed') DEFAULT 'not_started',
+            started_at   DATETIME NULL,
+            completed_at DATETIME NULL,
+            time_spent   INT UNSIGNED DEFAULT 0,
+            score        DECIMAL(5,2) DEFAULT NULL,
+            passed       TINYINT(1) DEFAULT NULL,
+            created_at   DATETIME NOT NULL,
+            updated_at   DATETIME NOT NULL,
+            UNIQUE KEY user_module (user_id, module_id),
+            KEY idx_user_id (user_id),
+            KEY idx_module_id (module_id)
+        ) $charset;" );
     }
 
-    $sql = "CREATE TABLE $table (
-        id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-        user_id      BIGINT UNSIGNED NOT NULL,
-        module_id    BIGINT UNSIGNED NOT NULL,
-        status       ENUM('not_started','in_progress','completed') DEFAULT 'not_started',
-        started_at   DATETIME NULL,
-        completed_at DATETIME NULL,
-        time_spent   INT UNSIGNED DEFAULT 0,
-        created_at   DATETIME NOT NULL,
-        updated_at   DATETIME NOT NULL,
-        UNIQUE KEY user_module (user_id, module_id),
-        KEY idx_user_id (user_id),
-        KEY idx_module_id (module_id)
-    ) $charset;";
+    // Add score/passed columns if they don't exist (migration for existing installs)
+    $cols = $wpdb->get_col( "DESCRIBE $progress_table", 0 );
+    if ( ! in_array( 'score', $cols, true ) ) {
+        $wpdb->query( "ALTER TABLE $progress_table ADD COLUMN score DECIMAL(5,2) DEFAULT NULL AFTER time_spent" );
+    }
+    if ( ! in_array( 'passed', $cols, true ) ) {
+        $wpdb->query( "ALTER TABLE $progress_table ADD COLUMN passed TINYINT(1) DEFAULT NULL AFTER score" );
+    }
 
-    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-    dbDelta( $sql );
+    // Quiz responses table
+    $quiz_table = $wpdb->prefix . 'induction_quiz_responses';
+    if ( $wpdb->get_var( "SHOW TABLES LIKE '$quiz_table'" ) !== $quiz_table ) {
+        dbDelta( "CREATE TABLE $quiz_table (
+            id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            user_id      BIGINT UNSIGNED NOT NULL,
+            module_id    BIGINT UNSIGNED NOT NULL,
+            block_id     VARCHAR(64) NOT NULL,
+            answer       TEXT NOT NULL,
+            is_correct   TINYINT(1) DEFAULT NULL,
+            created_at   DATETIME NOT NULL,
+            UNIQUE KEY user_module_block (user_id, module_id, block_id),
+            KEY idx_user_module (user_id, module_id)
+        ) $charset;" );
+    }
 }
 
 // ─── REST API endpoints ──────────────────────────────────────────────────────
@@ -185,6 +222,41 @@ function induction_register_routes(): void {
         'methods'             => 'GET',
         'callback'            => 'induction_get_reports_summary',
         'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+    ] );
+
+    // POST /quiz/save — save a single answer without grading
+    register_rest_route( $ns, '/quiz/save', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_quiz_save',
+        'permission_callback' => 'is_user_logged_in',
+        'args'                => [
+            'user_id'   => [ 'type' => 'integer', 'required' => true ],
+            'module_id' => [ 'type' => 'integer', 'required' => true ],
+            'block_id'  => [ 'type' => 'string',  'required' => true ],
+            'answer'    => [ 'type' => 'string',  'required' => true ],
+        ],
+    ] );
+
+    // POST /quiz/submit — grade all answers for a module
+    register_rest_route( $ns, '/quiz/submit', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_quiz_submit',
+        'permission_callback' => 'is_user_logged_in',
+        'args'                => [
+            'user_id'   => [ 'type' => 'integer', 'required' => true ],
+            'module_id' => [ 'type' => 'integer', 'required' => true ],
+        ],
+    ] );
+
+    // GET /quiz/responses/user/{user_id}/module/{module_id} — get saved answers
+    register_rest_route( $ns, '/quiz/responses/user/(?P<user_id>\d+)/module/(?P<module_id>\d+)', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_quiz_get_responses',
+        'permission_callback' => 'is_user_logged_in',
+        'args'                => [
+            'user_id'   => [ 'type' => 'integer' ],
+            'module_id' => [ 'type' => 'integer' ],
+        ],
     ] );
 }
 
@@ -436,6 +508,189 @@ function induction_get_reports_summary(): WP_REST_Response {
     ] );
 }
 
+// ─── Quiz Callbacks ─────────────────────────────────────────────────────────
+
+function induction_quiz_save( WP_REST_Request $request ): WP_REST_Response {
+    global $wpdb;
+    $table     = $wpdb->prefix . 'induction_quiz_responses';
+    $user_id   = (int) $request->get_param( 'user_id' );
+    $module_id = (int) $request->get_param( 'module_id' );
+    $block_id  = $request->get_param( 'block_id' );
+    $answer    = $request->get_param( 'answer' );
+    $now       = current_time( 'mysql' );
+
+    if ( get_current_user_id() !== $user_id && ! current_user_can( 'manage_induction' ) ) {
+        return new WP_REST_Response( [ 'message' => 'Forbidden' ], 403 );
+    }
+
+    // Upsert the answer without grading — is_correct stays NULL until submit.
+    $existing = $wpdb->get_row(
+        $wpdb->prepare( "SELECT id FROM $table WHERE user_id = %d AND module_id = %d AND block_id = %s", $user_id, $module_id, $block_id ),
+        ARRAY_A
+    );
+
+    if ( $existing ) {
+        $wpdb->update( $table, [
+            'answer'     => $answer,
+            'is_correct' => null,
+            'created_at' => $now,
+        ], [ 'id' => $existing['id'] ] );
+    } else {
+        $wpdb->insert( $table, [
+            'user_id'    => $user_id,
+            'module_id'  => $module_id,
+            'block_id'   => $block_id,
+            'answer'     => $answer,
+            'is_correct' => null,
+            'created_at' => $now,
+        ] );
+    }
+
+    return new WP_REST_Response( [ 'saved' => true ] );
+}
+
+function induction_quiz_submit( WP_REST_Request $request ): WP_REST_Response {
+    global $wpdb;
+    $table     = $wpdb->prefix . 'induction_quiz_responses';
+    $user_id   = (int) $request->get_param( 'user_id' );
+    $module_id = (int) $request->get_param( 'module_id' );
+
+    if ( get_current_user_id() !== $user_id && ! current_user_can( 'manage_induction' ) ) {
+        return new WP_REST_Response( [ 'message' => 'Forbidden' ], 403 );
+    }
+
+    // Look up all quiz blocks and their correct answers.
+    $blocks_json = get_post_meta( $module_id, 'module_blocks', true ) ?: '[]';
+    $blocks      = json_decode( $blocks_json, true ) ?: [];
+    $quiz_blocks = [];
+    foreach ( $blocks as $b ) {
+        if ( in_array( $b['type'] ?? '', [ 'multiple_choice', 'true_false' ], true ) ) {
+            $quiz_blocks[ $b['id'] ] = $b;
+        }
+    }
+
+    if ( empty( $quiz_blocks ) ) {
+        return new WP_REST_Response( [ 'message' => 'No quiz blocks found' ], 400 );
+    }
+
+    // Get all saved answers for this user/module.
+    $saved = $wpdb->get_results(
+        $wpdb->prepare( "SELECT * FROM $table WHERE user_id = %d AND module_id = %d", $user_id, $module_id ),
+        ARRAY_A
+    ) ?? [];
+
+    // Grade each answer and build results.
+    $results   = [];
+    $now       = current_time( 'mysql' );
+
+    foreach ( $saved as $row ) {
+        $block_id   = $row['block_id'];
+        $quiz_block = $quiz_blocks[ $block_id ] ?? null;
+        if ( ! $quiz_block ) continue;
+
+        $answer     = $row['answer'];
+        $is_correct = false;
+
+        if ( $quiz_block['type'] === 'multiple_choice' ) {
+            $is_correct = (int) $answer === (int) ( $quiz_block['data']['correctIndex'] ?? -1 );
+        } elseif ( $quiz_block['type'] === 'true_false' ) {
+            $correct_val = ! empty( $quiz_block['data']['correctAnswer'] );
+            $is_correct  = ( $answer === 'true' ) === $correct_val;
+        }
+
+        // Update the row with the grading result.
+        $wpdb->update( $table, [ 'is_correct' => $is_correct ? 1 : 0 ], [ 'id' => $row['id'] ] );
+
+        $results[ $block_id ] = [
+            'is_correct'  => $is_correct,
+            'explanation' => $quiz_block['data']['explanation'] ?? '',
+        ];
+    }
+
+    // Calculate score.
+    $total   = count( $quiz_blocks );
+    $correct = count( array_filter( $results, fn( $r ) => $r['is_correct'] ) );
+    $score   = round( ( $correct / $total ) * 100, 2 );
+
+    $threshold = (int) ( get_post_meta( $module_id, 'quiz_pass_threshold', true ) ?: 70 );
+    $passed    = $score >= $threshold;
+
+    // Update progress record.
+    $progress_table = $wpdb->prefix . 'induction_progress';
+    $wpdb->query(
+        $wpdb->prepare(
+            "UPDATE $progress_table SET score = %f, passed = %d, updated_at = %s WHERE user_id = %d AND module_id = %d",
+            $score, $passed ? 1 : 0, $now, $user_id, $module_id
+        )
+    );
+
+    return new WP_REST_Response( [
+        'score'   => $score,
+        'total'   => $total,
+        'passed'  => $passed,
+        'results' => $results,
+    ] );
+}
+
+function induction_quiz_get_responses( WP_REST_Request $request ): WP_REST_Response {
+    global $wpdb;
+    $table     = $wpdb->prefix . 'induction_quiz_responses';
+    $user_id   = (int) $request->get_param( 'user_id' );
+    $module_id = (int) $request->get_param( 'module_id' );
+
+    if ( get_current_user_id() !== $user_id && ! current_user_can( 'manage_induction' ) ) {
+        return new WP_REST_Response( [ 'message' => 'Forbidden' ], 403 );
+    }
+
+    $rows = $wpdb->get_results(
+        $wpdb->prepare( "SELECT * FROM $table WHERE user_id = %d AND module_id = %d", $user_id, $module_id ),
+        ARRAY_A
+    ) ?? [];
+
+    return new WP_REST_Response( array_map( function( $row ) {
+        return [
+            'blockId'    => $row['block_id'],
+            'answer'     => $row['answer'],
+            'isCorrect'  => (bool) $row['is_correct'],
+        ];
+    }, $rows ) );
+}
+
+// ─── Answer Stripping ───────────────────────────────────────────────────────
+// Strip correct answers from module_blocks before sending to non-admin users.
+
+add_filter( 'rest_prepare_induction_module', 'induction_strip_quiz_answers', 10, 3 );
+
+function induction_strip_quiz_answers( WP_REST_Response $response, WP_Post $post, WP_REST_Request $request ): WP_REST_Response {
+    if ( current_user_can( 'manage_induction' ) ) {
+        return $response;
+    }
+
+    $data = $response->get_data();
+    if ( ! isset( $data['meta']['module_blocks'] ) ) {
+        return $response;
+    }
+
+    $blocks = json_decode( $data['meta']['module_blocks'], true );
+    if ( ! is_array( $blocks ) ) {
+        return $response;
+    }
+
+    foreach ( $blocks as &$block ) {
+        if ( ( $block['type'] ?? '' ) === 'multiple_choice' ) {
+            unset( $block['data']['correctIndex'] );
+        } elseif ( ( $block['type'] ?? '' ) === 'true_false' ) {
+            unset( $block['data']['correctAnswer'] );
+        }
+    }
+    unset( $block );
+
+    $data['meta']['module_blocks'] = wp_json_encode( $blocks );
+    $response->set_data( $data );
+
+    return $response;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function induction_format_progress_row( array $row ): array {
@@ -447,6 +702,8 @@ function induction_format_progress_row( array $row ): array {
         'started_at'  => $row['started_at']   ?: null,
         'completed_at'=> $row['completed_at'] ?: null,
         'time_spent'  => (int) $row['time_spent'],
+        'score'       => isset( $row['score'] ) ? (float) $row['score'] : null,
+        'passed'      => isset( $row['passed'] ) ? (bool) $row['passed'] : null,
     ];
 }
 
