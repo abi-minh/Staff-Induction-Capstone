@@ -1,4 +1,4 @@
-import client, { wpClient } from './client';
+import client from './client';
 import type { StaffMember, ProgressRecord } from '../types';
 
 interface WPUser {
@@ -22,14 +22,14 @@ function normaliseUser(wp: WPUser): StaffMember {
 }
 
 export async function fetchStaff(): Promise<StaffMember[]> {
-  const { data } = await wpClient.get<WPUser[]>('wp/v2/users', {
+  const { data } = await client.get<WPUser[]>('wp/v2/users', {
     params: { per_page: 100, roles: 'staff', context: 'edit' },
   });
   return data.map(normaliseUser);
 }
 
 export async function fetchStaffMember(id: number): Promise<StaffMember> {
-  const { data } = await wpClient.get<WPUser>(`wp/v2/users/${id}`, {
+  const { data } = await client.get<WPUser>(`wp/v2/users/${id}`, {
     params: { context: 'edit' },
   });
   return normaliseUser(data);
@@ -42,7 +42,7 @@ export async function bulkAssign(
   userIds: number[],
   dueDate?: string
 ): Promise<{ assigned: number }> {
-  const { data } = await client.post<{ assigned: number }>('assignments/bulk', {
+  const { data } = await client.post<{ assigned: number }>('induction/v1/assignments/bulk', {
     module_id: moduleId,
     user_ids: userIds,
     due_date: dueDate ?? null,
@@ -75,11 +75,16 @@ function normaliseProgress(r: WPProgressRecord): ProgressRecord {
 }
 
 export async function fetchStaffProgress(userId: number): Promise<ProgressRecord[]> {
-  const { data } = await client.get<WPProgressRecord[]>(`progress/user/${userId}`);
+  const { data } = await client.get<WPProgressRecord[]>(
+    `induction/v1/progress/user/${userId}`
+  );
   return data.map(normaliseProgress);
 }
 
+
 export async function fetchModuleProgress(moduleId: number): Promise<ProgressRecord[]> {
-  const { data } = await client.get<WPProgressRecord[]>(`progress/module/${moduleId}`);
+  const { data } = await client.get<WPProgressRecord[]>(
+    `induction/v1/progress/module/${moduleId}`
+  );
   return data.map(normaliseProgress);
 }

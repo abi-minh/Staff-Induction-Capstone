@@ -1,48 +1,35 @@
 import axios from 'axios';
-import type { AdminUser } from '../types';
 
-interface InductionAdminRuntime {
-  nonce: string;
-  restUrl: string;
-  currentUser: AdminUser | null;
-}
-
-function ensureTrailingSlash(value: string): string {
-  return value.endsWith('/') ? value : `${value}/`;
-}
-
-const fallbackRuntime: InductionAdminRuntime = {
-  nonce: '',
+// WordPress injects this object via wp_localize_script before the bundle loads.
+// During local dev (outside WP), fall back to env vars so the dev server works.
+const wpContext = window.InductionAdmin ?? {
+  nonce: import.meta.env.VITE_WP_NONCE ?? '',
   restUrl: import.meta.env.VITE_WP_REST_URL ?? 'http://localhost:8080/wp-json/',
-  currentUser: {
-    id: 0,
-    name: 'Dev Admin',
-    email: 'dev@example.com',
-    roles: ['administrator'],
-  },
+  currentUser: { id: 0, name: 'Dev Admin', email: '', roles: [] },
 };
 
-const wpRuntime: InductionAdminRuntime = window.InductionAdmin ?? fallbackRuntime;
+export const currentUser = wpContext.currentUser;
+export const restUrl = wpContext.restUrl;
 
-export const currentUser = wpRuntime.currentUser;
-export const restUrl = ensureTrailingSlash(wpRuntime.restUrl);
 
-const sharedConfig = {
-  headers: {
-    'Content-Type': 'application/json',
-    'X-WP-Nonce': wpRuntime.nonce,
-  },
-  withCredentials: true,
-};
-
-export const wpClient = axios.create({
-  ...sharedConfig,
-  baseURL: restUrl,
-});
 
 const client = axios.create({
-  ...sharedConfig,
-  baseURL: `${restUrl}induction/v1/`,
+  baseURL: restUrl,
+    headers: {
+    'Content-Type': 'application/json',
+    'X-WP-Nonce': wpContext.nonce,
+  },
+  withCredentials: true
 });
+
+// Normalise WP REST errors into a consistent shape.
+client.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    const message: string =
+      error.response?.data?.message ?? error.message ?? 'An unknown error occurred';
+    return Promise.reject(new Error(message));
+  }
+);
 
 export default client;

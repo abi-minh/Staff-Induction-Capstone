@@ -1,3 +1,18 @@
+// ─── Wordpress content ──────────────────────────────────────────────────────
+export interface WPContext {
+  nonce: string;
+  restUrl: string;
+  currentUser: AdminUser | null;
+}
+
+declare global {
+  interface Window {
+    InductionAdmin: WPContext;
+  }
+}
+
+
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 export interface AdminUser {

@@ -1,4 +1,4 @@
-import { wpClient } from './client';
+import client from './client';
 import type { Module, ModuleFormValues } from '../types';
 
 interface WPModule {
@@ -34,21 +34,21 @@ function normalise(wp: WPModule): Module {
 }
 
 export async function fetchModules(): Promise<Module[]> {
-  const { data } = await wpClient.get<WPModule[]>('wp/v2/induction_module', {
+  const { data } = await client.get<WPModule[]>('wp/v2/induction_module', {
     params: { per_page: 100, status: 'any', context: 'edit' },
   });
   return data.map(normalise).sort((a, b) => a.meta.module_order - b.meta.module_order);
 }
 
 export async function fetchModule(id: number): Promise<Module> {
-  const { data } = await wpClient.get<WPModule>(`wp/v2/induction_module/${id}`, {
+  const { data } = await client.get<WPModule>(`wp/v2/induction_module/${id}`, {
     params: { context: 'edit' },
   });
   return normalise(data);
 }
 
 export async function createModule(values: ModuleFormValues): Promise<Module> {
-  const { data } = await wpClient.post<WPModule>('wp/v2/induction_module', {
+  const { data } = await client.post<WPModule>('wp/v2/induction_module', {
     title: values.title,
     content: values.content,
     excerpt: values.excerpt,
@@ -63,7 +63,7 @@ export async function createModule(values: ModuleFormValues): Promise<Module> {
 }
 
 export async function updateModule(id: number, values: Partial<ModuleFormValues>): Promise<Module> {
-  const { data } = await wpClient.post<WPModule>(`wp/v2/induction_module/${id}`, {
+  const { data } = await client.post<WPModule>(`wp/v2/induction_module/${id}`, {
     ...(values.title !== undefined && { title: values.title }),
     ...(values.content !== undefined && { content: values.content }),
     ...(values.excerpt !== undefined && { excerpt: values.excerpt }),
@@ -78,5 +78,5 @@ export async function updateModule(id: number, values: Partial<ModuleFormValues>
 }
 
 export async function deleteModule(id: number): Promise<void> {
-  await wpClient.delete(`wp/v2/induction_module/${id}`, { params: { force: true } });
+  await client.delete(`wp/v2/induction_module/${id}`, { params: { force: true } });
 }
