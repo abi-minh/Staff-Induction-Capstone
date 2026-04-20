@@ -19,7 +19,6 @@ const client = axios.create({
     'Content-Type': 'application/json',
     'X-WP-Nonce': wpContext.nonce,
   },
-  withCredentials: true
 });
 
 // Normalise WP REST errors into a consistent shape.
