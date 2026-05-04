@@ -1,10 +1,9 @@
 import {
-  HashRouter, Routes, Route, NavLink, Outlet, Navigate, useNavigate,
+  HashRouter, Routes, Route, Navigate,
 } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Button } from '@mui/material';
-import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined';
 import { useAuthStore }    from './store/authStore';
+import AdminLayout         from './layout/AdminLayout';
 import LoginPage           from './pages/LoginPage';
 import DashboardPage       from './pages/DashboardPage';
 import ModulesPage         from './pages/ModulesPage';
@@ -37,41 +36,6 @@ function AdminGuard() {
     return <Navigate to="/portal" replace />;
   }
   return <AdminLayout />;
-}
-
-function AdminLayout() {
-  const { user, clearAuth } = useAuthStore();
-  const navigate = useNavigate();
-  return (
-    <div>
-      <nav style={{ padding: '8px 16px', borderBottom: '1px solid #e0e0e0', display: 'flex', alignItems: 'center', gap: 8 }}>
-        <NavLink to="/">Dashboard</NavLink>
-        {' | '}
-        <NavLink to="/modules">Modules</NavLink>
-        {' | '}
-        <NavLink to="/documents">Documents</NavLink>
-        {' | '}
-        <NavLink to="/staff">Staff</NavLink>
-        {' | '}
-        <NavLink to="/reports">Reports</NavLink>
-        <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontSize: 14 }}>{user?.name}</span>
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<VisibilityOutlined />}
-            onClick={() => navigate('/portal')}
-          >
-            Staff View
-          </Button>
-          <button onClick={clearAuth}>Sign out</button>
-        </span>
-      </nav>
-      <main style={{ padding: '24px 16px' }}>
-        <Outlet />
-      </main>
-    </div>
-  );
 }
 
 export default function App() {
