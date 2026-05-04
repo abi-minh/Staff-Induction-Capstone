@@ -1,0 +1,28 @@
+import { defineConfig } from 'vite';
+import { resolve }      from 'path';
+import react            from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+
+  // Base path matches the URL where WordPress will serve these files.
+  base: '/wp-content/plugins/induction-platform/assets/app/',
+
+  build: {
+    outDir: resolve(__dirname, '../wp-plugin/assets/app'),
+    emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        entryFileNames: 'app.js',
+        chunkFileNames: 'app-[name].js',
+        assetFileNames: (info) =>
+          info.name?.endsWith('.css') ? 'app.css' : 'assets/[name][extname]',
+      },
+    },
+  },
+
+  server: {
+    port: 5175,
+    cors: true,
+  },
+});
