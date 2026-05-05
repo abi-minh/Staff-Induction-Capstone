@@ -9,6 +9,7 @@ import { useAuthStore }            from '../store/authStore';
 import { useAssignedModules }      from '../hooks/usePortal';
 import { getModuleIcon }           from '../components/moduleVisuals';
 import { stripHtml }               from '../util/strings';
+import LogoutOutlinedIcon      from '@mui/icons-material/LogoutOutlined';
 
 const DRAWER_WIDTH = 200;
 
@@ -17,7 +18,7 @@ function isAdminUser(roles: string[]): boolean {
 }
 
 export default function StaffLayout() {
-  const { user } = useAuthStore();
+  const { user, clearAuth } = useAuthStore();
   const navigate  = useNavigate();
   const location  = useLocation();
   const { data: modules } = useAssignedModules();
@@ -134,6 +135,15 @@ export default function StaffLayout() {
                 <Typography variant="body2" sx={{ fontWeight: 500 }}>
                   {user?.name}
                 </Typography>
+                <Button
+                  size="small"
+                  color="inherit"
+                  startIcon={<LogoutOutlinedIcon />}
+                  onClick={clearAuth}
+                  sx={{ color: 'text.secondary' }}
+                >
+                  Sign out
+                </Button>
               </Box>
             </Toolbar>
           </AppBar>
