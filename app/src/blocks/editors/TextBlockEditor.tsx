@@ -14,7 +14,7 @@ export default function TextBlockEditor({ block, onChange }: Props) {
     extensions: [
       StarterKit,
       Link.configure({ openOnClick: false }),
-      Placeholder.configure({ placeholder: 'Start typing…' }),
+      Placeholder.configure({ placeholder: 'Start typing...' }),
     ],
     content: block.data.html,
     onUpdate: ({ editor }) => {
@@ -27,16 +27,29 @@ export default function TextBlockEditor({ block, onChange }: Props) {
   return (
     <div>
       <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.25rem' }}>
-        <button type="button" onClick={() => editor.chain().focus().toggleBold().run()}
-          style={{ fontWeight: editor.isActive('bold') ? 'bold' : 'normal' }}>B</button>
-        <button type="button" onClick={() => editor.chain().focus().toggleItalic().run()}
-          style={{ fontStyle: editor.isActive('italic') ? 'italic' : 'normal' }}>I</button>
-        <button type="button" onClick={() => editor.chain().focus().toggleBulletList().run()}>• List</button>
-        <button type="button" onClick={() => editor.chain().focus().toggleOrderedList().run()}>1. List</button>
-        <button type="button" onClick={() => {
-          const url = window.prompt('URL');
-          if (url) editor.chain().focus().setLink({ href: url }).run();
-        }}>Link</button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleBold().run()}
+          style={{ fontWeight: editor.isActive('bold') ? 'bold' : 'normal' }}
+        >
+          B
+        </button>
+        <button
+          type="button"
+          onClick={() => editor.chain().focus().toggleItalic().run()}
+          style={{ fontStyle: editor.isActive('italic') ? 'italic' : 'normal' }}
+        >
+          I
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const url = window.prompt('URL');
+            if (url) editor.chain().focus().setLink({ href: url }).run();
+          }}
+        >
+          Link
+        </button>
       </div>
       <EditorContent editor={editor} />
     </div>

@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, InputAdornment, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Dialog, DialogActions, DialogContent, DialogTitle, IconButton, InputAdornment, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import SearchIcon from '@mui/icons-material/Search';
+import { getIconByKey } from '../components/iconLibrary';
 import { useDeleteModule, useModules } from '../hooks/useModules';
 
 function formatDate(value: string): string {
@@ -150,7 +151,7 @@ export default function ModulesPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell sx={{ py: 2.25, fontWeight: 700, borderBottom: '1px solid', borderColor: 'divider' }}>Module Title</TableCell>
+                <TableCell sx={{ py: 2.25, fontWeight: 700, borderBottom: '1px solid', borderColor: 'divider' }}>Module</TableCell>
                 <TableCell sx={{ py: 2.25, fontWeight: 700, borderBottom: '1px solid', borderColor: 'divider' }}>Status</TableCell>
                 <TableCell sx={{ py: 2.25, fontWeight: 700, borderBottom: '1px solid', borderColor: 'divider' }}>Last Updated</TableCell>
                 <TableCell sx={{ py: 2.25, fontWeight: 700, width: 120, borderBottom: '1px solid', borderColor: 'divider'}}>Actions</TableCell>
@@ -159,47 +160,60 @@ export default function ModulesPage() {
 
             <TableBody>
               {filteredModules.map((module) => (
-                <TableRow
-                  key={module.id}
-                  hover
-                  sx={{
-                    '& td': {
-                      py: 1.5,
-                      fontSize: '1.02rem',
-                      borderBottom: '1px solid', 
-                      borderColor: 'divider'
-                    },
-                  }}
-                >
-                  <TableCell>{module.title || '(Untitled)'}</TableCell>
-                  <TableCell>
-                    <Typography
+                (() => {
+                  const ModuleIcon = getIconByKey(module.meta.module_icon);
+
+                  return (
+                    <TableRow
+                      key={module.id}
+                      hover
                       sx={{
-                        fontWeight: 500,
-                        color: module.status === 'publish' ? 'success.main' : 'text.secondary',
+                        '& td': {
+                          py: 1.5,
+                          fontSize: '1.02rem',
+                          borderBottom: '1px solid', 
+                          borderColor: 'divider'
+                        },
                       }}
                     >
-                      {module.status === 'publish' ? 'Published' : 'Draft'}
-                    </Typography>
-                  </TableCell>
-                  <TableCell>{formatDate(module.modified)}</TableCell>
-                  <TableCell>
-                    <Box sx={{ display: 'flex', gap: 1 }}>
-                      <IconButton
-                        onClick={() => navigate(`/modules/${module.id}`)}
-                        sx={{ color: 'primary.main' }}
-                      >
-                        <EditOutlinedIcon />
-                      </IconButton>
-                      <IconButton
-                        onClick={() => setConfirmDelete(module.id)}
-                        sx={{ color: 'error.main' }}
-                      >
-                        <DeleteIcon />
-                      </IconButton>
-                    </Box>
-                  </TableCell>
-                </TableRow>
+                      <TableCell>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+                          <ModuleIcon sx={{ color: 'primary.main', fontSize: 26 }} />
+                          <Typography sx={{ fontWeight: 500 }}>
+                            {module.title || '(Untitled)'}
+                          </Typography>
+                        </Box>
+                      </TableCell>
+                      <TableCell>
+                        <Typography
+                          sx={{
+                            fontWeight: 500,
+                            color: module.status === 'publish' ? 'success.main' : 'text.secondary',
+                          }}
+                        >
+                          {module.status === 'publish' ? 'Published' : 'Draft'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell>{formatDate(module.modified)}</TableCell>
+                      <TableCell>
+                        <Box sx={{ display: 'flex', gap: 1 }}>
+                          <IconButton
+                            onClick={() => navigate(`/modules/${module.id}`)}
+                            sx={{ color: 'primary.main' }}
+                          >
+                            <EditOutlinedIcon />
+                          </IconButton>
+                          <IconButton
+                            onClick={() => setConfirmDelete(module.id)}
+                            sx={{ color: 'error.main' }}
+                          >
+                            <DeleteIcon />
+                          </IconButton>
+                        </Box>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })()
               ))}
 
               {!filteredModules.length && (

@@ -1,15 +1,27 @@
 import { useState } from 'react';
+import { Box, Button, IconButton, Paper, Typography } from '@mui/material';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import type { Block, BlockType } from '../types';
-import { createBlock, BLOCK_LABELS } from './utils';
-import HeadingBlockEditor    from './editors/HeadingBlockEditor';
-import TextBlockEditor       from './editors/TextBlockEditor';
-import ImageBlockEditor      from './editors/ImageBlockEditor';
-import VideoBlockEditor      from './editors/VideoBlockEditor';
-import ListBlockEditor       from './editors/ListBlockEditor';
-import MultipleChoiceEditor  from './editors/MultipleChoiceEditor';
-import TrueFalseEditor       from './editors/TrueFalseEditor';
+import { BLOCK_LABELS, createBlock } from './utils';
+import HeadingBlockEditor from './editors/HeadingBlockEditor';
+import ImageBlockEditor from './editors/ImageBlockEditor';
+import ListBlockEditor from './editors/ListBlockEditor';
+import MultipleChoiceEditor from './editors/MultipleChoiceEditor';
+import TextBlockEditor from './editors/TextBlockEditor';
+import TrueFalseEditor from './editors/TrueFalseEditor';
+import VideoBlockEditor from './editors/VideoBlockEditor';
 
-const BLOCK_TYPES: BlockType[] = ['heading', 'text', 'image', 'video', 'list', 'multiple_choice', 'true_false'];
+const BLOCK_TYPES: BlockType[] = [
+  'heading',
+  'text',
+  'image',
+  'video',
+  'list',
+  'multiple_choice',
+  'true_false',
+];
 
 interface Props {
   blocks: Block[];
@@ -32,6 +44,7 @@ export default function BlockEditor({ blocks, onChange }: Props) {
   function moveBlock(index: number, direction: -1 | 1) {
     const target = index + direction;
     if (target < 0 || target >= blocks.length) return;
+
     const updated = [...blocks];
     [updated[index], updated[target]] = [updated[target], updated[index]];
     onChange(updated);
@@ -65,42 +78,110 @@ export default function BlockEditor({ blocks, onChange }: Props) {
   }
 
   return (
-    <div>
-      {blocks.length === 0 && <p>No blocks yet. Add one below.</p>}
+    <Box>
+      {blocks.length === 0 && (
+        <Typography color="text.secondary" sx={{ mb: 2 }}>
+          No blocks yet. Add one below.
+        </Typography>
+      )}
 
       {blocks.map((block, index) => (
-        <div
+        <Paper
           key={block.id}
-          style={{ border: '1px solid #ccc', padding: '0.75rem', marginBottom: '0.5rem' }}
+          variant="outlined"
+          sx={{
+            position: 'relative',
+            p: 2.5,
+            pl: { xs: 2.5, md: 8.5 },
+            mb: 2,
+            borderRadius: 2,
+            borderColor: 'divider',
+          }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-            <strong>{BLOCK_LABELS[block.type]}</strong>
-            <div style={{ display: 'flex', gap: '0.25rem' }}>
-              <button type="button" onClick={() => moveBlock(index, -1)} disabled={index === 0}>↑</button>
-              <button type="button" onClick={() => moveBlock(index, 1)} disabled={index === blocks.length - 1}>↓</button>
-              <button type="button" onClick={() => removeBlock(index)}>Delete</button>
-            </div>
-          </div>
-          {renderEditor(block, index)}
-        </div>
+          <Box
+            sx={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 1,
+              mb: 2,
+            }}
+          >
+            <Typography variant="h6" sx={{ fontSize: '1.15rem', fontWeight: 700 }}>
+              {BLOCK_LABELS[block.type]}
+            </Typography>
+
+            <IconButton color="error" onClick={() => removeBlock(index)}>
+              <DeleteOutlineIcon />
+            </IconButton>
+          </Box>
+
+          <Box>{renderEditor(block, index)}</Box>
+
+          <Box
+            sx={{
+              position: { xs: 'static', md: 'absolute' },
+              left: { md: 16 },
+              top: { md: '50%' },
+              transform: { md: 'translateY(-50%)' },
+              mt: { xs: 2, md: 0 },
+              display: 'flex',
+              justifyContent: { xs: 'flex-start', md: 'initial' },
+            }}
+          >
+            <Box
+              sx={{
+                display: 'flex',
+                flexDirection: { xs: 'row', md: 'column' },
+                gap: 0.5,
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: 1,
+                bgcolor: 'background.paper',
+              }}
+            >
+              <IconButton
+                size="small"
+                onClick={() => moveBlock(index, -1)}
+                disabled={index === 0}
+              >
+                <KeyboardArrowUpIcon />
+              </IconButton>
+              <IconButton
+                size="small"
+                onClick={() => moveBlock(index, 1)}
+                disabled={index === blocks.length - 1}
+              >
+                <KeyboardArrowDownIcon />
+              </IconButton>
+            </Box>
+          </Box>
+        </Paper>
       ))}
 
-      <div style={{ marginTop: '0.5rem' }}>
+      <Box sx={{ mt: 1 }}>
         {addMenuIndex === null ? (
-          <button type="button" onClick={() => setAddMenuIndex(blocks.length)}>
-            + Add block
-          </button>
+          <Button type="button" variant="outlined" onClick={() => setAddMenuIndex(blocks.length)}>
+            Add block
+          </Button>
         ) : (
-          <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
             {BLOCK_TYPES.map((type) => (
-              <button key={type} type="button" onClick={() => insertBlock(type, addMenuIndex)}>
+              <Button
+                key={type}
+                type="button"
+                variant="outlined"
+                onClick={() => insertBlock(type, addMenuIndex)}
+              >
                 {BLOCK_LABELS[type]}
-              </button>
+              </Button>
             ))}
-            <button type="button" onClick={() => setAddMenuIndex(null)}>Cancel</button>
-          </div>
+            <Button type="button" variant="text" onClick={() => setAddMenuIndex(null)}>
+              Cancel
+            </Button>
+          </Box>
         )}
-      </div>
-    </div>
+      </Box>
+    </Box>
   );
 }
