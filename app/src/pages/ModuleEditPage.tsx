@@ -3,14 +3,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Alert, Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, IconButton, MenuItem, Paper, TextField, Typography } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
-import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
-import OndemandVideoOutlinedIcon from '@mui/icons-material/OndemandVideoOutlined';
 import PublishIcon from '@mui/icons-material/SendOutlined';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
-import TextFieldsOutlinedIcon from '@mui/icons-material/TextFieldsOutlined';
 import { useCreateModule, useModule, useUpdateModule } from '../hooks/useModules';
 import { useUploadMedia } from '../hooks/useDocuments';
-import BlockEditor from '../blocks/BlockEditor';
+import ModuleContentEditor from '../blocks/ModuleContentEditor';
 import { blocksToHtml, createBlock } from '../blocks/utils';
 import { ICON_OPTIONS, getIconByKey } from '../components/iconLibrary';
 import type {
@@ -148,10 +145,6 @@ export default function ModuleEditPage() {
         ? form.module_role_targets.filter((currentRole) => currentRole !== role)
         : [...form.module_role_targets, role]
     );
-  }
-
-  function insertContentBlock(type: 'heading' | 'text' | 'image' | 'video' | 'list') {
-    setContentBlocks((current) => [...current, createBlock(type)]);
   }
 
   function addQuizQuestion() {
@@ -511,74 +504,7 @@ export default function ModuleEditPage() {
           Module Content
         </Typography>
 
-        <Box
-          sx={{
-            '& > div > div:last-child': {
-              display: 'none',
-            },
-            '& strong': {
-              fontSize: '1rem',
-            },
-            '& button': {
-              fontFamily: 'inherit',
-            },
-          }}
-        >
-          <BlockEditor blocks={contentBlocks} onChange={setContentBlocks} />
-        </Box>
-
-        <Box
-          sx={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 1.5,
-            pt: 2,
-            mt: 2.5,
-            borderTop: '1px solid',
-            borderColor: 'divider',
-          }}
-        >
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => insertContentBlock('heading')}
-            sx={roundedButtonSx}
-          >
-            Add Heading
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<TextFieldsOutlinedIcon />}
-            onClick={() => insertContentBlock('text')}
-            sx={roundedButtonSx}
-          >
-            Add Text
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => insertContentBlock('list')}
-            sx={roundedButtonSx}
-          >
-            Add List
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<ImageOutlinedIcon />}
-            onClick={() => insertContentBlock('image')}
-            sx={roundedButtonSx}
-          >
-            Add Image
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<OndemandVideoOutlinedIcon />}
-            onClick={() => insertContentBlock('video')}
-            sx={roundedButtonSx}
-          >
-            Add Video
-          </Button>
-        </Box>
+        <ModuleContentEditor blocks={contentBlocks} onChange={setContentBlocks} />
       </Paper>
 
       <Paper
