@@ -497,17 +497,9 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
     const {source, target} = operation;
 
     if (!target) return;
-    //console.log(`Dropped ${source?.id} over ${target.id}`);
-    // Access rich data
-    //console.log(event);
 
     if (state.kind === 'palette') {
-      //const overData = target.data as {isDropZone?: boolean; index?: number} | undefined;
-      //console.log(target.isDropTarget);
-      //if (overData?.isDropZone && overData?.index !== undefined) {
-      //console.log(target);
       if (isSortable(target) && target.isDropTarget && target.index !== undefined) {
-        //insertBlock(state.blockType, overData.index);
         insertBlock(state.blockType, target.index);
       } else {
         // Dropped on an existing block — insert after it
@@ -517,22 +509,12 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
     } else if (state.kind === 'block') {
       //const overData = target.data as { isDropZone?: boolean } | undefined;
       if (isSortable(source) && source.initialIndex != source.index) {
-        //console.log(source.initialIndex);
-        //console.log(source.index);
-        /*const oldIndex = blocks.findIndex((b) => b.id === source?.id);
-        const newIndex = blocks.findIndex((b) => b.id === target?.id);
-        if (newIndex >= 0) {
-          arrayMove(blocks, oldIndex, newIndex);
-        }*/
        if (source.index >= 0) {
-        //console.log("moving blocks");
-        //arrayMove(blocks, source.initialIndex, source.index);
         const newItems = [...blocks];
         const [removed] = newItems.splice(source.initialIndex, 1);
         newItems.splice(source.index, 0, removed);
         blocks = newItems;
         onChange(blocks);
-        //console.log(blocks);
        } 
       }
     }       
