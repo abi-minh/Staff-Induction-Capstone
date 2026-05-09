@@ -1,25 +1,25 @@
 import React, { useState } from 'react';
 import {
-  DndContext,
-  closestCenter,
-  PointerSensor,
-  KeyboardSensor,
-  useSensor,
-  useSensors,
-  DragOverlay,
-  useDroppable,
+  DragDropProvider,
   useDraggable,
-  type DragStartEvent,
-  type DragEndEvent,
-} from '@dnd-kit/core';
+  //useDroppable,
+  DragOverlay
+} from '@dnd-kit/react';
+
 import {
-  SortableContext,
-  sortableKeyboardCoordinates,
-  verticalListSortingStrategy,
-  useSortable,
-  arrayMove,
-} from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+  PointerSensor, 
+  KeyboardSensor, 
+  DragStartEvent, 
+  DragEndEvent, 
+} from '@dnd-kit/dom';
+
+import {isSortable} from '@dnd-kit/dom/sortable';
+
+/*import {
+  arrayMove
+} from '@dnd-kit/helpers';*/
+
+import {useSortable} from '@dnd-kit/react/sortable';
 import { Box, Divider, IconButton, Paper, SvgIcon, Tooltip, Typography } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
@@ -37,6 +37,7 @@ import ImageBlockEditor from './editors/ImageBlockEditor';
 import ListBlockEditor from './editors/ListBlockEditor';
 import TextBlockEditor from './editors/TextBlockEditor';
 import VideoBlockEditor from './editors/VideoBlockEditor';
+import { closestCenter } from '@dnd-kit/collision';
 
 type ContentBlockType = 'heading' | 'text' | 'image' | 'video' | 'list';
 
@@ -183,16 +184,15 @@ function BlockPreview({ block }: { block: Block }) {
 }
 
 function PaletteItem({ type, Icon }: { type: ContentBlockType; Icon: typeof SvgIcon }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+  const draggable = useDraggable({
     id: `palette-${type}`,
     data: { kind: 'palette', blockType: type },
   });
 
   return (
     <Box
-      ref={setNodeRef}
-      {...attributes}
-      {...listeners}
+      ref={draggable.ref}
+      className={draggable.isDragging ? 'dragging' : ''}
       sx={{
         display: 'flex',
         alignItems: 'center',
@@ -206,7 +206,7 @@ function PaletteItem({ type, Icon }: { type: ContentBlockType; Icon: typeof SvgI
         cursor: 'grab',
         userSelect: 'none',
         touchAction: 'none',
-        opacity: isDragging ? 0.3 : 1,
+        opacity: draggable.isDragging ? 0.3 : 1,
         transition: 'box-shadow 0.15s, border-color 0.15s',
         '&:hover': {
           borderColor: 'primary.main',
@@ -256,28 +256,34 @@ function BlockInserterPanel() {
 }
 
 function DropZone({ index, isActive }: { index: number; isActive: boolean }) {
-  const { setNodeRef, isOver } = useDroppable({
+  /*const droppable = useDroppable({
     id: `dz-${index}`,
     data: { isDropZone: true, index },
+    collisionDetector: closestCenter
+  });*/
+  const droppable = useSortable({
+    id: `dz-${index}`,
+    index,
+    collisionDetector: closestCenter
   });
 
   return (
     <Box
-      ref={setNodeRef}
+      ref={droppable.ref}
       sx={{
-        height: isActive ? (isOver ? 64 : 40) : 8,
+        height: isActive ? (droppable.isDropTarget ? 64 : 40) : 8,
         my: isActive ? 0.5 : 0,
         border: isActive ? '2px dashed' : 'none',
-        borderColor: isOver ? 'primary.main' : 'divider',
+        borderColor: droppable.isDropTarget ? 'primary.main' : 'divider',
         borderRadius: 1.5,
-        bgcolor: isOver ? 'action.selected' : 'transparent',
+        bgcolor: droppable.isDropTarget ? 'action.selected' : 'transparent',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         transition: 'all 0.15s ease',
       }}
     >
-      {isActive && isOver && (
+      {isActive && droppable.isDropTarget && (
         <Typography variant="caption" color="primary.main" sx={{ fontWeight: 700 }}>
           Drop here
         </Typography>
@@ -287,6 +293,7 @@ function DropZone({ index, isActive }: { index: number; isActive: boolean }) {
 }
 
 interface CanvasBlockProps {
+  index: number;
   block: Block;
   isSelected: boolean;
   isFirst: boolean;
@@ -299,6 +306,7 @@ interface CanvasBlockProps {
 }
 
 function CanvasBlock({
+  index,
   block,
   isSelected,
   isFirst,
@@ -309,9 +317,10 @@ function CanvasBlock({
   onMoveDown,
   onChange,
 }: CanvasBlockProps) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const sortable = useSortable({
     id: block.id,
-    data: { kind: 'block' },
+    index,
+    data: { kind: 'block' }
   });
 
   function renderEditor() {
@@ -333,11 +342,11 @@ function CanvasBlock({
 
   return (
     <Box
-      ref={setNodeRef}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
+      ref={sortable.ref}
+      className={sortable.isDragging ? 'dragging' : undefined}
       sx={{
         position: 'relative',
-        opacity: isDragging ? 0.35 : 1,
+        opacity: sortable.isDragging ? 0.35 : 1,
         // Show drag handle on hover via child selector
         '&:hover .block-drag-handle': { opacity: 1 },
       }}
@@ -345,8 +354,6 @@ function CanvasBlock({
       {/* Drag handle — always mounted, fades in on hover */}
       <Box
         className="block-drag-handle"
-        {...attributes}
-        {...listeners}
         sx={{
           position: 'absolute',
           left: -28,
@@ -442,11 +449,6 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState>({ kind: 'none' });
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-
   const isDraggingFromPalette = dragState.kind === 'palette';
 
   function updateBlock(index: number, data: Block['data']) {
@@ -477,42 +479,63 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
     setSelectedId(newBlock.id);
   }
 
-  function handleDragStart({ active }: DragStartEvent) {
-    const d = active.data.current as { kind: string; blockType?: ContentBlockType } | undefined;
+  function handleDragStart(event: DragStartEvent) {
+    const {source} = event.operation;
+    const d = source?.data as { kind: string; blockType?: ContentBlockType } | undefined;
     if (d?.kind === 'palette' && d.blockType) {
       setDragState({ kind: 'palette', blockType: d.blockType });
       setSelectedId(null);
     } else {
-      setDragState({ kind: 'block', blockId: active.id as string });
+      setDragState({ kind: 'block', blockId: source?.id as string });
     }
   }
 
-  function handleDragEnd({ active, over }: DragEndEvent) {
+  function handleDragEnd(event: DragEndEvent) {
     const state = dragState;
     setDragState({ kind: 'none' });
-    if (!over) return;
+    const {operation} = event;
+    const {source, target} = operation;
+
+    if (!target) return;
+    //console.log(`Dropped ${source?.id} over ${target.id}`);
+    // Access rich data
+    //console.log(event);
 
     if (state.kind === 'palette') {
-      const overData = over.data.current as { isDropZone?: boolean; index?: number } | undefined;
-      if (overData?.isDropZone && overData.index !== undefined) {
-        insertBlock(state.blockType, overData.index);
+      //const overData = target.data as {isDropZone?: boolean; index?: number} | undefined;
+      //console.log(target.isDropTarget);
+      //if (overData?.isDropZone && overData?.index !== undefined) {
+      //console.log(target);
+      if (isSortable(target) && target.isDropTarget && target.index !== undefined) {
+        //insertBlock(state.blockType, overData.index);
+        insertBlock(state.blockType, target.index);
       } else {
         // Dropped on an existing block — insert after it
-        const idx = blocks.findIndex((b) => b.id === over.id);
+        const idx = blocks.findIndex((b) => b.id === target?.id);
         if (idx >= 0) insertBlock(state.blockType, idx + 1);
       }
     } else if (state.kind === 'block') {
-      const overData = over.data.current as { isDropZone?: boolean } | undefined;
-      if (!overData?.isDropZone && active.id !== over.id) {
-        const oldIndex = blocks.findIndex((b) => b.id === active.id);
-        const newIndex = blocks.findIndex((b) => b.id === over.id);
-        if (newIndex >= 0) onChange(arrayMove(blocks, oldIndex, newIndex));
+      //const overData = target.data as { isDropZone?: boolean } | undefined;
+      if (isSortable(source) && source.initialIndex != source.index) {
+        //console.log(source.initialIndex);
+        //console.log(source.index);
+        /*const oldIndex = blocks.findIndex((b) => b.id === source?.id);
+        const newIndex = blocks.findIndex((b) => b.id === target?.id);
+        if (newIndex >= 0) {
+          arrayMove(blocks, oldIndex, newIndex);
+        }*/
+       if (source.index >= 0) {
+        //console.log("moving blocks");
+        //arrayMove(blocks, source.initialIndex, source.index);
+        const newItems = [...blocks];
+        const [removed] = newItems.splice(source.initialIndex, 1);
+        newItems.splice(source.index, 0, removed);
+        blocks = newItems;
+        onChange(blocks);
+        //console.log(blocks);
+       } 
       }
-    }
-  }
-
-  function handleDragCancel() {
-    setDragState({ kind: 'none' });
+    }       
   }
 
   // Overlay label for the drag ghost
@@ -526,12 +549,13 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
         : null;
 
   return (
-    <DndContext
-      sensors={sensors}
-      collisionDetection={closestCenter}
+    <DragDropProvider
+      sensors={[
+        PointerSensor,
+        KeyboardSensor
+      ]}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
-      onDragCancel={handleDragCancel}
     >
       <Box
         sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}
@@ -548,7 +572,7 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
           sx={{ flex: 1, minWidth: 0, pl: { md: 3 } }}
           onClick={(e) => e.stopPropagation()}
         >
-          <SortableContext items={blocks.map((b) => b.id)} strategy={verticalListSortingStrategy}>
+          
 
             {/* Empty state */}
             {blocks.length === 0 && !isDraggingFromPalette && (
@@ -576,6 +600,7 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
             {blocks.map((block, index) => (
               <React.Fragment key={block.id}>
                 <CanvasBlock
+                  index={index}
                   block={block}
                   isSelected={selectedId === block.id}
                   isFirst={index === 0}
@@ -590,7 +615,7 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
               </React.Fragment>
             ))}
 
-          </SortableContext>
+          
         </Box>
       </Box>
 
@@ -619,6 +644,6 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
           </Paper>
         )}
       </DragOverlay>
-    </DndContext>
+    </DragDropProvider>
   );
 }
