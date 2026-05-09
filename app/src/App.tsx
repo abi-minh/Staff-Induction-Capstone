@@ -8,6 +8,7 @@ import LoginPage           from './pages/LoginPage';
 import DashboardPage       from './pages/DashboardPage';
 import ModulesPage         from './pages/ModulesPage';
 import ModuleEditPage      from './pages/ModuleEditPage';
+import SectionEditPage    from './pages/SectionEditPage';
 import DocumentsPage       from './pages/DocumentsPage';
 import StaffPage           from './pages/StaffPage';
 import StaffDetailPage     from './pages/StaffDetailPage';
@@ -67,7 +68,8 @@ export default function App() {
           >
             <Route index                   element={<DashboardPage />} />
             <Route path="modules"          element={<ModulesPage />} />
-            <Route path="modules/:id"      element={<ModuleEditPage />} />
+            <Route path="modules/:id"                     element={<ModuleEditPage />} />
+            <Route path="modules/:id/sections/:sectionId" element={<SectionEditPage />} />
             <Route path="documents"        element={<DocumentsPage />} />
             <Route path="staff"            element={<StaffPage />} />
             <Route path="staff/:id"        element={<StaffDetailPage />} />

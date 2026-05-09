@@ -13,7 +13,7 @@ import {
   DragEndEvent, 
 } from '@dnd-kit/dom';
 
-import {isSortable} from '@dnd-kit/dom/sortable';
+import {isSortable, SortableKeyboardPlugin} from '@dnd-kit/dom/sortable';
 
 /*import {
   arrayMove
@@ -320,7 +320,8 @@ function CanvasBlock({
   const sortable = useSortable({
     id: block.id,
     index,
-    data: { kind: 'block' }
+    data: { kind: 'block' },
+    plugins: [SortableKeyboardPlugin]
   });
 
   function renderEditor() {
@@ -507,11 +508,10 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
         if (idx >= 0) insertBlock(state.blockType, idx + 1);
       }
     } else if (state.kind === 'block') {
-      //const overData = target.data as { isDropZone?: boolean } | undefined;
-      if (isSortable(source) && source.initialIndex != source.index) {
+      if (isSortable(source) && isSortable(target) && target.index != source.index) {
        if (source.index >= 0) {
         const newItems = [...blocks];
-        const [removed] = newItems.splice(source.initialIndex, 1);
+        const [removed] = newItems.splice(target.index, 1);
         newItems.splice(source.index, 0, removed);
         blocks = newItems;
         onChange(blocks);

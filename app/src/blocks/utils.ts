@@ -1,9 +1,55 @@
-import type { Block, BlockType } from '../types';
+import type { Block, BlockType, QuizBlock, Section } from '../types';
 
 let blockCounter = 0;
+let sectionCounter = 0;
 
 export function generateBlockId(): string {
   return `block-${Date.now()}-${blockCounter++}`;
+}
+
+export function isQuizBlock(block: Block): block is QuizBlock {
+  return block.type === 'multiple_choice' || block.type === 'true_false';
+}
+
+export function parseSections(raw: string | undefined): Section[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return [];
+
+    // New Section[] format has a 'blocks' property on each element
+    if ('blocks' in parsed[0]) {
+      return parsed as Section[];
+    }
+
+    // Old flat Block[] — migrate to a single section
+    const allBlocks = parsed as Block[];
+    return [{
+      id: `section-${Date.now()}-migrated`,
+      heroImage: '',
+      title: '',
+      description: '',
+      blocks: allBlocks.filter((b) => !isQuizBlock(b)),
+      quizTitle: '',
+      passingPercentage: 80,
+      quizBlocks: allBlocks.filter(isQuizBlock) as QuizBlock[],
+    }];
+  } catch {
+    return [];
+  }
+}
+
+export function createSection(): Section {
+  return {
+    id: `section-${Date.now()}-${sectionCounter++}`,
+    heroImage: '',
+    title: '',
+    description: '',
+    blocks: [],
+    quizTitle: '',
+    passingPercentage: 80,
+    quizBlocks: [],
+  };
 }
 
 export function createBlock(type: BlockType): Block {

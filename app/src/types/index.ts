@@ -42,7 +42,7 @@ export interface ModuleMeta {
   module_role_targets: string[];
   module_estimated_minutes: number;
   module_order: number;
-  module_blocks: string; // JSON-encoded Block[]
+  module_blocks: string; // JSON-encoded Section[]
   module_icon: string;
   module_hero_image: number;
 }
@@ -209,6 +209,19 @@ export interface TrueFalseBlock {
 export type Block = HeadingBlock | TextBlock | ImageBlock | VideoBlock | ListBlock | MultipleChoiceBlock | TrueFalseBlock;
 
 export type BlockType = Block['type'];
+
+export type QuizBlock = MultipleChoiceBlock | TrueFalseBlock;
+
+export interface Section {
+  id: string;
+  heroImage: string;
+  title: string;
+  description: string;
+  blocks: Block[];
+  quizTitle: string;
+  passingPercentage: number;
+  quizBlocks: QuizBlock[];
+}
 
 // ─── Quiz ────────────────────────────────────────────────────────────────────
 

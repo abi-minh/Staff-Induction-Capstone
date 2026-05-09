@@ -1,21 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Alert, Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, IconButton, MenuItem, Paper, TextField, Typography } from '@mui/material';
+import {
+  Alert, Box, Button, Checkbox, Dialog, DialogActions, DialogContent,
+  DialogTitle, FormControlLabel, IconButton, MenuItem, Paper, TextField, Typography,
+} from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import PublishIcon from '@mui/icons-material/SendOutlined';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import { useCreateModule, useModule, useUpdateModule } from '../hooks/useModules';
 import { useUploadMedia } from '../hooks/useDocuments';
-import ModuleContentEditor from '../blocks/ModuleContentEditor';
-import { blocksToHtml, createBlock } from '../blocks/utils';
+import { blocksToHtml, createSection, parseSections } from '../blocks/utils';
 import { ICON_OPTIONS, getIconByKey } from '../components/iconLibrary';
-import type {
-  Block,
-  ModuleFormValues,
-  MultipleChoiceBlock,
-  TrueFalseBlock,
-} from '../types';
+import type { ModuleFormValues, Section } from '../types';
 
 const ROLES = ['staff', 'manager', 'casual', 'all'];
 
@@ -31,38 +29,10 @@ const empty: ModuleFormValues = {
   module_hero_image: 0,
 };
 
-type QuizBlock = MultipleChoiceBlock | TrueFalseBlock;
 const roundedButtonSx = { borderRadius: '10px' };
 
-function parseBlocks(raw: string | undefined): Block[] {
-  if (!raw) return [];
-
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function isQuizBlock(block: Block): block is QuizBlock {
-  return block.type === 'multiple_choice' || block.type === 'true_false';
-}
-
-function createEditorSnapshot(
-  form: ModuleFormValues,
-  contentBlocks: Block[],
-  quizBlocks: QuizBlock[],
-  quizTitle: string,
-  passingPercentage: string
-): string {
-  return JSON.stringify({
-    form,
-    contentBlocks,
-    quizBlocks,
-    quizTitle,
-    passingPercentage,
-  });
+function createEditorSnapshot(form: ModuleFormValues, sections: Section[]): string {
+  return JSON.stringify({ form, sections });
 }
 
 export default function ModuleEditPage() {
@@ -77,24 +47,19 @@ export default function ModuleEditPage() {
   const uploadMedia = useUploadMedia();
 
   const [form, setForm] = useState<ModuleFormValues>(empty);
-  const [contentBlocks, setContentBlocks] = useState<Block[]>([]);
-  const [quizBlocks, setQuizBlocks] = useState<QuizBlock[]>([]);
-  const [quizTitle, setQuizTitle] = useState('');
-  const [passingPercentage, setPassingPercentage] = useState('80');
+  const [sections, setSections] = useState<Section[]>([]);
   const [heroPreview, setHeroPreview] = useState('');
   const [initialSnapshot, setInitialSnapshot] = useState(() =>
-    createEditorSnapshot(empty, [], [], '', '80')
+    createEditorSnapshot(empty, [])
   );
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const heroFileRef = useRef<HTMLInputElement>(null);
-  const quizSectionRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isNew) {
-      setInitialSnapshot(createEditorSnapshot(empty, [], [], '', '80'));
+      setInitialSnapshot(createEditorSnapshot(empty, []));
       return;
     }
-
     if (!existing) return;
 
     const nextForm: ModuleFormValues = {
@@ -108,31 +73,16 @@ export default function ModuleEditPage() {
       module_icon: existing.meta.module_icon,
       module_hero_image: existing.meta.module_hero_image,
     };
-
-    const parsed = parseBlocks(existing.meta.module_blocks);
-    const nextContentBlocks = parsed.filter((block) => !isQuizBlock(block));
-    const nextQuizBlocks = parsed.filter(isQuizBlock);
-    const nextQuizTitle = existing.title ? `${existing.title} Quiz` : 'Module Quiz';
+    const nextSections = parseSections(existing.meta.module_blocks);
 
     setForm(nextForm);
-    setContentBlocks(nextContentBlocks);
-    setQuizBlocks(nextQuizBlocks);
-    setQuizTitle(nextQuizTitle);
-    setInitialSnapshot(
-      createEditorSnapshot(nextForm, nextContentBlocks, nextQuizBlocks, nextQuizTitle, '80')
-    );
+    setSections(nextSections);
+    setInitialSnapshot(createEditorSnapshot(nextForm, nextSections));
   }, [existing, isNew]);
 
   const saving = createModule.isLoading || updateModule.isLoading;
   const SelectedIcon = getIconByKey(form.module_icon);
-
-  const allBlocks = useMemo(
-    () => [...contentBlocks, ...quizBlocks],
-    [contentBlocks, quizBlocks]
-  );
-  const isDirty =
-    createEditorSnapshot(form, contentBlocks, quizBlocks, quizTitle, passingPercentage) !==
-    initialSnapshot;
+  const isDirty = createEditorSnapshot(form, sections) !== initialSnapshot;
 
   function set<K extends keyof ModuleFormValues>(key: K, value: ModuleFormValues[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -142,41 +92,18 @@ export default function ModuleEditPage() {
     set(
       'module_role_targets',
       form.module_role_targets.includes(role)
-        ? form.module_role_targets.filter((currentRole) => currentRole !== role)
+        ? form.module_role_targets.filter((r) => r !== role)
         : [...form.module_role_targets, role]
     );
   }
 
-  function addQuizQuestion() {
-    const questionBlock = createBlock('multiple_choice') as MultipleChoiceBlock;
-    setQuizBlocks((current) => [...current, questionBlock]);
-  }
-
-  function updateQuizBlock(index: number, updater: (block: QuizBlock) => QuizBlock) {
-    setQuizBlocks((current) =>
-      current.map((block, blockIndex) => (blockIndex === index ? updater(block) : block))
-    );
-  }
-
-  function removeQuizBlock(index: number) {
-    setQuizBlocks((current) => current.filter((_, blockIndex) => blockIndex !== index));
-  }
-
-  async function handleHeroUpload(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const media = await uploadMedia.mutateAsync(file);
-    set('module_hero_image', media.id);
-    setHeroPreview(media.sourceUrl);
-  }
-
   async function handleSave(statusOverride?: 'draft' | 'publish') {
+    const allBlocks = sections.flatMap((s) => [...s.blocks, ...s.quizBlocks]);
     const values = {
       ...form,
       status: statusOverride ?? form.status,
       content: blocksToHtml(allBlocks),
-      module_blocks: JSON.stringify(allBlocks),
+      module_blocks: JSON.stringify(sections),
     };
 
     if (isNew) {
@@ -186,72 +113,57 @@ export default function ModuleEditPage() {
     }
 
     await updateModule.mutateAsync(values);
-    navigate('/modules');
+    setInitialSnapshot(createEditorSnapshot(form, sections));
+  }
+
+  async function handleAddSection() {
+    const newSection = createSection();
+    const newSections = [...sections, newSection];
+    const allBlocks = newSections.flatMap((s) => [...s.blocks, ...s.quizBlocks]);
+    await updateModule.mutateAsync({
+      ...form,
+      content: blocksToHtml(allBlocks),
+      module_blocks: JSON.stringify(newSections),
+    });
+    setSections(newSections);
+    setInitialSnapshot(createEditorSnapshot(form, newSections));
+    navigate(`/modules/${id}/sections/${newSection.id}`);
+  }
+
+  async function handleHeroUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const media = await uploadMedia.mutateAsync(file);
+    set('module_hero_image', media.id);
+    setHeroPreview(media.sourceUrl);
   }
 
   function handleBackToModules() {
-    if (isDirty) {
-      setLeaveDialogOpen(true);
-      return;
-    }
-
+    if (isDirty) { setLeaveDialogOpen(true); return; }
     navigate('/modules');
   }
 
-  if (!isNew && isLoading) {
-    return <Typography>Loading...</Typography>;
-  }
-
-  if (error) {
-    return <Alert severity="error">Error: {(error as Error).message}</Alert>;
-  }
+  if (!isNew && isLoading) return <Typography>Loading...</Typography>;
+  if (error) return <Alert severity="error">Error: {(error as Error).message}</Alert>;
 
   return (
     <Box>
-      <Box
-        sx={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 2,
-          flexWrap: 'wrap',
-          mb: 2,
-        }}
-      >
-        <Button variant="text" onClick={handleBackToModules}
-          sx={roundedButtonSx}
-          >
+      {/* Top action bar */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, flexWrap: 'wrap', mb: 2 }}>
+        <Button variant="text" onClick={handleBackToModules} sx={roundedButtonSx}>
           ← Back to Modules
         </Button>
-
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-          <Button
-            variant="outlined"
-            startIcon={<SaveOutlinedIcon />}
-            onClick={() => handleSave()}
-            disabled={saving}
-            sx={roundedButtonSx}
-          >
+          <Button variant="outlined" startIcon={<SaveOutlinedIcon />} onClick={() => handleSave()} disabled={saving} sx={roundedButtonSx}>
             Save
           </Button>
-          <Button
-            variant="contained"
-            startIcon={<PublishIcon />}
-            onClick={() => handleSave('publish')}
-            disabled={saving}
-            sx={roundedButtonSx}
-          >
+          <Button variant="contained" startIcon={<PublishIcon />} onClick={() => handleSave('publish')} disabled={saving} sx={roundedButtonSx}>
             Publish
           </Button>
         </Box>
       </Box>
 
-      <Dialog
-        open={leaveDialogOpen}
-        onClose={() => setLeaveDialogOpen(false)}
-        maxWidth="xs"
-        fullWidth
-      >
+      <Dialog open={leaveDialogOpen} onClose={() => setLeaveDialogOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle>Leave this page?</DialogTitle>
         <DialogContent>
           <Typography color="text.secondary">
@@ -259,161 +171,55 @@ export default function ModuleEditPage() {
           </Typography>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3 }}>
-          <Button variant="text" onClick={() => setLeaveDialogOpen(false)}>
-            Cancel
-          </Button>
-          <Button
-            variant="outlined"
-            color="error"
-            onClick={() => navigate('/modules')}
-          >
-            Discard
-          </Button>
-          <Button
-            variant="contained"
-            onClick={() => {
-              setLeaveDialogOpen(false);
-              void handleSave();
-            }}
-            disabled={saving}
-          >
+          <Button variant="text" onClick={() => setLeaveDialogOpen(false)}>Cancel</Button>
+          <Button variant="outlined" color="error" onClick={() => navigate('/modules')}>Discard</Button>
+          <Button variant="contained" onClick={() => { setLeaveDialogOpen(false); void handleSave(); }} disabled={saving}>
             Save Changes
           </Button>
         </DialogActions>
       </Dialog>
 
-      <Paper
-        sx={{
-          p: { xs: 2.5, md: 3.5 },
-          mb: 3,
-          border: '1px solid',
-          borderColor: 'divider',
-          boxShadow: '0 14px 40px rgba(15, 23, 42, 0.06)',
-        }}
-      >
-        <Typography variant="h2" sx={{ fontSize: '1.65rem', mb: 2.5 }}>
-          Module Details
-        </Typography>
+      {/* Module Details */}
+      <Paper sx={{ p: { xs: 2.5, md: 3.5 }, mb: 3, border: '1px solid', borderColor: 'divider', boxShadow: '0 14px 40px rgba(15, 23, 42, 0.06)' }}>
+        <Typography variant="h2" sx={{ fontSize: '1.65rem', mb: 2.5 }}>Module Details</Typography>
 
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: { xs: '1fr', lg: '1.3fr 0.7fr' },
-            gap: 2.5,
-            mb: 2.5,
-          }}
-        >
-          <TextField
-            label="Module Name"
-            value={form.title}
-            onChange={(event) => set('title', event.target.value)}
-            fullWidth
-          />
-
-          <TextField
-            label="Module Status"
-            select
-            value={form.status}
-            onChange={(event) => set('status', event.target.value as 'draft' | 'publish')}
-            fullWidth
-          >
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1.3fr 0.7fr' }, gap: 2.5, mb: 2.5 }}>
+          <TextField label="Module Name" value={form.title} onChange={(e) => set('title', e.target.value)} fullWidth />
+          <TextField label="Module Status" select value={form.status} onChange={(e) => set('status', e.target.value as 'draft' | 'publish')} fullWidth>
             <MenuItem value="draft">Draft</MenuItem>
             <MenuItem value="publish">Published</MenuItem>
           </TextField>
         </Box>
 
-        <TextField
-          label="Description"
-          value={form.excerpt}
-          onChange={(event) => set('excerpt', event.target.value)}
-          multiline
-          minRows={3}
-          fullWidth
-          sx={{ mb: 2.5 }}
-        />
+        <TextField label="Description" value={form.excerpt} onChange={(e) => set('excerpt', e.target.value)} multiline minRows={3} fullWidth sx={{ mb: 2.5 }} />
 
-        <Box
-          sx={{
-            display: 'grid',
-            gap: 2.5,
-          }}
-        >
+        <Box sx={{ display: 'grid', gap: 2.5 }}>
           <Box>
-            <Box
-              sx={{
-                display: 'flex',
-                alignItems: { xs: 'flex-start', sm: 'center' },
-                flexDirection: { xs: 'column', sm: 'row' },
-                gap: 1.5,
-              }}
-            >
-              <Box
-                sx={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 1,
-                  color: 'text.secondary',
-                  pt: { xs: 0, sm: 1 },
-                }}
-              >
+            <Box sx={{ display: 'flex', alignItems: { xs: 'flex-start', sm: 'center' }, flexDirection: { xs: 'column', sm: 'row' }, gap: 1.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, color: 'text.secondary', pt: { xs: 0, sm: 1 } }}>
                 <SelectedIcon style={{ fontSize: 28 }} />
               </Box>
-
-              <TextField
-                label="Module Icon"
-                select
-                value={form.module_icon}
-                onChange={(event) => set('module_icon', event.target.value)}
-                fullWidth
-                sx={{ flex: 1 }}
-              >
+              <TextField label="Module Icon" select value={form.module_icon} onChange={(e) => set('module_icon', e.target.value)} fullWidth sx={{ flex: 1 }}>
                 <MenuItem value="">Default</MenuItem>
                 {Object.entries(ICON_OPTIONS).map(([key, option]) => (
-                  <MenuItem key={key} value={key}>
-                    {option.label}
-                  </MenuItem>
+                  <MenuItem key={key} value={key}>{option.label}</MenuItem>
                 ))}
               </TextField>
             </Box>
           </Box>
 
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' },
-              gap: 2,
-            }}
-          >
-            <TextField
-              label="Estimated Minutes"
-              type="number"
-              value={form.module_estimated_minutes}
-              onChange={(event) =>
-                set('module_estimated_minutes', Number(event.target.value))
-              }
-            />
-            <TextField
-              label="Display Order"
-              type="number"
-              value={form.module_order}
-              onChange={(event) => set('module_order', Number(event.target.value))}
-            />
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
+            <TextField label="Estimated Minutes" type="number" value={form.module_estimated_minutes} onChange={(e) => set('module_estimated_minutes', Number(e.target.value))} />
+            <TextField label="Display Order" type="number" value={form.module_order} onChange={(e) => set('module_order', Number(e.target.value))} />
           </Box>
 
           <Box>
-            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>
-              Role Assignment
-            </Typography>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>Role Assignment</Typography>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
               {ROLES.map((role) => (
                 <FormControlLabel
                   key={role}
-                  control={
-                    <Checkbox
-                      checked={form.module_role_targets.includes(role)}
-                      onChange={() => toggleRole(role)}
-                    />
-                  }
+                  control={<Checkbox checked={form.module_role_targets.includes(role)} onChange={() => toggleRole(role)} />}
                   label={role}
                 />
               ))}
@@ -421,68 +227,22 @@ export default function ModuleEditPage() {
           </Box>
 
           <Box>
-            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>
-              Hero Image
-            </Typography>
-
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>Hero Image</Typography>
             <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mb: 1.5 }}>
-              <Button
-                variant="outlined"
-                onClick={() => heroFileRef.current?.click()}
-                sx={roundedButtonSx}
-              >
+              <Button variant="outlined" onClick={() => heroFileRef.current?.click()} sx={roundedButtonSx}>
                 {form.module_hero_image ? 'Replace Image' : 'Choose Image'}
               </Button>
               {(heroPreview || form.module_hero_image > 0) && (
-                <Button
-                  color="error"
-                  onClick={() => {
-                    set('module_hero_image', 0);
-                    setHeroPreview('');
-                  }}
-                >
-                  Remove
-                </Button>
+                <Button color="error" onClick={() => { set('module_hero_image', 0); setHeroPreview(''); }}>Remove</Button>
               )}
             </Box>
-
-            <input
-              ref={heroFileRef}
-              type="file"
-              hidden
-              accept="image/*"
-              onChange={handleHeroUpload}
-            />
-
-            {uploadMedia.isLoading && (
-              <Typography color="text.secondary" sx={{ mb: 1.5 }}>
-                Uploading image...
-              </Typography>
-            )}
-
-            <Box
-              sx={{
-                borderRadius: 1,
-                border: '1px solid',
-                borderColor: 'divider',
-                overflow: 'hidden',
-                bgcolor: '#f8fafc',
-                minHeight: { xs: 180, md: 240 },
-                display: 'grid',
-                placeItems: 'center',
-              }}
-            >
+            <input ref={heroFileRef} type="file" hidden accept="image/*" onChange={handleHeroUpload} />
+            {uploadMedia.isLoading && <Typography color="text.secondary" sx={{ mb: 1.5 }}>Uploading image...</Typography>}
+            <Box sx={{ borderRadius: 1, border: '1px solid', borderColor: 'divider', overflow: 'hidden', bgcolor: '#f8fafc', minHeight: { xs: 180, md: 240 }, display: 'grid', placeItems: 'center' }}>
               {heroPreview ? (
-                <Box
-                  component="img"
-                  src={heroPreview}
-                  alt=""
-                  sx={{ width: '100%', height: { xs: 180, md: 240 }, objectFit: 'cover' }}
-                />
+                <Box component="img" src={heroPreview} alt="" sx={{ width: '100%', height: { xs: 180, md: 240 }, objectFit: 'cover' }} />
               ) : form.module_hero_image > 0 ? (
-                <Typography color="text.secondary">
-                  Image #{form.module_hero_image} attached
-                </Typography>
+                <Typography color="text.secondary">Image #{form.module_hero_image} attached</Typography>
               ) : (
                 <Typography color="text.secondary">No hero image uploaded yet</Typography>
               )}
@@ -491,413 +251,82 @@ export default function ModuleEditPage() {
         </Box>
       </Paper>
 
-      <Paper
-        sx={{
-          p: { xs: 2.5, md: 3.5 },
-          mb: 3,
-          border: '1px solid',
-          borderColor: 'divider',
-          boxShadow: '0 14px 40px rgba(15, 23, 42, 0.06)',
-        }}
-      >
-        <Typography variant="h2" sx={{ fontSize: '1.65rem', mb: 1.25 }}>
-          Module Content
-        </Typography>
+      {/* Sections */}
+      <Paper sx={{ p: { xs: 2.5, md: 3.5 }, mb: 3, border: '1px solid', borderColor: 'divider', boxShadow: '0 14px 40px rgba(15, 23, 42, 0.06)' }}>
+        <Typography variant="h2" sx={{ fontSize: '1.65rem', mb: 2.5 }}>Sections</Typography>
 
-        <ModuleContentEditor blocks={contentBlocks} onChange={setContentBlocks} />
-      </Paper>
-
-      <Paper
-        ref={quizSectionRef}
-        sx={{
-          p: { xs: 2.5, md: 3.5 },
-          mb: 3,
-          border: '1px solid',
-          borderColor: 'divider',
-          boxShadow: '0 14px 40px rgba(15, 23, 42, 0.06)',
-        }}
-      >
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: { xs: 'column', lg: 'row' },
-            justifyContent: 'space-between',
-            alignItems: { xs: 'stretch', lg: 'center' },
-            gap: 2,
-            mb: 2.5,
-          }}
-        >
-          <Box>
-            <Typography variant="h2" sx={{ fontSize: '1.65rem', mb: 0.75 }}>
-              Module Quiz
+        {sections.length === 0 ? (
+          <Box sx={{ border: '1px dashed', borderColor: 'divider', borderRadius: 2, p: 3, color: 'text.secondary', mb: 2.5 }}>
+            <Typography sx={{ mb: 0.5 }}>No sections yet.</Typography>
+            <Typography variant="body2">
+              {isNew
+                ? 'Save the module first, then add sections.'
+                : 'Click "Add Section" below to start building content.'}
             </Typography>
           </Box>
-        </Box>
-
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: { xs: '1fr', md: '1.2fr 0.4fr' },
-            gap: 2,
-            mb: 3,
-          }}
-        >
-          <TextField
-            label="Quiz Title"
-            value={quizTitle}
-            onChange={(event) => setQuizTitle(event.target.value)}
-            fullWidth
-          />
-          <TextField
-            label="Passing Percentage"
-            value={passingPercentage}
-            onChange={(event) => setPassingPercentage(event.target.value)}
-            fullWidth
-          />
-        </Box>
-
-        {!quizBlocks.length && (
-          <Box
-            sx={{
-              border: '1px dashed',
-              borderColor: 'divider',
-              borderRadius: 2,
-              p: 3,
-              color: 'text.secondary',
-            }}
-          >
-            No quiz questions yet. Add a question to start building the final test.
+        ) : (
+          <Box sx={{ display: 'grid', gap: 1.5, mb: 2.5 }}>
+            {sections.map((section, index) => (
+              <Paper
+                key={section.id}
+                variant="outlined"
+                sx={{ p: 2, borderRadius: 2 }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <Box sx={{ flex: 1, minWidth: 0 }}>
+                    <Typography variant="overline" sx={{ color: 'text.secondary', fontSize: '0.68rem', lineHeight: 1 }}>
+                      Section {index + 1}
+                    </Typography>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 600, mt: 0.25 }} noWrap>
+                      {section.title || 'Untitled section'}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      {section.blocks.length} block{section.blocks.length !== 1 ? 's' : ''} · {section.quizBlocks.length} question{section.quizBlocks.length !== 1 ? 's' : ''}
+                    </Typography>
+                  </Box>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<EditOutlinedIcon sx={{ fontSize: 14 }} />}
+                    onClick={() => navigate(`/modules/${id}/sections/${section.id}`)}
+                    sx={{ ...roundedButtonSx, flexShrink: 0 }}
+                  >
+                    Edit
+                  </Button>
+                  <IconButton
+                    color="error"
+                    size="small"
+                    onClick={() => setSections((current) => current.filter((_, i) => i !== index))}
+                  >
+                    <DeleteOutlineIcon fontSize="small" />
+                  </IconButton>
+                </Box>
+              </Paper>
+            ))}
           </Box>
         )}
 
-        <Box sx={{ display: 'grid', gap: 2 }}>
-          {quizBlocks.map((block, index) => (
-            <Paper
-              key={block.id}
-              variant="outlined"
-              sx={{ p: 2.5, borderRadius: 2, borderColor: 'divider' }}
-            >
-              <Box
-                sx={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 1,
-                  mb: 2,
-                }}
-              >
-                <Typography variant="h3" sx={{ fontSize: '1.15rem' }}>
-                  Question {index + 1}
-                </Typography>
-                <IconButton color="error" onClick={() => removeQuizBlock(index)}>
-                  <DeleteOutlineIcon />
-                </IconButton>
-              </Box>
-
-              <Box
-                sx={{
-                  display: 'grid',
-                  gridTemplateColumns: { xs: '1fr', md: '1.2fr 0.5fr' },
-                  gap: 2,
-                  mb: 2,
-                }}
-              >
-                <TextField
-                  label="Question"
-                  value={block.data.question}
-                  onChange={(event) =>
-                    updateQuizBlock(index, (current) =>
-                      current.type === 'multiple_choice'
-                        ? {
-                            ...current,
-                            data: {
-                              ...current.data,
-                              question: event.target.value,
-                            },
-                          }
-                        : {
-                            ...current,
-                            data: {
-                              ...current.data,
-                              question: event.target.value,
-                            },
-                          }
-                    )
-                  }
-                  fullWidth
-                />
-
-                <TextField
-                  label="Answer Type"
-                  select
-                  value={block.type}
-                  onChange={(event) => {
-                    const nextType = event.target.value;
-                    updateQuizBlock(index, (current) => {
-                      if (nextType === current.type) {
-                        return current;
-                      }
-
-                      if (nextType === 'true_false') {
-                        return {
-                          id: current.id,
-                          type: 'true_false',
-                          data: {
-                            question: current.data.question,
-                            correctAnswer: true,
-                            explanation: '',
-                          },
-                        };
-                      }
-
-                      return {
-                        id: current.id,
-                        type: 'multiple_choice',
-                        data: {
-                          question: current.data.question,
-                          options: ['', ''],
-                          correctIndex: 0,
-                          explanation: '',
-                        },
-                      };
-                    });
-                  }}
-                  fullWidth
-                >
-                  <MenuItem value="multiple_choice">Multiple Choice</MenuItem>
-                  <MenuItem value="true_false">True / False</MenuItem>
-                </TextField>
-              </Box>
-
-              {block.type === 'multiple_choice' ? (
-                <Box sx={{ display: 'grid', gap: 1.25 }}>
-                  {block.data.options.map((option, optionIndex) => (
-                    <Box
-                      key={`${block.id}-option-${optionIndex}`}
-                      sx={{
-                        display: 'grid',
-                        gridTemplateColumns: 'auto minmax(0, 1fr) 72px 40px',
-                        gap: 1.25,
-                        alignItems: 'center',
-                      }}
-                    >
-                      <Checkbox
-                        checked={block.data.correctIndex === optionIndex}
-                        onChange={() =>
-                          updateQuizBlock(index, (current) => ({
-                            ...current,
-                            data: {
-                              ...current.data,
-                              correctIndex: optionIndex,
-                            },
-                          }) as MultipleChoiceBlock)
-                        }
-                      />
-                      <TextField
-                        value={option}
-                        onChange={(event) =>
-                          updateQuizBlock(index, (current) => {
-                            const next = [...(current as MultipleChoiceBlock).data.options];
-                            next[optionIndex] = event.target.value;
-                            return {
-                              ...(current as MultipleChoiceBlock),
-                              data: {
-                                ...(current as MultipleChoiceBlock).data,
-                                options: next,
-                              },
-                            };
-                          })
-                        }
-                        fullWidth
-                        size="small"
-                      />
-                      <Typography
-                        component="span"
-                        sx={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          minHeight: 28,
-                          px: block.data.correctIndex === optionIndex ? 1.25 : 0,
-                          borderRadius: '8px',
-                          bgcolor:
-                            block.data.correctIndex === optionIndex
-                              ? 'rgba(34, 197, 94, 0.12)'
-                              : 'transparent',
-                          color:
-                            block.data.correctIndex === optionIndex
-                              ? 'success.main'
-                              : 'text.secondary',
-                          fontSize: '0.8rem',
-                          fontWeight: 600,
-                          width: 72,
-                          textAlign: 'center',
-                        }}
-                      >
-                        {block.data.correctIndex === optionIndex ? 'Correct' : ''}
-                      </Typography>
-                      {block.data.options.length > 2 && optionIndex >= 2 ? (
-                        <IconButton
-                          color="error"
-                          size="small"
-                          onClick={() =>
-                            updateQuizBlock(index, (current) => {
-                              const typedCurrent = current as MultipleChoiceBlock;
-                              const nextOptions = typedCurrent.data.options.filter(
-                                (_, currentOptionIndex) => currentOptionIndex !== optionIndex
-                              );
-
-                              const nextCorrectIndex =
-                                typedCurrent.data.correctIndex > optionIndex
-                                  ? typedCurrent.data.correctIndex - 1
-                                  : typedCurrent.data.correctIndex === optionIndex
-                                    ? 0
-                                    : typedCurrent.data.correctIndex;
-
-                              return {
-                                ...typedCurrent,
-                                data: {
-                                  ...typedCurrent.data,
-                                  options: nextOptions,
-                                  correctIndex: nextCorrectIndex,
-                                },
-                              };
-                            })
-                          }
-                        >
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconButton>
-                      ) : (
-                        <Box />
-                      )}
-                    </Box>
-                  ))}
-
-                  <Button
-                    variant="text"
-                    startIcon={<AddIcon />}
-                    sx={{ justifyContent: 'flex-start', width: 'fit-content', ...roundedButtonSx }}
-                    onClick={() =>
-                      updateQuizBlock(index, (current) => ({
-                        ...(current as MultipleChoiceBlock),
-                        data: {
-                          ...(current as MultipleChoiceBlock).data,
-                          options: [...(current as MultipleChoiceBlock).data.options, ''],
-                        },
-                      }))
-                    }
-                  >
-                    Add Option
-                  </Button>
-                </Box>
-              ) : (
-                <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap' }}>
-                  <Button
-                    variant={block.data.correctAnswer ? 'contained' : 'outlined'}
-                    onClick={() =>
-                      updateQuizBlock(index, (current) => ({
-                        ...(current as TrueFalseBlock),
-                        data: {
-                          ...(current as TrueFalseBlock).data,
-                          correctAnswer: true,
-                        },
-                      }))
-                    }
-                    sx={roundedButtonSx}
-                  >
-                    True
-                  </Button>
-                  <Button
-                    variant={!block.data.correctAnswer ? 'contained' : 'outlined'}
-                    onClick={() =>
-                      updateQuizBlock(index, (current) => ({
-                        ...(current as TrueFalseBlock),
-                        data: {
-                          ...(current as TrueFalseBlock).data,
-                          correctAnswer: false,
-                        },
-                      }))
-                    }
-                    sx={roundedButtonSx}
-                  >
-                    False
-                  </Button>
-                </Box>
-              )}
-
-              <TextField
-                label="Explanation (optional)"
-                value={block.data.explanation}
-                onChange={(event) =>
-                  updateQuizBlock(index, (current) =>
-                    current.type === 'multiple_choice'
-                      ? {
-                          ...current,
-                          data: {
-                            ...current.data,
-                            explanation: event.target.value,
-                          },
-                        }
-                      : {
-                          ...current,
-                          data: {
-                            ...current.data,
-                            explanation: event.target.value,
-                          },
-                        }
-                  )
-                }
-                multiline
-                minRows={2}
-                fullWidth
-                sx={{ mt: 2 }}
-              />
-            </Paper>
-          ))}
-        </Box>
-
         <Button
-          variant="contained"
+          variant="outlined"
           startIcon={<AddIcon />}
-          onClick={addQuizQuestion}
-          sx={{ mt: 2.5, ...roundedButtonSx }}
+          onClick={handleAddSection}
+          disabled={isNew || saving}
+          sx={roundedButtonSx}
         >
-          Add Question
+          Add Section
         </Button>
       </Paper>
 
-      <Box
-        sx={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 2,
-          flexWrap: 'wrap',
-        }}
-      >
-        <Button variant="text" onClick={() => navigate('/modules')}
-          sx={roundedButtonSx}
-          >
+      {/* Bottom action bar */}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
+        <Button variant="text" onClick={() => navigate('/modules')} sx={roundedButtonSx}>
           ← Back to Modules
         </Button>
-
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
-          <Button
-            variant="outlined"
-            startIcon={<SaveOutlinedIcon />}
-            onClick={() => handleSave('draft')}
-            disabled={saving}
-            sx={roundedButtonSx}
-          >
+          <Button variant="outlined" startIcon={<SaveOutlinedIcon />} onClick={() => handleSave('draft')} disabled={saving} sx={roundedButtonSx}>
             Save
           </Button>
-          <Button
-            variant="contained"
-            startIcon={<PublishIcon />}
-            onClick={() => handleSave('publish')}
-            disabled={saving}
-            sx={roundedButtonSx}
-          >
+          <Button variant="contained" startIcon={<PublishIcon />} onClick={() => handleSave('publish')} disabled={saving} sx={roundedButtonSx}>
             Publish
           </Button>
         </Box>
