@@ -14,7 +14,10 @@ export function useCreateModule() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (values: ModuleFormValues) => createModule(values),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['modules'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['modules'] });
+      qc.invalidateQueries({ queryKey: ['portal', 'modules', 'assigned'] });
+    },
   });
 }
 
@@ -25,6 +28,8 @@ export function useUpdateModule(id: number) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['modules'] });
       qc.invalidateQueries({ queryKey: ['module', id] });
+      qc.invalidateQueries({ queryKey: ['portal', 'module', id] });
+      qc.invalidateQueries({ queryKey: ['portal', 'modules', 'assigned'] });
     },
   });
 }
@@ -33,6 +38,9 @@ export function useDeleteModule() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => deleteModule(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['modules'] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['modules'] });
+      qc.invalidateQueries({ queryKey: ['portal', 'modules', 'assigned'] });
+    },
   });
 }

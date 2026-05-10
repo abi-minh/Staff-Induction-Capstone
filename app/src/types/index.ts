@@ -206,7 +206,50 @@ export interface TrueFalseBlock {
   };
 }
 
-export type Block = HeadingBlock | TextBlock | ImageBlock | VideoBlock | ListBlock | MultipleChoiceBlock | TrueFalseBlock;
+export type CalloutVariant = 'info' | 'warning' | 'success' | 'note';
+
+export interface CalloutBlock {
+  id: string;
+  type: 'callout';
+  data: {
+    variant: CalloutVariant;
+    title?: string;
+    body: string;
+  };
+}
+
+// A non-row, non-quiz content block placed inside a row at a specific column.
+export type RowChildBlock = HeadingBlock | TextBlock | ImageBlock | VideoBlock | ListBlock | CalloutBlock;
+
+export interface PlacedBlock {
+  block:    RowChildBlock;
+  colStart: number;  // 1-indexed
+  colSpan:  number;  // ≥ 1, ≤ columns - colStart + 1
+}
+
+export interface RowBlock {
+  id: string;
+  type: 'row';
+  data: {
+    columns:  number;          // MIN_ROW_COLUMNS..MAX_ROW_COLUMNS
+    children: PlacedBlock[];   // ordered left-to-right by colStart
+  };
+}
+
+export const MIN_ROW_COLUMNS = 2;
+export const MAX_ROW_COLUMNS = 6;
+export const DEFAULT_ROW_COLUMNS = 3;
+
+export const ROW_COLUMN_PRESETS: { label: string; columns: number }[] = [
+  { label: 'Halves',   columns: 2 },
+  { label: 'Thirds',   columns: 3 },
+  { label: 'Quarters', columns: 4 },
+];
+
+export type Block =
+  | HeadingBlock | TextBlock | ImageBlock | VideoBlock | ListBlock
+  | MultipleChoiceBlock | TrueFalseBlock
+  | CalloutBlock | RowBlock;
 
 export type BlockType = Block['type'];
 
