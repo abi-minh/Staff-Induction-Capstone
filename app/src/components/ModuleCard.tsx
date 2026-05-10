@@ -8,7 +8,7 @@ import VisibilityOutlined from '@mui/icons-material/VisibilityOutlined';
 import ArrowForwardIcon   from '@mui/icons-material/ArrowForward';
 import type { Module, ProgressRecord } from '../types';
 import { getModuleHero, getModuleIcon } from './moduleVisuals';
-import { stripHtml, truncate }          from '../util/strings';
+import { stripHtml }                     from '../util/strings';
 
 interface Props {
   module:    Module;
@@ -24,8 +24,7 @@ export default function ModuleCard({ module, progress, dueDate }: Props) {
   const completed   = status === 'completed';
   const Icon        = getModuleIcon(module);
   const heroUrl     = getModuleHero(module);
-  const description = truncate(stripHtml(module.content), 200);
-  const excerpt     = truncate(stripHtml(module.excerpt), 60);
+  const excerpt = stripHtml(module.excerpt);
   const percentComplete = PERCENT_BY_STATUS[status];
 
   return (
@@ -57,11 +56,7 @@ export default function ModuleCard({ module, progress, dueDate }: Props) {
           </Box>
         </Box>
 
-        {description && (
-          <Typography variant="body2" sx={{ mb: 1.5 }}>
-            {description}
-          </Typography>
-        )}
+
       </CardContent>
 
       <Box sx={{ flexGrow: 1 }} />

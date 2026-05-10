@@ -11,7 +11,7 @@ import PublishIcon from '@mui/icons-material/SendOutlined';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import { useCreateModule, useModule, useUpdateModule } from '../hooks/useModules';
 import { useUploadMedia } from '../hooks/useDocuments';
-import { blocksToHtml, createSection, parseSections } from '../blocks/utils';
+import { createSection, parseSections } from '../blocks/utils';
 import { ICON_OPTIONS, getIconByKey } from '../components/iconLibrary';
 import type { ModuleFormValues, Section } from '../types';
 
@@ -98,11 +98,9 @@ export default function ModuleEditPage() {
   }
 
   async function handleSave(statusOverride?: 'draft' | 'publish') {
-    const allBlocks = sections.flatMap((s) => [...s.blocks, ...s.quizBlocks]);
     const values = {
       ...form,
       status: statusOverride ?? form.status,
-      content: blocksToHtml(allBlocks),
       module_blocks: JSON.stringify(sections),
     };
 
@@ -119,10 +117,8 @@ export default function ModuleEditPage() {
   async function handleAddSection() {
     const newSection = createSection();
     const newSections = [...sections, newSection];
-    const allBlocks = newSections.flatMap((s) => [...s.blocks, ...s.quizBlocks]);
     await updateModule.mutateAsync({
       ...form,
-      content: blocksToHtml(allBlocks),
       module_blocks: JSON.stringify(newSections),
     });
     setSections(newSections);
@@ -192,6 +188,8 @@ export default function ModuleEditPage() {
         </Box>
 
         <TextField label="Description" value={form.excerpt} onChange={(e) => set('excerpt', e.target.value)} multiline minRows={3} fullWidth sx={{ mb: 2.5 }} />
+
+        <TextField label="Module Overview" helperText="Shown under the hero banner, before the section list." value={form.content} onChange={(e) => set('content', e.target.value)} multiline minRows={4} fullWidth sx={{ mb: 2.5 }} />
 
         <Box sx={{ display: 'grid', gap: 2.5 }}>
           <Box>

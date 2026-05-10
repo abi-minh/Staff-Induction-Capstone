@@ -2,13 +2,15 @@ import { useEffect, useRef, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Alert, Box, Button, Card, CardContent, Chip,
-  CircularProgress, IconButton, Paper, Typography,
+  CircularProgress, IconButton, LinearProgress, MenuItem, Paper,
+  TextField, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
-import ArrowBackIcon       from '@mui/icons-material/ArrowBack';
-import CheckCircleIcon     from '@mui/icons-material/CheckCircle';
-import CheckCircleOutlined from '@mui/icons-material/CheckCircleOutlined';
-import ChevronRightIcon    from '@mui/icons-material/ChevronRight';
-import ScheduleOutlined    from '@mui/icons-material/ScheduleOutlined';
+import ArrowBackIcon        from '@mui/icons-material/ArrowBack';
+import CheckCircleIcon      from '@mui/icons-material/CheckCircle';
+import CheckCircleOutlined  from '@mui/icons-material/CheckCircleOutlined';
+import ChevronRightIcon     from '@mui/icons-material/ChevronRight';
+import ScheduleOutlined     from '@mui/icons-material/ScheduleOutlined';
+import VisibilityOutlined   from '@mui/icons-material/VisibilityOutlined';
 import { usePortalModule, useModuleProgress, useMarkComplete } from '../../hooks/usePortal';
 import {
   upsertProgress, saveQuizAnswer, submitQuiz, fetchQuizResponses,
@@ -40,9 +42,15 @@ export default function StaffModuleViewPage() {
   const progress     = useModuleProgress(moduleId);
   const markComplete = useMarkComplete();
 
+  const lsKey = `section-completions-${moduleId}`;
+
   const startTime = useRef(Date.now());
   const [selectedSectionId,   setSelectedSectionId]   = useState<string | null>(null);
-  const [completedSectionIds, setCompletedSectionIds] = useState<string[]>([]);
+  const [sectionView,         setSectionView]         = useState<'all' | 'completed' | 'todo'>('all');
+  const [completedSectionIds, setCompletedSectionIds] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem(lsKey) ?? '[]') as string[]; }
+    catch { return []; }
+  });
   const [confirming,  setConfirming]  = useState(false);
   const [saving,      setSaving]      = useState(false);
   const [answers,     setAnswers]     = useState<Record<string, string>>({});
@@ -57,6 +65,10 @@ export default function StaffModuleViewPage() {
   }, [module]);
 
   const currentSection = sections.find((s) => s.id === selectedSectionId) ?? null;
+
+  useEffect(() => {
+    localStorage.setItem(lsKey, JSON.stringify(completedSectionIds));
+  }, [completedSectionIds, lsKey]);
 
   useEffect(() => {
     if (!moduleId || !userId) return;
@@ -103,6 +115,11 @@ export default function StaffModuleViewPage() {
     setSelectedSectionId(null);
   }
 
+  function handleUnmarkSectionComplete() {
+    if (!selectedSectionId) return;
+    setCompletedSectionIds((prev) => prev.filter((id) => id !== selectedSectionId));
+  }
+
   async function handleMarkComplete() {
     setSaving(true);
     const timeSpent = Math.round((Date.now() - startTime.current) / 1000);
@@ -132,10 +149,13 @@ export default function StaffModuleViewPage() {
 
   // ── Section detail view ──────────────────────────────────────────────────
   if (currentSection) {
-    const sectionIndex    = sections.findIndex((s) => s.id === selectedSectionId);
-    const sectionHasQuiz  = currentSection.quizBlocks.length > 0;
-    const isSectionDone   = completedSectionIds.includes(currentSection.id);
-    const gradient        = SECTION_GRADIENTS[sectionIndex % SECTION_GRADIENTS.length];
+    const sectionIndex   = sections.findIndex((s) => s.id === selectedSectionId);
+    const sectionHasQuiz = currentSection.quizBlocks.length > 0;
+    const isSectionDone  = completedSectionIds.includes(currentSection.id);
+    const prevSection    = sectionIndex > 0 ? sections[sectionIndex - 1] : null;
+    const nextSection    = sectionIndex < sections.length - 1 ? sections[sectionIndex + 1] : null;
+    const completedCount = completedSectionIds.filter((id) => sections.some((s) => s.id === id)).length;
+    const progressPct    = sections.length > 0 ? Math.round((completedCount / sections.length) * 100) : 0;
 
     return (
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -144,68 +164,37 @@ export default function StaffModuleViewPage() {
           <IconButton onClick={() => setSelectedSectionId(null)} size="small">
             <ArrowBackIcon />
           </IconButton>
-          <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Back to sections</Typography>
-          <Chip
-            label={`Section ${sectionIndex + 1} of ${sections.length}`}
-            size="small"
-            variant="outlined"
-            sx={{ ml: 1 }}
-          />
-          {isSectionDone && (
-            <Chip
-              icon={<CheckCircleIcon sx={{ fontSize: '16px !important' }} />}
-              label="Completed"
-              size="small"
-              sx={{ ml: 0.5, bgcolor: 'success.light', color: 'success.dark', fontWeight: 600, border: 'none' }}
-            />
-          )}
+          <Typography sx={{ fontWeight: 600, fontSize: '0.95rem', letterSpacing: 'normal' }}>Back to sections</Typography>
         </Box>
 
-        {/* Hero image or gradient banner */}
-        <Box
-          sx={{
-            width: '100%',
-            height: 240,
-            borderRadius: 3,
-            overflow: 'hidden',
-            position: 'relative',
-            background: currentSection.heroImage ? undefined : gradient,
-          }}
+        {/* Section dropdown */}
+        <TextField
+          select
+          size="small"
+          label="Jump to section"
+          value={selectedSectionId ?? ''}
+          onChange={(e) => setSelectedSectionId(e.target.value)}
+          fullWidth
         >
-          {currentSection.heroImage && (
-            <Box
-              component="img"
-              src={currentSection.heroImage}
-              alt=""
-              sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-            />
-          )}
-          {/* Title + description overlay */}
-          {(currentSection.title || currentSection.description) && (
-            <Box
-              sx={{
-                position: 'absolute',
-                inset: 0,
-                background: 'linear-gradient(180deg, rgba(0,0,0,0.0) 30%, rgba(0,0,0,0.55) 100%)',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'flex-end',
-                p: { xs: 2.5, md: 3 },
-              }}
-            >
-              {currentSection.title && (
-                <Typography variant="h2" sx={{ color: 'white', mb: 0.5 }}>
-                  {currentSection.title}
-                </Typography>
-              )}
-              {currentSection.description && (
-                <Typography sx={{ color: 'rgba(255,255,255,0.88)', fontSize: '0.95rem', lineHeight: 1.5 }}>
-                  {currentSection.description}
-                </Typography>
-              )}
-            </Box>
-          )}
-        </Box>
+          {sections.map((s, i) => (
+            <MenuItem key={s.id} value={s.id}>
+              Section {i + 1}{s.title ? ` — ${s.title}` : ''}
+              {completedSectionIds.includes(s.id) ? '  ✓' : ''}
+            </MenuItem>
+          ))}
+        </TextField>
+
+        {/* Title and description */}
+        {(currentSection.title || currentSection.description) && (
+          <Box>
+            {currentSection.title && (
+              <Typography variant="h2" sx={{ mb: 0.5 }}>{currentSection.title}</Typography>
+            )}
+            {currentSection.description && (
+              <Typography color="text.secondary" sx={{ lineHeight: 1.6 }}>{currentSection.description}</Typography>
+            )}
+          </Box>
+        )}
 
         {/* Content blocks */}
         {currentSection.blocks.length > 0 && (
@@ -234,18 +223,53 @@ export default function StaffModuleViewPage() {
           </Paper>
         )}
 
-        {/* Section complete button */}
-        <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+        {/* Section complete */}
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 2 }}>
           {isSectionDone ? (
-            <Typography sx={{ color: 'success.main', fontWeight: 600, alignSelf: 'center' }}>
-              ✓ Section completed
-            </Typography>
+            <Button variant="outlined" color="error" sx={{ borderRadius: '10px' }} onClick={handleUnmarkSectionComplete}>
+              Unmark as complete
+            </Button>
           ) : (
-            <Button variant="contained" onClick={handleMarkSectionComplete}>
+            <Button variant="contained" sx={{ borderRadius: '10px' }} onClick={handleMarkSectionComplete}>
               Mark section complete
             </Button>
           )}
         </Box>
+
+        {/* Prev | Progress bar | Next */}
+        <Paper sx={{ p: { xs: 2, md: 3 } }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Button
+            variant="outlined"
+            onClick={() => prevSection && setSelectedSectionId(prevSection.id)}
+            disabled={!prevSection}
+            sx={{ borderRadius: 999, flexShrink: 0 }}
+          >
+            ← Previous
+          </Button>
+
+          <Box sx={{ flex: 1 }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
+              <Typography variant="caption" color="text.secondary">Progress</Typography>
+              <Typography variant="caption" sx={{ fontWeight: 700 }}>{progressPct}% complete</Typography>
+            </Box>
+            <LinearProgress
+              variant="determinate"
+              value={progressPct}
+              sx={{ height: 8, borderRadius: 999, bgcolor: 'divider', '& .MuiLinearProgress-bar': { borderRadius: 999 } }}
+            />
+          </Box>
+
+          <Button
+            variant="outlined"
+            onClick={() => nextSection && setSelectedSectionId(nextSection.id)}
+            disabled={!nextSection}
+            sx={{ borderRadius: 999, flexShrink: 0 }}
+          >
+            Next →
+          </Button>
+        </Box>
+        </Paper>
       </Box>
     );
   }
@@ -257,15 +281,26 @@ export default function StaffModuleViewPage() {
         <IconButton onClick={() => navigate('/portal')} size="small">
           <ArrowBackIcon />
         </IconButton>
-        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>Back</Typography>
+        <Typography sx={{ fontWeight: 600, fontSize: '0.95rem', letterSpacing: 'normal' }}>Back to Modules</Typography>
       </Box>
 
-      <HeroBanner
-        module={module}
-        subtitle={module.excerpt}
-        dueDate="27th June 2026"
-        minutes={module.meta.module_estimated_minutes}
-      />
+      <Box sx={{ mx: { xs: -2, md: -4 } }}>
+        <HeroBanner
+          module={module}
+          dueDate="27th June 2026"
+          minutes={module.meta.module_estimated_minutes}
+        />
+      </Box>
+
+      {module.content && (
+        <Box>
+          <Typography variant="h4" sx={{ mb: 1 }}>Module Overview</Typography>
+          <Box
+            sx={{ color: 'text.secondary', lineHeight: 1.7, '& p': { margin: 0 }, '& p + p': { mt: 1.5 } }}
+            dangerouslySetInnerHTML={{ __html: module.content }}
+          />
+        </Box>
+      )}
 
       <Box>
         <Chip
@@ -284,7 +319,62 @@ export default function StaffModuleViewPage() {
 
       {sections.length > 0 ? (
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {sections.map((section, index) => {
+          <ToggleButtonGroup
+            value={sectionView}
+            exclusive
+            onChange={(_, next) => next && setSectionView(next)}
+            sx={{
+              gap: 1,
+              '&& .MuiToggleButtonGroup-grouped': {
+                border: '1px solid',
+                borderColor: 'divider',
+                borderRadius: '999px !important',
+                marginLeft: 0,
+                px: 2,
+                py: 0.5,
+                textTransform: 'none',
+                fontWeight: 500,
+                fontSize: 13,
+                color: 'text.secondary',
+                '&:hover': { bgcolor: 'action.hover' },
+              },
+            }}
+          >
+            <ToggleButton
+              value="all"
+              sx={{ '&&.Mui-selected': { bgcolor: 'primary.main', color: 'white', borderColor: 'primary.main', '&:hover': { bgcolor: 'primary.dark' } } }}
+            >
+              All Sections
+            </ToggleButton>
+            <ToggleButton
+              value="completed"
+              sx={{
+                '& .MuiSvgIcon-root': { color: 'success.main' },
+                '&&.Mui-selected': { bgcolor: 'success.main', color: 'white', borderColor: 'success.main', '& .MuiSvgIcon-root': { color: 'white' }, '&:hover': { bgcolor: 'success.dark' } },
+              }}
+            >
+              <CheckCircleOutlined fontSize="small" sx={{ mr: 0.75 }} />
+              Completed
+            </ToggleButton>
+            <ToggleButton
+              value="todo"
+              sx={{
+                '& .MuiSvgIcon-root': { color: 'warning.main' },
+                '&&.Mui-selected': { bgcolor: 'warning.main', color: 'white', borderColor: 'warning.main', '& .MuiSvgIcon-root': { color: 'white' }, '&:hover': { bgcolor: 'warning.dark' } },
+              }}
+            >
+              <ScheduleOutlined fontSize="small" sx={{ mr: 0.75 }} />
+              To Complete
+            </ToggleButton>
+          </ToggleButtonGroup>
+
+          {sections.filter((s) => {
+            const done = completedSectionIds.includes(s.id);
+            if (sectionView === 'completed') return done;
+            if (sectionView === 'todo')      return !done;
+            return true;
+          }).map((section) => {
+            const index = sections.indexOf(section);
             const done     = completedSectionIds.includes(section.id);
             const gradient = SECTION_GRADIENTS[index % SECTION_GRADIENTS.length];
             return (
@@ -293,71 +383,65 @@ export default function StaffModuleViewPage() {
                 variant="outlined"
                 sx={{
                   borderRadius: 2,
-                  cursor: 'pointer',
-                  overflow: 'hidden',
-                  transition: 'box-shadow 0.15s, border-color 0.15s',
-                  ...(done
-                    ? { borderColor: 'success.main' }
-                    : { '&:hover': { borderColor: 'primary.main', boxShadow: 2 } }),
+                  borderLeftWidth: 10,
+                  borderLeftColor: done ? 'grey.300' : 'primary.main',
                 }}
-                onClick={() => setSelectedSectionId(section.id)}
               >
-                {/* Hero image or gradient placeholder */}
-                <Box
-                  sx={{
-                    height: 120,
-                    position: 'relative',
-                    background: section.heroImage ? undefined : gradient,
-                    overflow: 'hidden',
-                  }}
-                >
-                  {section.heroImage && (
-                    <Box
-                      component="img"
-                      src={section.heroImage}
-                      alt=""
-                      sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                    />
-                  )}
-                  {done && (
-                    <Box
-                      sx={{
-                        position: 'absolute',
-                        inset: 0,
-                        bgcolor: 'rgba(0,0,0,0.35)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
-                    >
-                      <CheckCircleIcon sx={{ fontSize: 40, color: 'white' }} />
-                    </Box>
-                  )}
-                </Box>
+                <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2, '&:last-child': { pb: 2 } }}>
+                  {/* Square hero thumbnail */}
+                  <Box
+                    sx={{
+                      width: 88,
+                      height: 88,
+                      borderRadius: 1.5,
+                      flexShrink: 0,
+                      overflow: 'hidden',
+                      position: 'relative',
+                      background: section.heroImage ? undefined : gradient,
+                    }}
+                  >
+                    {section.heroImage && (
+                      <Box
+                        component="img"
+                        src={section.heroImage}
+                        alt=""
+                        sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      />
+                    )}
+                    {done && (
+                      <Box
+                        sx={{
+                          position: 'absolute',
+                          inset: 0,
+                          bgcolor: 'rgba(0,0,0,0.4)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <CheckCircleIcon sx={{ fontSize: 32, color: 'white' }} />
+                      </Box>
+                    )}
+                  </Box>
 
-                <CardContent sx={{ display: 'flex', alignItems: 'flex-start', gap: 2, '&:last-child': { pb: 2 } }}>
+                  {/* Text */}
                   <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.25 }}>
-                      <Typography variant="overline" sx={{ color: 'text.disabled', fontSize: '0.68rem', lineHeight: 1 }}>
-                        Section {index + 1}
-                      </Typography>
-                      {done && (
-                        <Chip
-                          label="Completed"
-                          size="small"
-                          sx={{ height: 18, fontSize: '0.65rem', bgcolor: 'success.light', color: 'success.dark', fontWeight: 600, border: 'none' }}
-                        />
-                      )}
-                    </Box>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 600 }} noWrap>
+                    <Typography
+                      sx={{ fontWeight: 700, fontSize: '1rem', lineHeight: 1.3, mb: 0.5 }}
+                      noWrap
+                    >
                       {section.title || `Section ${index + 1}`}
                     </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                      <Typography sx={{ color: 'text.disabled', fontSize: '0.75rem' }}>
+                        Section {index + 1}
+                      </Typography>
+                    </Box>
                     {section.description && (
                       <Typography
                         variant="body2"
                         color="text.secondary"
                         sx={{
-                          mt: 0.25,
                           display: '-webkit-box',
                           WebkitLineClamp: 2,
                           WebkitBoxOrient: 'vertical',
@@ -368,7 +452,37 @@ export default function StaffModuleViewPage() {
                       </Typography>
                     )}
                   </Box>
-                  <ChevronRightIcon sx={{ color: 'text.disabled', flexShrink: 0, mt: 0.5 }} />
+
+                  {/* Action buttons */}
+                  {done ? (
+                    <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+                      <Button
+                        variant="outlined"
+                        endIcon={<VisibilityOutlined />}
+                        onClick={() => setSelectedSectionId(section.id)}
+                        sx={{ borderRadius: 999 }}
+                      >
+                        Review
+                      </Button>
+                      <Button
+                        variant="contained"
+                        endIcon={<CheckCircleIcon />}
+                        disabled
+                        sx={{ borderRadius: 999 }}
+                      >
+                        Complete
+                      </Button>
+                    </Box>
+                  ) : (
+                    <Button
+                      variant="contained"
+                      endIcon={<ChevronRightIcon />}
+                      onClick={() => setSelectedSectionId(section.id)}
+                      sx={{ flexShrink: 0, borderRadius: 999 }}
+                    >
+                      Attempt Now
+                    </Button>
+                  )}
                 </CardContent>
               </Card>
             );

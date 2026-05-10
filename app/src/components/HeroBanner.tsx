@@ -26,7 +26,6 @@ export default function HeroBanner({ module, subtitle, dueDate, minutes }: Props
       sx={{
         position: 'relative',
         height: 240,
-        borderRadius: 3,
         overflow: 'hidden',
         color: 'white',
         display: 'flex',
@@ -60,14 +59,14 @@ export default function HeroBanner({ module, subtitle, dueDate, minutes }: Props
             <Chip
               icon={<CalendarTodayIcon sx={{ fontSize: 16 }} />}
               label={`Due by ${dueDate}`}
-              sx={{ bgcolor: 'chipDue.bg', color: 'chipDue.fg', fontWeight: 500 }}
+              sx={{ bgcolor: 'chipDue.bg', color: 'chipDue.fg', fontWeight: 500, borderRadius: 999 }}
             />
           )}
-          {minutes && minutes > 0 && (
+          {(minutes ?? 0) > 0 && (
             <Chip
               icon={<AccessTimeIcon sx={{ fontSize: 16 }} />}
               label={`About ${minutes} minutes to complete`}
-              sx={{ bgcolor: 'chipInfo.bg', color: 'chipInfo.fg', fontWeight: 500 }}
+              sx={{ bgcolor: 'chipInfo.bg', color: 'chipInfo.fg', fontWeight: 500, borderRadius: 999 }}
             />
           )}
         </Box>

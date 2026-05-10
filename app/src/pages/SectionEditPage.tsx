@@ -6,7 +6,7 @@ import PublishIcon from '@mui/icons-material/SendOutlined';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import { useModule, useUpdateModule } from '../hooks/useModules';
 import SectionEditor from './SectionEditor';
-import { blocksToHtml, parseSections } from '../blocks/utils';
+import { parseSections } from '../blocks/utils';
 import type { Section } from '../types';
 
 const roundedButtonSx = { borderRadius: '10px' };
@@ -39,10 +39,9 @@ export default function SectionEditPage() {
   async function handleSave(statusOverride?: 'draft' | 'publish') {
     if (!section || !module) return;
     const updated = allSections.map((s) => (s.id === sectionId ? section : s));
-    const allBlocks = updated.flatMap((s) => [...s.blocks, ...s.quizBlocks]);
     await updateModule.mutateAsync({
       title: module.title,
-      content: blocksToHtml(allBlocks),
+      content: module.content,
       excerpt: module.excerpt,
       status: statusOverride ?? module.status,
       module_role_targets: module.meta.module_role_targets,
@@ -58,10 +57,9 @@ export default function SectionEditPage() {
   async function handleRemove() {
     if (!module) return;
     const updated = allSections.filter((s) => s.id !== sectionId);
-    const allBlocks = updated.flatMap((s) => [...s.blocks, ...s.quizBlocks]);
     await updateModule.mutateAsync({
       title: module.title,
-      content: blocksToHtml(allBlocks),
+      content: module.content,
       excerpt: module.excerpt,
       status: module.status,
       module_role_targets: module.meta.module_role_targets,
