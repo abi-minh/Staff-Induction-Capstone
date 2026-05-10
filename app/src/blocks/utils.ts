@@ -1,4 +1,11 @@
-import type { Block, BlockType, QuizBlock, Section } from '../types';
+import {
+  DEFAULT_ROW_COLUMNS,
+  MAX_ROW_COLUMNS,
+  MIN_ROW_COLUMNS,
+} from '../types';
+import type {
+  Block, BlockType, PlacedBlock, QuizBlock, RowBlock, RowChildBlock, Section,
+} from '../types';
 
 let blockCounter = 0;
 let sectionCounter = 0;
@@ -11,29 +18,82 @@ export function isQuizBlock(block: Block): block is QuizBlock {
   return block.type === 'multiple_choice' || block.type === 'true_false';
 }
 
+const ROW_CHILD_TYPES: BlockType[] = ['heading', 'text', 'image', 'video', 'list', 'callout'];
+
+export function isRowChildType(type: BlockType): type is RowChildBlock['type'] {
+  return ROW_CHILD_TYPES.includes(type);
+}
+
+// Clamps malformed row data so the editor and renderer never see invalid layouts.
+// Returns kept/dropped/clamped flag so callers can prompt the user when destructive.
+export function clampRowColumns(
+  row: RowBlock['data'],
+  newColumns: number,
+): { row: RowBlock['data']; droppedChildren: PlacedBlock[]; clampedAny: boolean } {
+  const clamped = Math.max(MIN_ROW_COLUMNS, Math.min(MAX_ROW_COLUMNS, newColumns));
+  const dropped: PlacedBlock[] = [];
+  const kept: PlacedBlock[] = [];
+  let clampedAny = false;
+  let lastEnd = 0;
+
+  for (const child of row.children) {
+    const newStart = Math.min(child.colStart, clamped);
+    const maxSpan = clamped - newStart + 1;
+    const newSpan = Math.min(child.colSpan, maxSpan);
+
+    if (newStart <= lastEnd) {
+      dropped.push(child);
+      continue;
+    }
+    if (newStart !== child.colStart || newSpan !== child.colSpan) {
+      clampedAny = true;
+    }
+    kept.push({ ...child, colStart: newStart, colSpan: newSpan });
+    lastEnd = newStart + newSpan - 1;
+  }
+
+  return {
+    row: { columns: clamped, children: kept },
+    droppedChildren: dropped,
+    clampedAny,
+  };
+}
+
+// Applied when reading module_blocks from the API. Silent migrations; the next
+// admin save persists the fixes.
+export function sanitizeBlocks(blocks: Block[]): Block[] {
+  return blocks.map((b) => {
+    if (b.type !== 'row') return b;
+    const { row } = clampRowColumns(b.data, b.data.columns);
+    return { ...b, data: row };
+  });
+}
+
 export function parseSections(raw: string | undefined): Section[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return [];
 
-    // New Section[] format has a 'blocks' property on each element
+    let sections: Section[];
     if ('blocks' in parsed[0]) {
-      return parsed as Section[];
+      sections = parsed as Section[];
+    } else {
+      // Old flat Block[] — migrate to a single section
+      const allBlocks = parsed as Block[];
+      sections = [{
+        id: `section-${Date.now()}-migrated`,
+        heroImage: '',
+        title: '',
+        description: '',
+        blocks: allBlocks.filter((b) => !isQuizBlock(b)),
+        quizTitle: '',
+        passingPercentage: 80,
+        quizBlocks: allBlocks.filter(isQuizBlock) as QuizBlock[],
+      }];
     }
 
-    // Old flat Block[] — migrate to a single section
-    const allBlocks = parsed as Block[];
-    return [{
-      id: `section-${Date.now()}-migrated`,
-      heroImage: '',
-      title: '',
-      description: '',
-      blocks: allBlocks.filter((b) => !isQuizBlock(b)),
-      quizTitle: '',
-      passingPercentage: 80,
-      quizBlocks: allBlocks.filter(isQuizBlock) as QuizBlock[],
-    }];
+    return sections.map((s) => ({ ...s, blocks: sanitizeBlocks(s.blocks) }));
   } catch {
     return [];
   }
@@ -70,6 +130,10 @@ export function createBlock(type: BlockType): Block {
       return { id, type, data: { question: '', options: ['', ''], correctIndex: 0, explanation: '' } };
     case 'true_false':
       return { id, type, data: { question: '', correctAnswer: true, explanation: '' } };
+    case 'callout':
+      return { id, type, data: { variant: 'info', title: '', body: '' } };
+    case 'row':
+      return { id, type, data: { columns: DEFAULT_ROW_COLUMNS, children: [] } };
   }
 }
 
@@ -81,34 +145,46 @@ export const BLOCK_LABELS: Record<BlockType, string> = {
   list: 'List',
   multiple_choice: 'Multiple Choice',
   true_false: 'True / False',
+  callout: 'Callout',
+  row: 'Row',
 };
 
+function blockToHtml(block: Block): string {
+  switch (block.type) {
+    case 'heading':
+      return `<h${block.data.level}>${block.data.text}</h${block.data.level}>`;
+    case 'text':
+      return block.data.html;
+    case 'image': {
+      const caption = block.data.caption
+        ? `<figcaption>${block.data.caption}</figcaption>`
+        : '';
+      return `<figure><img src="${block.data.url}" alt="${block.data.alt}" />${caption}</figure>`;
+    }
+    case 'video':
+      return `<video src="${block.data.url}" controls></video>`;
+    case 'list': {
+      const tag = block.data.style === 'ordered' ? 'ol' : 'ul';
+      const items = block.data.items.map((item) => `<li>${item}</li>`).join('');
+      return `<${tag}>${items}</${tag}>`;
+    }
+    case 'callout': {
+      const title = block.data.title ? `<strong>${block.data.title}</strong> ` : '';
+      return `<aside class="callout callout-${block.data.variant}">${title}${block.data.body}</aside>`;
+    }
+    case 'row': {
+      const cells = block.data.children
+        .map((p) => `<div style="grid-column: ${p.colStart} / span ${p.colSpan}">${blockToHtml(p.block)}</div>`)
+        .join('');
+      return `<div class="row" style="display:grid;grid-template-columns:repeat(${block.data.columns},1fr);gap:16px">${cells}</div>`;
+    }
+    case 'multiple_choice':
+      return `<p><strong>${block.data.question}</strong></p>`;
+    case 'true_false':
+      return `<p><strong>${block.data.question}</strong></p>`;
+  }
+}
+
 export function blocksToHtml(blocks: Block[]): string {
-  return blocks
-    .map((block) => {
-      switch (block.type) {
-        case 'heading':
-          return `<h${block.data.level}>${block.data.text}</h${block.data.level}>`;
-        case 'text':
-          return block.data.html;
-        case 'image': {
-          const caption = block.data.caption
-            ? `<figcaption>${block.data.caption}</figcaption>`
-            : '';
-          return `<figure><img src="${block.data.url}" alt="${block.data.alt}" />${caption}</figure>`;
-        }
-        case 'video':
-          return `<video src="${block.data.url}" controls></video>`;
-        case 'list': {
-          const tag = block.data.style === 'ordered' ? 'ol' : 'ul';
-          const items = block.data.items.map((item) => `<li>${item}</li>`).join('');
-          return `<${tag}>${items}</${tag}>`;
-        }
-        case 'multiple_choice':
-          return `<p><strong>${block.data.question}</strong></p>`;
-        case 'true_false':
-          return `<p><strong>${block.data.question}</strong></p>`;
-      }
-    })
-    .join('\n');
+  return blocks.map(blockToHtml).join('\n');
 }

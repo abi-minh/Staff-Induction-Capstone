@@ -20,26 +20,30 @@ import {isSortable, SortableKeyboardPlugin} from '@dnd-kit/dom/sortable';
 } from '@dnd-kit/helpers';*/
 
 import {useSortable} from '@dnd-kit/react/sortable';
-import { Box, Divider, IconButton, Paper, SvgIcon, Tooltip, Typography } from '@mui/material';
+import { Box, Button, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Divider, IconButton, Paper, SvgIcon, Tooltip, Typography } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted';
 import FormatSizeIcon from '@mui/icons-material/FormatSize';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import OndemandVideoOutlinedIcon from '@mui/icons-material/OndemandVideoOutlined';
 import SubjectIcon from '@mui/icons-material/Subject';
-import type { Block, HeadingBlock, ImageBlock, ListBlock, TextBlock, VideoBlock } from '../types';
-import { BLOCK_LABELS, createBlock } from './utils';
+import ViewColumnOutlinedIcon from '@mui/icons-material/ViewColumnOutlined';
+import type { Block, CalloutBlock, HeadingBlock, ImageBlock, ListBlock, PlacedBlock, RowBlock, RowChildBlock, TextBlock, VideoBlock } from '../types';
+import { BLOCK_LABELS, createBlock, isRowChildType } from './utils';
+import CalloutBlockEditor from './editors/CalloutBlockEditor';
 import HeadingBlockEditor from './editors/HeadingBlockEditor';
 import ImageBlockEditor from './editors/ImageBlockEditor';
 import ListBlockEditor from './editors/ListBlockEditor';
+import RowBlockEditor from './editors/RowBlockEditor';
 import TextBlockEditor from './editors/TextBlockEditor';
 import VideoBlockEditor from './editors/VideoBlockEditor';
 import { closestCenter } from '@dnd-kit/collision';
 
-type ContentBlockType = 'heading' | 'text' | 'image' | 'video' | 'list';
+type ContentBlockType = 'heading' | 'text' | 'image' | 'video' | 'list' | 'callout' | 'row';
 
 const PALETTE: { type: ContentBlockType; Icon: typeof SvgIcon }[] = [
   { type: 'heading', Icon: FormatSizeIcon },
@@ -47,6 +51,8 @@ const PALETTE: { type: ContentBlockType; Icon: typeof SvgIcon }[] = [
   { type: 'image',   Icon: ImageOutlinedIcon },
   { type: 'video',   Icon: OndemandVideoOutlinedIcon },
   { type: 'list',    Icon: FormatListBulletedIcon },
+  { type: 'callout', Icon: InfoOutlinedIcon },
+  { type: 'row',     Icon: ViewColumnOutlinedIcon },
 ];
 
 type DragState =
@@ -175,6 +181,35 @@ function BlockPreview({ block }: { block: Block }) {
             <li key={i}>{item}</li>
           ))}
         </Box>
+      );
+    }
+
+    case 'callout': {
+      const b = block as CalloutBlock;
+      if (!b.data.body && !b.data.title) {
+        return <Typography color="text.disabled" sx={{ py: 0.5 }}>Empty callout…</Typography>;
+      }
+      const palette: Record<CalloutBlock['data']['variant'], { bg: string; border: string }> = {
+        info:    { bg: '#EFF6FF', border: '#BFDBFE' },
+        warning: { bg: '#FFFBEB', border: '#FDE68A' },
+        success: { bg: '#F0FDF4', border: '#BBF7D0' },
+        note:    { bg: '#F8FAFC', border: '#E2E8F0' },
+      };
+      const colors = palette[b.data.variant];
+      return (
+        <Box sx={{ bgcolor: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 1, p: 1.25 }}>
+          {b.data.title && <Typography sx={{ fontWeight: 600, mb: 0.25 }}>{b.data.title}</Typography>}
+          {b.data.body && <Typography variant="body2">{b.data.body}</Typography>}
+        </Box>
+      );
+    }
+
+    case 'row': {
+      const b = block as RowBlock;
+      return (
+        <Typography color="text.secondary" sx={{ py: 0.5, fontSize: '0.85rem' }}>
+          Row · {b.data.columns} columns · {b.data.children.length} item{b.data.children.length === 1 ? '' : 's'}
+        </Typography>
       );
     }
 
@@ -336,6 +371,10 @@ function CanvasBlock({
         return <VideoBlockEditor block={block} onChange={onChange} />;
       case 'list':
         return <ListBlockEditor block={block} onChange={onChange} />;
+      case 'callout':
+        return <CalloutBlockEditor block={block} onChange={onChange} />;
+      case 'row':
+        return <RowBlockEditor block={block} onChange={onChange} />;
       default:
         return null;
     }
@@ -449,6 +488,7 @@ interface Props {
 export default function ModuleContentEditor({ blocks, onChange }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dragState, setDragState] = useState<DragState>({ kind: 'none' });
+  const [pendingRowDelete, setPendingRowDelete] = useState<{ index: number; childCount: number } | null>(null);
 
   const isDraggingFromPalette = dragState.kind === 'palette';
 
@@ -462,6 +502,15 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
     const removed = blocks[index];
     if (removed && selectedId === removed.id) setSelectedId(null);
     onChange(blocks.filter((_, i) => i !== index));
+  }
+
+  function requestRemoveBlock(index: number) {
+    const target = blocks[index];
+    if (target?.type === 'row' && target.data.children.length > 0) {
+      setPendingRowDelete({ index, childCount: target.data.children.length });
+      return;
+    }
+    removeBlock(index);
   }
 
   function moveBlock(index: number, direction: -1 | 1) {
@@ -478,6 +527,19 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
     updated.splice(atIndex, 0, newBlock);
     onChange(updated);
     setSelectedId(newBlock.id);
+  }
+
+  function addChildToRow(rowId: string, type: ContentBlockType, colStart: number) {
+    if (!isRowChildType(type)) return;
+    const newBlock = createBlock(type) as RowChildBlock;
+    const placed: PlacedBlock = { block: newBlock, colStart, colSpan: 1 };
+    onChange(blocks.map((b) => {
+      if (b.id !== rowId || b.type !== 'row') return b;
+      const occupied = b.data.children.some((c) => colStart >= c.colStart && colStart < c.colStart + c.colSpan);
+      if (occupied) return b;
+      const children = [...b.data.children, placed].sort((a, b) => a.colStart - b.colStart);
+      return { ...b, data: { ...b.data, children } };
+    }));
   }
 
   function handleDragStart(event: DragStartEvent) {
@@ -500,7 +562,10 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
     if (!target) return;
 
     if (state.kind === 'palette') {
-      if (isSortable(target) && target.isDropTarget && target.index !== undefined) {
+      const cellData = target.data as { isCell?: boolean; rowId?: string; colStart?: number } | undefined;
+      if (cellData?.isCell && cellData.rowId && cellData.colStart !== undefined) {
+        addChildToRow(cellData.rowId, state.blockType, cellData.colStart);
+      } else if (isSortable(target) && target.isDropTarget && target.index !== undefined) {
         insertBlock(state.blockType, target.index);
       } else {
         // Dropped on an existing block — insert after it
@@ -588,7 +653,7 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
                   isFirst={index === 0}
                   isLast={index === blocks.length - 1}
                   onSelect={() => setSelectedId(block.id)}
-                  onRemove={() => removeBlock(index)}
+                  onRemove={() => requestRemoveBlock(index)}
                   onMoveUp={() => moveBlock(index, -1)}
                   onMoveDown={() => moveBlock(index, 1)}
                   onChange={(data) => updateBlock(index, data)}
@@ -626,6 +691,28 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
           </Paper>
         )}
       </DragOverlay>
+
+      <Dialog open={!!pendingRowDelete} onClose={() => setPendingRowDelete(null)}>
+        <DialogTitle>Delete row?</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            This row contains {pendingRowDelete?.childCount}{' '}
+            block{pendingRowDelete?.childCount === 1 ? '' : 's'}. Deleting the row will remove them all.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPendingRowDelete(null)}>Cancel</Button>
+          <Button
+            color="error"
+            onClick={() => {
+              if (pendingRowDelete) removeBlock(pendingRowDelete.index);
+              setPendingRowDelete(null);
+            }}
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </DragDropProvider>
   );
 }

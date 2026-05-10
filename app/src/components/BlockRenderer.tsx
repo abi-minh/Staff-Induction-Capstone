@@ -64,6 +64,51 @@ function renderBlock(
         </Tag>
       );
     }
+    case 'callout': {
+      const palette: Record<typeof block.data.variant, { bg: string; fg: string; border: string }> = {
+        info:    { bg: '#EFF6FF', fg: '#1E3A8A', border: '#BFDBFE' },
+        warning: { bg: '#FFFBEB', fg: '#854D0E', border: '#FDE68A' },
+        success: { bg: '#F0FDF4', fg: '#14532D', border: '#BBF7D0' },
+        note:    { bg: '#F8FAFC', fg: '#0F172A', border: '#E2E8F0' },
+      };
+      const colors = palette[block.data.variant];
+      return (
+        <aside
+          style={{
+            background: colors.bg,
+            color: colors.fg,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 8,
+            padding: '0.75rem 1rem',
+          }}
+        >
+          {block.data.title && (
+            <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>{block.data.title}</div>
+          )}
+          <div>{block.data.body}</div>
+        </aside>
+      );
+    }
+    case 'row': {
+      return (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: `repeat(${block.data.columns}, 1fr)`,
+            gap: '1rem',
+          }}
+        >
+          {block.data.children.map((placed) => (
+            <div
+              key={placed.block.id}
+              style={{ gridColumn: `${placed.colStart} / span ${placed.colSpan}` }}
+            >
+              {renderBlock(placed.block, answers, onAnswer, showResults)}
+            </div>
+          ))}
+        </div>
+      );
+    }
     case 'multiple_choice': {
       const selectedAnswer = answers[block.id] ?? null;
       const questionResult = showResults?.[block.id];
