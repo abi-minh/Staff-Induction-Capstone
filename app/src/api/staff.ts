@@ -1,36 +1,32 @@
 import client from './client';
 import type { StaffMember, ProgressRecord } from '../types';
 
-interface WPUser {
+interface InductionUser {
   id: number;
   name: string;
   slug: string;
-  avatar_urls: Record<string, string>;
+  email: string;
   roles: string[];
-  user_email?: string;
+  avatar_urls: Record<string, string>;
 }
 
-function normaliseUser(wp: WPUser): StaffMember {
+function normaliseUser(u: InductionUser): StaffMember {
   return {
-    id: wp.id,
-    name: wp.name,
-    email: wp.user_email ?? '',
-    roles: wp.roles ?? [],
-    avatarUrl: wp.avatar_urls?.['48'] ?? wp.avatar_urls?.['96'] ?? '',
+    id: u.id,
+    name: u.name,
+    email: u.email ?? '',
+    roles: u.roles ?? [],
+    avatarUrl: u.avatar_urls?.['48'] ?? u.avatar_urls?.['96'] ?? '',
   };
 }
 
 export async function fetchStaff(): Promise<StaffMember[]> {
-  const { data } = await client.get<WPUser[]>('wp/v2/users', {
-    params: { per_page: 100, roles: 'staff', context: 'edit' },
-  });
+  const { data } = await client.get<InductionUser[]>('induction/v1/staff');
   return data.map(normaliseUser);
 }
 
 export async function fetchStaffMember(id: number): Promise<StaffMember> {
-  const { data } = await client.get<WPUser>(`wp/v2/users/${id}`, {
-    params: { context: 'edit' },
-  });
+  const { data } = await client.get<InductionUser>(`induction/v1/staff/${id}`);
   return normaliseUser(data);
 }
 

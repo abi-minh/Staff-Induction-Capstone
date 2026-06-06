@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.0.0
+ * Version:     1.0.3
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -37,6 +37,8 @@ add_action( 'wp_enqueue_scripts', 'induction_maybe_enqueue_portal' );
 add_action( 'plugins_loaded',  'induction_create_tables' );
 add_filter( 'template_include', 'induction_portal_template' );
 add_shortcode( 'induction_portal', 'induction_portal_shortcode' );
+add_action( 'admin_init',      'induction_block_portal_users_from_admin' );
+add_filter( 'show_admin_bar',  'induction_hide_admin_bar_for_portal_users' );
 
 // ─── Custom Post Types ───────────────────────────────────────────────────────
 
@@ -260,6 +262,36 @@ function induction_register_routes(): void {
             'user_id'   => [ 'type' => 'integer' ],
             'module_id' => [ 'type' => 'integer' ],
         ],
+    ] );
+
+    // GET /me — current user identity (avoids wp/v2/users which hosts may block)
+    register_rest_route( $ns, '/me', [
+        'methods'             => 'GET',
+        'callback'            => function () {
+            $user = wp_get_current_user();
+            return rest_ensure_response( [
+                'id'    => $user->ID,
+                'name'  => $user->display_name,
+                'email' => $user->user_email,
+                'roles' => $user->roles,
+            ] );
+        },
+        'permission_callback' => 'is_user_logged_in',
+    ] );
+
+    // GET /staff — list all staff users (avoids wp/v2/users which hosts may block)
+    register_rest_route( $ns, '/staff', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_get_staff_list',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    // GET /staff/{id} — single staff user
+    register_rest_route( $ns, '/staff/(?P<id>\d+)', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_get_staff_member',
+        'permission_callback' => 'induction_is_admin_user',
+        'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
     ] );
 }
 
@@ -733,6 +765,50 @@ function induction_format_progress_row( array $row ): array {
 function induction_is_admin_user(): bool {
     $user = wp_get_current_user();
     return ! empty( array_intersect( [ 'administrator', 'induction_admin' ], (array) $user->roles ) );
+}
+
+function induction_block_portal_users_from_admin(): void {
+    if ( defined( 'DOING_AJAX' ) && DOING_AJAX ) return;
+    $user = wp_get_current_user();
+    if ( array_intersect( [ 'staff', 'induction_admin' ], (array) $user->roles ) ) {
+        wp_safe_redirect( home_url( '/' ) );
+        exit;
+    }
+}
+
+function induction_hide_admin_bar_for_portal_users( bool $show ): bool {
+    $user = wp_get_current_user();
+    if ( array_intersect( [ 'staff', 'induction_admin' ], (array) $user->roles ) ) {
+        return false;
+    }
+    return $show;
+}
+
+function induction_format_staff_user( WP_User $user ): array {
+    return [
+        'id'          => $user->ID,
+        'name'        => $user->display_name,
+        'slug'        => $user->user_login,
+        'email'       => $user->user_email,
+        'roles'       => $user->roles,
+        'avatar_urls' => [
+            '48' => get_avatar_url( $user->ID, [ 'size' => 48 ] ),
+            '96' => get_avatar_url( $user->ID, [ 'size' => 96 ] ),
+        ],
+    ];
+}
+
+function induction_get_staff_list(): WP_REST_Response {
+    $users = get_users( [ 'role__in' => [ 'staff', 'induction_admin' ], 'number' => 200 ] );
+    return rest_ensure_response( array_map( 'induction_format_staff_user', $users ) );
+}
+
+function induction_get_staff_member( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $user = get_user_by( 'id', (int) $request['id'] );
+    if ( ! $user ) {
+        return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
+    }
+    return rest_ensure_response( induction_format_staff_user( $user ) );
 }
 
 function induction_portal_shortcode(): string {

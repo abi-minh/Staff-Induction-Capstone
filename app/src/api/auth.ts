@@ -48,8 +48,7 @@ export async function fetchCurrentUser(token: string): Promise<AdminUser> {
     name: string;
     email: string;
     roles: string[];
-  }>('wp/v2/users/me', {
-    params: { context: 'edit' },
+  }>('induction/v1/me', {
     headers: { Authorization: `Bearer ${token}` },
   });
   return { id: data.id, name: data.name, email: data.email, roles: data.roles ?? [] };
