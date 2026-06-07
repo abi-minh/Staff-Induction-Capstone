@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.0.3
+ * Version:     1.0.5
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -96,19 +96,34 @@ function induction_sanitize_blocks_json( string $value ): string {
 
 function induction_register_roles(): void {
     if ( ! get_role( 'staff' ) ) {
-        add_role( 'staff', 'Staff', [
-            'read' => true,
-        ] );
+        add_role( 'staff', 'Staff', [] );
+    }
+    // Always sync caps so existing installs pick up changes on plugin update.
+    $staff_role = get_role( 'staff' );
+    foreach ( [
+        'read',
+        'read_private_posts',
+    ] as $cap ) {
+        $staff_role->add_cap( $cap );
     }
 
     if ( ! get_role( 'induction_admin' ) ) {
-        add_role( 'induction_admin', 'Induction Admin', [
-            'read'             => true,
-            'manage_induction' => true,
-            'edit_posts'       => true,
-            'publish_posts'    => true,
-            'upload_files'     => true,
-        ] );
+        add_role( 'induction_admin', 'Induction Admin', [] );
+    }
+    // Always sync caps so existing installs pick up changes on plugin update.
+    $induction_admin = get_role( 'induction_admin' );
+    foreach ( [
+        'read',
+        'manage_induction',
+        'edit_posts',
+        'edit_others_posts',
+        'publish_posts',
+        'upload_files',
+        'read_private_posts',
+        'delete_posts',
+        'delete_others_posts',
+    ] as $cap ) {
+        $induction_admin->add_cap( $cap );
     }
 
     // Grant administrators the manage_induction capability so they can use
