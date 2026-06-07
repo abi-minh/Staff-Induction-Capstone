@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.0.5
+ * Version:     1.0.8
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -55,13 +55,14 @@ function induction_register_post_types(): void {
         'capability_type' => 'post',
     ] );
 
-    register_post_meta( 'induction_module', 'module_role_targets',        [ 'type' => 'array',   'single' => true, 'show_in_rest' => [ 'schema' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ] ], 'default' => [] ] );
-    register_post_meta( 'induction_module', 'module_estimated_minutes',   [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0 ] );
-    register_post_meta( 'induction_module', 'module_order',               [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0 ] );
-    register_post_meta( 'induction_module', 'module_blocks',              [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '[]', 'sanitize_callback' => 'induction_sanitize_blocks_json' ] );
-    register_post_meta( 'induction_module', 'quiz_pass_threshold',        [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 70 ] );
-    register_post_meta( 'induction_module', 'module_icon',                [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '' ] );
-    register_post_meta( 'induction_module', 'module_hero_image',          [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0 ] );
+    $induction_auth = '__return_true';
+    register_post_meta( 'induction_module', 'module_role_targets',      [ 'type' => 'array',   'single' => true, 'show_in_rest' => [ 'schema' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ] ], 'default' => [],   'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_module', 'module_estimated_minutes', [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,   'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_module', 'module_order',             [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,   'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_module', 'module_blocks',            [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '[]', 'sanitize_callback' => 'induction_sanitize_blocks_json', 'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_module', 'quiz_pass_threshold',      [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 70,  'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_module', 'module_icon',              [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',  'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_module', 'module_hero_image',        [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,   'auth_callback' => $induction_auth ] );
 
     // Reference documents
     register_post_type( 'induction_document', [
@@ -75,9 +76,9 @@ function induction_register_post_types(): void {
         'capability_type' => 'post',
     ] );
 
-    register_post_meta( 'induction_document', 'document_category',      [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '' ] );
-    register_post_meta( 'induction_document', 'document_file_id',       [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0 ] );
-    register_post_meta( 'induction_document', 'document_role_targets',  [ 'type' => 'array',   'single' => true, 'show_in_rest' => [ 'schema' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ] ], 'default' => [] ] );
+    register_post_meta( 'induction_document', 'document_category',     [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',  'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_document', 'document_file_id',      [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,   'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_document', 'document_role_targets', [ 'type' => 'array',   'single' => true, 'show_in_rest' => [ 'schema' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ] ], 'default' => [],   'auth_callback' => $induction_auth ] );
 }
 
 // ─── Sanitization ───────────────────────────────────────────────────────────
@@ -307,6 +308,42 @@ function induction_register_routes(): void {
         'callback'            => 'induction_get_staff_member',
         'permission_callback' => 'induction_is_admin_user',
         'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+    ] );
+
+    // GET /modules, POST /modules — list and create modules
+    register_rest_route( $ns, '/modules', [
+        [
+            'methods'             => 'GET',
+            'callback'            => 'induction_get_modules',
+            'permission_callback' => 'induction_is_admin_user',
+        ],
+        [
+            'methods'             => 'POST',
+            'callback'            => 'induction_create_module',
+            'permission_callback' => 'induction_is_admin_user',
+        ],
+    ] );
+
+    // GET /modules/{id}, POST /modules/{id}, DELETE /modules/{id}
+    register_rest_route( $ns, '/modules/(?P<id>\d+)', [
+        [
+            'methods'             => 'GET',
+            'callback'            => 'induction_get_module',
+            'permission_callback' => 'is_user_logged_in',
+            'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+        ],
+        [
+            'methods'             => 'POST',
+            'callback'            => 'induction_update_module',
+            'permission_callback' => 'induction_is_admin_user',
+            'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+        ],
+        [
+            'methods'             => 'DELETE',
+            'callback'            => 'induction_delete_module',
+            'permission_callback' => 'induction_is_admin_user',
+            'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+        ],
     ] );
 }
 
@@ -824,6 +861,121 @@ function induction_get_staff_member( WP_REST_Request $request ): WP_REST_Respons
         return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
     }
     return rest_ensure_response( induction_format_staff_user( $user ) );
+}
+
+function induction_format_module( WP_Post $post ): array {
+    return [
+        'id'       => $post->ID,
+        'title'    => [ 'raw' => $post->post_title,   'rendered' => $post->post_title ],
+        'content'  => [ 'raw' => $post->post_content, 'rendered' => $post->post_content ],
+        'excerpt'  => [ 'raw' => $post->post_excerpt, 'rendered' => $post->post_excerpt ],
+        'status'   => $post->post_status,
+        'date'     => $post->post_date,
+        'modified' => $post->post_modified,
+        'meta'     => [
+            'module_role_targets'      => get_post_meta( $post->ID, 'module_role_targets', true ) ?: [],
+            'module_estimated_minutes' => (int) get_post_meta( $post->ID, 'module_estimated_minutes', true ),
+            'module_order'             => (int) get_post_meta( $post->ID, 'module_order', true ),
+            'module_blocks'            => get_post_meta( $post->ID, 'module_blocks', true ) ?: '[]',
+            'module_icon'              => get_post_meta( $post->ID, 'module_icon', true ) ?: '',
+            'module_hero_image'        => (int) get_post_meta( $post->ID, 'module_hero_image', true ),
+        ],
+    ];
+}
+
+function induction_save_module_meta( int $id, array $meta ): void {
+    if ( isset( $meta['module_role_targets'] ) ) {
+        update_post_meta( $id, 'module_role_targets', (array) $meta['module_role_targets'] );
+    }
+    if ( isset( $meta['module_estimated_minutes'] ) ) {
+        update_post_meta( $id, 'module_estimated_minutes', (int) $meta['module_estimated_minutes'] );
+    }
+    if ( isset( $meta['module_order'] ) ) {
+        update_post_meta( $id, 'module_order', (int) $meta['module_order'] );
+    }
+    if ( isset( $meta['module_blocks'] ) ) {
+        update_post_meta( $id, 'module_blocks', (string) $meta['module_blocks'] );
+    }
+    if ( isset( $meta['module_icon'] ) ) {
+        update_post_meta( $id, 'module_icon', sanitize_text_field( (string) $meta['module_icon'] ) );
+    }
+    if ( isset( $meta['module_hero_image'] ) ) {
+        update_post_meta( $id, 'module_hero_image', (int) $meta['module_hero_image'] );
+    }
+}
+
+function induction_get_modules(): WP_REST_Response {
+    $posts = get_posts( [
+        'post_type'      => 'induction_module',
+        'post_status'    => [ 'publish', 'draft' ],
+        'posts_per_page' => -1,
+        'orderby'        => 'meta_value_num',
+        'meta_key'       => 'module_order',
+        'order'          => 'ASC',
+    ] );
+    return rest_ensure_response( array_map( 'induction_format_module', $posts ) );
+}
+
+function induction_get_module( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $post = get_post( (int) $request['id'] );
+    if ( ! $post || $post->post_type !== 'induction_module' ) {
+        return new WP_Error( 'not_found', 'Module not found.', [ 'status' => 404 ] );
+    }
+    return rest_ensure_response( induction_format_module( $post ) );
+}
+
+function induction_create_module( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $params = $request->get_json_params();
+    $id     = wp_insert_post( [
+        'post_type'    => 'induction_module',
+        'post_title'   => sanitize_text_field( $params['title'] ?? '' ),
+        'post_content' => wp_kses_post( $params['content'] ?? '' ),
+        'post_excerpt' => sanitize_text_field( $params['excerpt'] ?? '' ),
+        'post_status'  => in_array( $params['status'] ?? '', [ 'publish', 'draft' ], true ) ? $params['status'] : 'draft',
+        'post_author'  => get_current_user_id(),
+    ], true );
+    if ( is_wp_error( $id ) ) {
+        return $id;
+    }
+    induction_save_module_meta( $id, $params['meta'] ?? [] );
+    return rest_ensure_response( induction_format_module( get_post( $id ) ) );
+}
+
+function induction_update_module( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id   = (int) $request['id'];
+    $post = get_post( $id );
+    if ( ! $post || $post->post_type !== 'induction_module' ) {
+        return new WP_Error( 'not_found', 'Module not found.', [ 'status' => 404 ] );
+    }
+    $params = $request->get_json_params();
+    $update = [ 'ID' => $id ];
+    if ( isset( $params['title'] ) )   { $update['post_title']   = sanitize_text_field( $params['title'] ); }
+    if ( isset( $params['content'] ) ) { $update['post_content'] = wp_kses_post( $params['content'] ); }
+    if ( isset( $params['excerpt'] ) ) { $update['post_excerpt'] = sanitize_text_field( $params['excerpt'] ); }
+    if ( isset( $params['status'] ) && in_array( $params['status'], [ 'publish', 'draft' ], true ) ) {
+        $update['post_status'] = $params['status'];
+    }
+    $result = wp_update_post( $update, true );
+    if ( is_wp_error( $result ) ) {
+        return $result;
+    }
+    if ( isset( $params['meta'] ) ) {
+        induction_save_module_meta( $id, $params['meta'] );
+    }
+    return rest_ensure_response( induction_format_module( get_post( $id ) ) );
+}
+
+function induction_delete_module( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id   = (int) $request['id'];
+    $post = get_post( $id );
+    if ( ! $post || $post->post_type !== 'induction_module' ) {
+        return new WP_Error( 'not_found', 'Module not found.', [ 'status' => 404 ] );
+    }
+    $deleted = wp_delete_post( $id, true );
+    if ( ! $deleted ) {
+        return new WP_Error( 'delete_failed', 'Could not delete module.', [ 'status' => 500 ] );
+    }
+    return rest_ensure_response( [ 'deleted' => true, 'id' => $id ] );
 }
 
 function induction_portal_shortcode(): string {
