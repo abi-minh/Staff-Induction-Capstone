@@ -8,6 +8,7 @@ export default function StaffPage() {
   const { data: modules = [], isLoading: modulesLoading } = useModules();
   const bulkAssign = useBulkAssign();
 
+  const [search,          setSearch]            = useState('');
   const [assigningUserId, setAssigningUserId]   = useState<number | null>(null);
   const [selectedModules, setSelectedModules]   = useState<number[]>([]);
   const [dueDate,         setDueDate]           = useState('');
@@ -32,13 +33,24 @@ export default function StaffPage() {
 
   if (staffLoading) return <p>Loading…</p>;
 
+  const filteredStaff = staff.filter((s) =>
+    s.name.toLowerCase().includes(search.toLowerCase())
+  );
+
   return (
     <div>
       <h1>Staff</h1>
-      <p>{staff.length} staff member{staff.length !== 1 ? 's' : ''}</p>
+      <p>{filteredStaff.length} staff member{filteredStaff.length !== 1 ? 's' : ''}</p>
+
+      <input
+        type="search"
+        placeholder="Search staff by name…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
 
       <ul>
-        {staff.map((s) => (
+        {filteredStaff.map((s) => (
           <li key={s.id}>
             <Link to={`/staff/${s.id}`}>{s.name}</Link>
             {s.email && ` — ${s.email}`}
