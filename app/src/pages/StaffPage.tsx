@@ -13,6 +13,7 @@ import {
   TableCell,
   TableHead,
   TableRow,
+  TableSortLabel,
   TextField,
   Typography,
 } from "@mui/material";
@@ -76,6 +77,20 @@ const STATUS_LABELS: Record<CompletionStatus, string> = {
   none: "-",
 };
 
+type SortKey = "name" | "role" | "email" | "completion";
+
+const SORT_COLUMNS: { key: SortKey; label: string }[] = [
+  { key: "name", label: "Name" },
+  { key: "role", label: "Role" },
+  { key: "email", label: "Email" },
+  { key: "completion", label: "Completion" },
+];
+
+// Sort key for the completion column: fraction complete, unassigned last.
+function completionValue(c: StaffCompletion): number {
+  return c.total > 0 ? c.completed / c.total : -1;
+}
+
 export default function StaffPage() {
   const { data: staff = [], isLoading: staffLoading, error } = useStaff();
   const { data: modules = [], isLoading: modulesLoading } = useModules();
@@ -86,14 +101,51 @@ export default function StaffPage() {
   const [assigningUserId, setAssigningUserId] = useState<number | null>(null);
   const [selectedModules, setSelectedModules] = useState<number[]>([]);
   const [dueDate, setDueDate] = useState("");
-
-  const moduleReports = reports?.moduleReports ?? [];
+  const [sortBy, setSortBy] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   const filteredStaff = useMemo(() => {
     const needle = search.trim().toLowerCase();
     if (!needle) return staff;
     return staff.filter((s) => s.name.toLowerCase().includes(needle));
   }, [staff, search]);
+
+  const rows = useMemo(() => {
+    const moduleReports = reports?.moduleReports ?? [];
+    const withCompletion = filteredStaff.map((s) => ({
+      staff: s,
+      completion: staffCompletion(s.id, moduleReports),
+    }));
+    if (!sortBy) return withCompletion;
+    const factor = sortDir === "asc" ? 1 : -1;
+    return [...withCompletion].sort((a, b) => {
+      let cmp = 0;
+      switch (sortBy) {
+        case "name":
+          cmp = a.staff.name.localeCompare(b.staff.name);
+          break;
+        case "role":
+          cmp = formatRoles(a.staff.roles).localeCompare(formatRoles(b.staff.roles));
+          break;
+        case "email":
+          cmp = (a.staff.email || "").localeCompare(b.staff.email || "");
+          break;
+        case "completion":
+          cmp = completionValue(a.completion) - completionValue(b.completion);
+          break;
+      }
+      return cmp * factor;
+    });
+  }, [filteredStaff, reports, sortBy, sortDir]);
+
+  function handleSort(key: SortKey) {
+    if (sortBy === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(key);
+      setSortDir("asc");
+    }
+  }
 
   function toggleModule(id: number) {
     setSelectedModules((prev) =>
@@ -165,46 +217,31 @@ export default function StaffPage() {
           <Table>
             <TableHead>
               <TableRow>
-                <TableCell
-                  sx={{
-                    py: 2.25,
-                    fontWeight: 700,
-                    borderBottom: "1px solid",
-                    borderColor: "divider",
-                  }}
-                >
-                  Name
-                </TableCell>
-                <TableCell
-                  sx={{
-                    py: 2.25,
-                    fontWeight: 700,
-                    borderBottom: "1px solid",
-                    borderColor: "divider",
-                  }}
-                >
-                  Role
-                </TableCell>
-                <TableCell
-                  sx={{
-                    py: 2.25,
-                    fontWeight: 700,
-                    borderBottom: "1px solid",
-                    borderColor: "divider",
-                  }}
-                >
-                  Email
-                </TableCell>
-                <TableCell
-                  sx={{
-                    py: 2.25,
-                    fontWeight: 700,
-                    borderBottom: "1px solid",
-                    borderColor: "divider",
-                  }}
-                >
-                  Completion
-                </TableCell>
+                {SORT_COLUMNS.map((col) => (
+                  <TableCell
+                    key={col.key}
+                    sortDirection={sortBy === col.key ? sortDir : false}
+                    sx={{
+                      py: 2.25,
+                      fontWeight: 700,
+                      borderBottom: "1px solid",
+                      borderColor: "divider",
+                    }}
+                  >
+                    <TableSortLabel
+                      active={sortBy === col.key}
+                      direction={sortBy === col.key ? sortDir : "asc"}
+                      onClick={() => handleSort(col.key)}
+                      sx={{
+                        "& .MuiTableSortLabel-icon": {
+                          opacity: sortBy === col.key ? 1 : 0.35,
+                        },
+                      }}
+                    >
+                      {col.label}
+                    </TableSortLabel>
+                  </TableCell>
+                ))}
                 <TableCell
                   sx={{
                     py: 2.25,
@@ -220,10 +257,7 @@ export default function StaffPage() {
             </TableHead>
 
             <TableBody>
-              {filteredStaff.map((s) => {
-                const completion = staffCompletion(s.id, moduleReports);
-
-                return (
+              {rows.map(({ staff: s, completion }) => (
                   <TableRow
                     key={s.id}
                     hover
@@ -295,10 +329,9 @@ export default function StaffPage() {
                       </Box>
                     </TableCell>
                   </TableRow>
-                );
-              })}
+              ))}
 
-              {!filteredStaff.length && (
+              {!rows.length && (
                 <TableRow>
                   <TableCell colSpan={5} sx={{ py: 6 }}>
                     <Typography color="text.secondary">
