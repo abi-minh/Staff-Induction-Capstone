@@ -78,6 +78,13 @@ const STATUS_LABELS: Record<CompletionStatus, string> = {
   none: "-",
 };
 
+const STATUS_COLORS: Record<CompletionStatus, string> = {
+  completed: "success.main",
+  in_progress: "warning.main",
+  not_started: "error.main",
+  none: "text.secondary",
+};
+
 type SortKey = "name" | "role" | "email" | "completion";
 
 const SORT_COLUMNS: { key: SortKey; label: string }[] = [
@@ -354,7 +361,12 @@ export default function StaffPage() {
                     <TableCell>{formatRoles(s.roles)}</TableCell>
                     <TableCell>{s.email || "-"}</TableCell>
                     <TableCell>
-                      <Typography sx={{ fontWeight: 500 }}>
+                      <Typography
+                        sx={{
+                          fontWeight: 500,
+                          color: STATUS_COLORS[completion.status],
+                        }}
+                      >
                         {STATUS_LABELS[completion.status]}
                       </Typography>
                       {completion.total > 0 && (
