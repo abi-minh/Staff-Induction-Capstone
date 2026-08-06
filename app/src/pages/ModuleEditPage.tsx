@@ -282,6 +282,22 @@ export default function ModuleEditPage() {
                       {section.isModuleQuiz && (
                         <Chip label="Module quiz" size="small" color="primary" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
                       )}
+                      <Chip
+                        label={(section.status ?? 'publish') === 'publish' ? 'Published' : 'Draft'}
+                        size="small"
+                        color={(section.status ?? 'publish') === 'publish' ? 'success' : 'warning'}
+                        variant="outlined"
+                        sx={{ height: 20, fontSize: '0.7rem' }}
+                      />
+                      {section.quizBlocks.length > 0 && (
+                        <Chip
+                          label={(section.quizStatus ?? 'publish') === 'publish' ? 'Quiz published' : 'Quiz draft'}
+                          size="small"
+                          color={(section.quizStatus ?? 'publish') === 'publish' ? 'success' : 'warning'}
+                          variant="outlined"
+                          sx={{ height: 20, fontSize: '0.7rem' }}
+                        />
+                      )}
                     </Box>
                     <Typography variant="body2" color="text.secondary">
                       {section.blocks.length} block{section.blocks.length !== 1 ? 's' : ''} · {section.quizBlocks.length} question{section.quizBlocks.length !== 1 ? 's' : ''}

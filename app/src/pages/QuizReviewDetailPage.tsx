@@ -92,7 +92,14 @@ export default function QuizReviewDetailPage() {
                       {option}
                     </Typography>
                     {isCorrectOption && <Chip label="Correct answer" size="small" color="success" variant="outlined" />}
-                    {isStudentPick && <Chip label="Student's answer" size="small" color="primary" variant="outlined" />}
+                    {isStudentPick && (
+                      <Chip
+                        label="Student's answer"
+                        size="small"
+                        color={isCorrectOption ? 'success' : 'error'}
+                        variant="outlined"
+                      />
+                    )}
                   </Box>
                 );
               })}
@@ -107,7 +114,15 @@ export default function QuizReviewDetailPage() {
               </Typography>
               <Typography variant="body2">
                 Student's answer:{' '}
-                <strong>{q.userAnswer === null ? 'No answer given' : (q.userAnswer === 'true' ? 'True' : 'False')}</strong>
+                <Typography
+                  component="span"
+                  sx={{
+                    fontWeight: 700,
+                    color: q.userAnswer !== null && !suggestedCorrect(q) ? 'error.main' : 'inherit',
+                  }}
+                >
+                  {q.userAnswer === null ? 'No answer given' : (q.userAnswer === 'true' ? 'True' : 'False')}
+                </Typography>
               </Typography>
             </Box>
           )}

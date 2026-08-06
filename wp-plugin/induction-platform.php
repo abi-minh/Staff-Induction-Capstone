@@ -770,6 +770,42 @@ function induction_is_module_quiz_block( string $blocks_json, string $block_id )
     return false;
 }
 
+// Defense in depth alongside induction_strip_unpublished_content(): a student
+// hitting the REST API directly (bypassing the SPA, which never renders an
+// unpublished quiz) must still be blocked from checking or submitting it.
+// Returns true only if $block_id's owning section has BOTH its content and
+// its quiz published. Legacy flat-format modules predate per-section status
+// and are always considered published.
+function induction_is_quiz_block_published( string $blocks_json, string $block_id ): bool {
+    $parsed = json_decode( $blocks_json, true ) ?: [];
+    if ( empty( $parsed ) || ! array_key_exists( 'quizBlocks', $parsed[0] ) ) {
+        return true;
+    }
+    foreach ( $parsed as $section ) {
+        foreach ( (array) ( $section['quizBlocks'] ?? [] ) as $b ) {
+            if ( $b['id'] !== $block_id ) continue;
+            return ( $section['status'] ?? 'publish' ) === 'publish'
+                && ( $section['quizStatus'] ?? 'publish' ) === 'publish';
+        }
+    }
+    return false;
+}
+
+// Same idea, scoped to the module-level quiz specifically (used by
+// quiz/submit-for-review, which has no single block_id to check against).
+function induction_has_published_module_quiz( string $blocks_json ): bool {
+    $parsed = json_decode( $blocks_json, true ) ?: [];
+    if ( empty( $parsed ) || ! array_key_exists( 'quizBlocks', $parsed[0] ) ) {
+        return false;
+    }
+    foreach ( $parsed as $section ) {
+        if ( empty( $section['isModuleQuiz'] ) || empty( $section['quizBlocks'] ) ) continue;
+        return ( $section['status'] ?? 'publish' ) === 'publish'
+            && ( $section['quizStatus'] ?? 'publish' ) === 'publish';
+    }
+    return false;
+}
+
 // Grades one answer immediately — used by the "Check answer" button for
 // section-level quiz questions only. Module-level quiz questions are graded
 // by an admin (see quiz/submit-for-review + quiz/grade below), never
@@ -792,6 +828,10 @@ function induction_quiz_check( WP_REST_Request $request ): WP_REST_Response {
         return new WP_REST_Response(
             [ 'message' => 'Module-level quiz answers are graded by an admin, not checked automatically.' ], 403
         );
+    }
+
+    if ( ! induction_is_quiz_block_published( $blocks_json, $block_id ) ) {
+        return new WP_REST_Response( [ 'message' => 'Quiz question not found' ], 404 );
     }
 
     $quiz_blocks = induction_collect_quiz_blocks( $blocks_json, false );
@@ -821,6 +861,11 @@ function induction_quiz_submit_for_review( WP_REST_Request $request ): WP_REST_R
 
     if ( get_current_user_id() !== $user_id && ! current_user_can( 'manage_induction' ) ) {
         return new WP_REST_Response( [ 'message' => 'Forbidden' ], 403 );
+    }
+
+    $blocks_json = get_post_meta( $module_id, 'module_blocks', true ) ?: '[]';
+    if ( ! induction_has_published_module_quiz( $blocks_json ) ) {
+        return new WP_REST_Response( [ 'message' => 'No published module-level quiz found' ], 404 );
     }
 
     $existing = $wpdb->get_row(
@@ -1098,6 +1143,48 @@ function induction_strip_quiz_answers( WP_REST_Response $response, WP_Post $post
     $response->set_data( $data );
 
     return $response;
+}
+
+// Runs before induction_strip_quiz_answers (lower priority) so it operates on
+// the full, unfiltered module_blocks. Draft sections are removed outright;
+// sections with a draft quizStatus keep their content but lose their quiz —
+// each is independent of the other and of the module's own post_status.
+add_filter( 'rest_prepare_induction_module', 'induction_strip_unpublished_content', 9, 3 );
+
+function induction_strip_unpublished_content( WP_REST_Response $response, WP_Post $post, WP_REST_Request $request ): WP_REST_Response {
+    if ( current_user_can( 'manage_induction' ) ) {
+        return $response;
+    }
+
+    $data = $response->get_data();
+    if ( ! isset( $data['meta']['module_blocks'] ) ) {
+        return $response;
+    }
+
+    $data['meta']['module_blocks'] = induction_strip_unpublished_sections_json( $data['meta']['module_blocks'] );
+    $response->set_data( $data );
+
+    return $response;
+}
+
+function induction_strip_unpublished_sections_json( string $blocks_json ): string {
+    $parsed = json_decode( $blocks_json, true );
+    if ( ! is_array( $parsed ) || empty( $parsed ) || ! array_key_exists( 'quizBlocks', $parsed[0] ) ) {
+        return $blocks_json; // legacy flat format predates per-section status
+    }
+
+    $visible = [];
+    foreach ( $parsed as $section ) {
+        if ( ( $section['status'] ?? 'publish' ) !== 'publish' ) {
+            continue; // drop draft sections entirely
+        }
+        if ( ( $section['quizStatus'] ?? 'publish' ) !== 'publish' ) {
+            $section['quizBlocks'] = []; // keep the content, hide the quiz
+        }
+        $visible[] = $section;
+    }
+
+    return wp_json_encode( $visible );
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

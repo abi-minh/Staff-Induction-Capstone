@@ -1,15 +1,34 @@
+import { useState } from 'react';
 import {
-  Box, Button, Checkbox, Divider, FormControlLabel, IconButton, MenuItem,
-  Paper, TextField, Typography,
+  Box, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle,
+  Divider, FormControlLabel, IconButton, MenuItem, Paper, TextField,
+  ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
-import type { Block, MultipleChoiceBlock, QuizBlock, Section, TrueFalseBlock } from '../types';
+import type { Block, MultipleChoiceBlock, PostStatus, QuizBlock, Section, TrueFalseBlock } from '../types';
 import ModuleContentEditor from '../blocks/ModuleContentEditor';
 import { createBlock } from '../blocks/utils';
 
 const roundedButtonSx = { borderRadius: '10px' };
+
+function StatusToggle({ value, onChange }: { value: PostStatus; onChange: (next: PostStatus) => void }) {
+  return (
+    <ToggleButtonGroup
+      size="small"
+      value={value}
+      exclusive
+      onChange={(_, next: PostStatus | null) => next && onChange(next)}
+      sx={{
+        '& .MuiToggleButton-root': { textTransform: 'none', px: 1.5, py: 0.25, fontSize: '0.8rem' },
+      }}
+    >
+      <ToggleButton value="draft" color="warning">Draft</ToggleButton>
+      <ToggleButton value="publish" color="success">Published</ToggleButton>
+    </ToggleButtonGroup>
+  );
+}
 
 interface Props {
   section: Section;
@@ -19,6 +38,8 @@ interface Props {
 }
 
 export default function SectionEditor({ section, index, onChange, onRemove }: Props) {
+  const [deleteQuestionIndex, setDeleteQuestionIndex] = useState<number | null>(null);
+
   function set<K extends keyof Section>(key: K, value: Section[K]) {
     onChange({ ...section, [key]: value });
   }
@@ -54,13 +75,16 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
       }}
     >
       {/* Header */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2.5 }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2.5, gap: 2 }}>
         <Typography variant="h2" sx={{ fontSize: '1.65rem' }}>
           Section {index + 1}
         </Typography>
-        <IconButton color="error" onClick={onRemove} size="small">
-          <DeleteOutlineIcon />
-        </IconButton>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <StatusToggle value={section.status ?? 'publish'} onChange={(v) => set('status', v)} />
+          <IconButton color="error" onClick={onRemove} size="small">
+            <DeleteOutlineIcon />
+          </IconButton>
+        </Box>
       </Box>
 
       {/* Hero image */}
@@ -137,9 +161,12 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
       <Divider sx={{ my: 3 }} />
 
       {/* Quiz */}
-      <Typography variant="h3" sx={{ fontSize: '1.15rem', fontWeight: 700, mb: 1 }}>
-        Quiz
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1, gap: 2 }}>
+        <Typography variant="h3" sx={{ fontSize: '1.15rem', fontWeight: 700 }}>
+          Quiz
+        </Typography>
+        <StatusToggle value={section.quizStatus ?? 'publish'} onChange={(v) => set('quizStatus', v)} />
+      </Box>
 
       <FormControlLabel
         control={
@@ -215,7 +242,7 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
               <Typography variant="h3" sx={{ fontSize: '1.15rem' }}>
                 Question {qi + 1}
               </Typography>
-              <IconButton color="error" onClick={() => removeQuestion(qi)}>
+              <IconButton color="error" onClick={() => setDeleteQuestionIndex(qi)}>
                 <DeleteOutlineIcon />
               </IconButton>
             </Box>
@@ -419,6 +446,28 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
       >
         Add Question
       </Button>
+
+      <Dialog open={deleteQuestionIndex !== null} onClose={() => setDeleteQuestionIndex(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Delete this question?</DialogTitle>
+        <DialogContent>
+          <Typography color="text.secondary">
+            {deleteQuestionIndex !== null ? `Question ${deleteQuestionIndex + 1}` : 'This question'} will be removed from the quiz. This can't be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button variant="text" onClick={() => setDeleteQuestionIndex(null)}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="error"
+            onClick={() => {
+              if (deleteQuestionIndex !== null) removeQuestion(deleteQuestionIndex);
+              setDeleteQuestionIndex(null);
+            }}
+          >
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Paper>
   );
 }

@@ -297,6 +297,12 @@ export interface Section {
   // When true, this section's quizBlocks are the module-level quiz — gated
   // behind completion of every other section. At most one section per module.
   isModuleQuiz?: boolean;
+  // Section content visibility to staff, independent of the module's own
+  // publish state. Undefined means 'publish' (legacy sections predate this).
+  status?: PostStatus;
+  // Quiz visibility, independent of `status` — content can go live while the
+  // quiz is still being drafted, or vice versa. Undefined means 'publish'.
+  quizStatus?: PostStatus;
 }
 
 // ─── Quiz ────────────────────────────────────────────────────────────────────

@@ -111,6 +111,9 @@ export function createSection(): Section {
     passingPercentage: 80,
     quizBlocks: [],
     isModuleQuiz: false,
+    // New sections start hidden from staff until deliberately published.
+    status: 'draft',
+    quizStatus: 'draft',
   };
 }
 

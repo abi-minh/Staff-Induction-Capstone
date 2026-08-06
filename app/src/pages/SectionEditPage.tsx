@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Alert, Box, Button, Chip, Typography } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import PublishIcon from '@mui/icons-material/SendOutlined';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import { useModule, useUpdateModule } from '../hooks/useModules';
 import SectionEditor from './SectionEditor';
@@ -44,14 +43,14 @@ export default function SectionEditPage() {
     setSection(updated);
   }
 
-  async function handleSave(statusOverride?: 'draft' | 'publish') {
+  async function handleSave() {
     if (!section || !module) return;
     const updated = allSections.map((s) => (s.id === sectionId ? section : s));
     await updateModule.mutateAsync({
       title: module.title,
       content: module.content,
       excerpt: module.excerpt,
-      status: statusOverride ?? module.status,
+      status: module.status,
       module_role_targets: module.meta.module_role_targets,
       module_estimated_minutes: module.meta.module_estimated_minutes,
       module_order: module.meta.module_order,
@@ -127,22 +126,13 @@ export default function SectionEditPage() {
 
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
           <Button
-            variant="outlined"
+            variant="contained"
             startIcon={<SaveOutlinedIcon />}
             onClick={() => handleSave()}
             disabled={saving || !isDirty}
             sx={roundedButtonSx}
           >
-            Save
-          </Button>
-          <Button
-            variant="contained"
-            startIcon={<PublishIcon />}
-            onClick={() => handleSave('publish')}
-            disabled={saving}
-            sx={roundedButtonSx}
-          >
-            Publish
+            {saving ? 'Saving…' : 'Save Changes'}
           </Button>
         </Box>
       </Box>
