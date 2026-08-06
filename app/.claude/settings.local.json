@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(cmd /c \"dir C:\\\\Users\\\\Demonbane\\\\Local Sites\\\\reactasaplugin\\\\app\\\\public\\\\wp-content\\\\plugins\\\\staff-portal\" 2>&1)",
+      "PowerShell(cmd /c \"dir \"\"C:\\\\Users\\\\Demonbane\\\\Local Sites\\\\reactasaplugin\\\\app\\\\public\\\\wp-content\\\\plugins\\\\staff-portal\\\\assets\"\"\")",
+      "PowerShell(cmd /c \"dir /s \"\"C:\\\\Users\\\\Demonbane\\\\Local Sites\\\\reactasaplugin\\\\app\\\\public\\\\wp-content\\\\plugins\\\\staff-portal\\\\assets\"\"\")",
+      "Bash(npm run *)",
+      "Bash(npx tsc *)"
+    ]
+  }
+}

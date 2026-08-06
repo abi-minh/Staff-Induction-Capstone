@@ -36,6 +36,14 @@ export default function SectionEditPage() {
   const isDirty = JSON.stringify(section) !== initialJson;
   const saving = updateModule.isLoading;
 
+  function handleSectionChange(updated: Section) {
+    if (updated.isModuleQuiz && !section?.isModuleQuiz) {
+      // Only one section per module can be the module-level quiz.
+      setAllSections((prev) => prev.map((s) => (s.id === sectionId ? s : { ...s, isModuleQuiz: false })));
+    }
+    setSection(updated);
+  }
+
   async function handleSave(statusOverride?: 'draft' | 'publish') {
     if (!section || !module) return;
     const updated = allSections.map((s) => (s.id === sectionId ? section : s));
@@ -142,7 +150,7 @@ export default function SectionEditPage() {
       <SectionEditor
         section={section}
         index={sectionIndex >= 0 ? sectionIndex : 0}
-        onChange={(updated) => setSection(updated)}
+        onChange={handleSectionChange}
         onRemove={handleRemove}
       />
     </Box>

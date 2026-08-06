@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.0.8
+ * Version:     1.0.9
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -249,6 +249,19 @@ function induction_register_routes(): void {
     register_rest_route( $ns, '/quiz/save', [
         'methods'             => 'POST',
         'callback'            => 'induction_quiz_save',
+        'permission_callback' => 'is_user_logged_in',
+        'args'                => [
+            'user_id'   => [ 'type' => 'integer', 'required' => true ],
+            'module_id' => [ 'type' => 'integer', 'required' => true ],
+            'block_id'  => [ 'type' => 'string',  'required' => true ],
+            'answer'    => [ 'type' => 'string',  'required' => true ],
+        ],
+    ] );
+
+    // POST /quiz/check — grade a single answer immediately (section or module quiz)
+    register_rest_route( $ns, '/quiz/check', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_quiz_check',
         'permission_callback' => 'is_user_logged_in',
         'args'                => [
             'user_id'   => [ 'type' => 'integer', 'required' => true ],
@@ -597,6 +610,43 @@ function induction_get_reports_summary(): WP_REST_Response {
 
 // ─── Quiz Callbacks ─────────────────────────────────────────────────────────
 
+// Shared upsert for the quiz responses table. $is_correct = null leaves grading pending.
+function induction_upsert_quiz_response(
+    string $table, int $user_id, int $module_id, string $block_id, $answer, ?bool $is_correct
+): void {
+    global $wpdb;
+    $data = [
+        'answer'     => $answer,
+        'is_correct' => $is_correct === null ? null : ( $is_correct ? 1 : 0 ),
+        'created_at' => current_time( 'mysql' ),
+    ];
+
+    $existing = $wpdb->get_row(
+        $wpdb->prepare( "SELECT id FROM $table WHERE user_id = %d AND module_id = %d AND block_id = %s", $user_id, $module_id, $block_id ),
+        ARRAY_A
+    );
+
+    if ( $existing ) {
+        $wpdb->update( $table, $data, [ 'id' => $existing['id'] ] );
+    } else {
+        $wpdb->insert( $table, array_merge(
+            [ 'user_id' => $user_id, 'module_id' => $module_id, 'block_id' => $block_id ], $data
+        ) );
+    }
+}
+
+// Grades a single answer against a quiz block's stored correct answer.
+function induction_grade_quiz_answer( array $quiz_block, $answer ): bool {
+    if ( $quiz_block['type'] === 'multiple_choice' ) {
+        return (int) $answer === (int) ( $quiz_block['data']['correctIndex'] ?? -1 );
+    }
+    if ( $quiz_block['type'] === 'true_false' ) {
+        $correct_val = ! empty( $quiz_block['data']['correctAnswer'] );
+        return ( $answer === 'true' ) === $correct_val;
+    }
+    return false;
+}
+
 function induction_quiz_save( WP_REST_Request $request ): WP_REST_Response {
     global $wpdb;
     $table     = $wpdb->prefix . 'induction_quiz_responses';
@@ -604,36 +654,48 @@ function induction_quiz_save( WP_REST_Request $request ): WP_REST_Response {
     $module_id = (int) $request->get_param( 'module_id' );
     $block_id  = $request->get_param( 'block_id' );
     $answer    = $request->get_param( 'answer' );
-    $now       = current_time( 'mysql' );
 
     if ( get_current_user_id() !== $user_id && ! current_user_can( 'manage_induction' ) ) {
         return new WP_REST_Response( [ 'message' => 'Forbidden' ], 403 );
     }
 
-    // Upsert the answer without grading — is_correct stays NULL until submit.
-    $existing = $wpdb->get_row(
-        $wpdb->prepare( "SELECT id FROM $table WHERE user_id = %d AND module_id = %d AND block_id = %s", $user_id, $module_id, $block_id ),
-        ARRAY_A
-    );
-
-    if ( $existing ) {
-        $wpdb->update( $table, [
-            'answer'     => $answer,
-            'is_correct' => null,
-            'created_at' => $now,
-        ], [ 'id' => $existing['id'] ] );
-    } else {
-        $wpdb->insert( $table, [
-            'user_id'    => $user_id,
-            'module_id'  => $module_id,
-            'block_id'   => $block_id,
-            'answer'     => $answer,
-            'is_correct' => null,
-            'created_at' => $now,
-        ] );
-    }
+    // Upsert the answer without grading — is_correct stays NULL until checked/submitted.
+    induction_upsert_quiz_response( $table, $user_id, $module_id, $block_id, $answer, null );
 
     return new WP_REST_Response( [ 'saved' => true ] );
+}
+
+// Grades one answer immediately — used by the "Check answer" button for both
+// section-level and module-level quiz questions. Looks up the block across all
+// sections regardless of the isModuleQuiz flag (unlike quiz/submit, which only
+// grades the module-level quiz section).
+function induction_quiz_check( WP_REST_Request $request ): WP_REST_Response {
+    global $wpdb;
+    $table     = $wpdb->prefix . 'induction_quiz_responses';
+    $user_id   = (int) $request->get_param( 'user_id' );
+    $module_id = (int) $request->get_param( 'module_id' );
+    $block_id  = $request->get_param( 'block_id' );
+    $answer    = $request->get_param( 'answer' );
+
+    if ( get_current_user_id() !== $user_id && ! current_user_can( 'manage_induction' ) ) {
+        return new WP_REST_Response( [ 'message' => 'Forbidden' ], 403 );
+    }
+
+    $blocks_json = get_post_meta( $module_id, 'module_blocks', true ) ?: '[]';
+    $quiz_blocks = induction_collect_quiz_blocks( $blocks_json, false );
+    $quiz_block  = $quiz_blocks[ $block_id ] ?? null;
+
+    if ( ! $quiz_block ) {
+        return new WP_REST_Response( [ 'message' => 'Quiz question not found' ], 404 );
+    }
+
+    $is_correct = induction_grade_quiz_answer( $quiz_block, $answer );
+    induction_upsert_quiz_response( $table, $user_id, $module_id, $block_id, $answer, $is_correct );
+
+    return new WP_REST_Response( [
+        'isCorrect'   => $is_correct,
+        'explanation' => $quiz_block['data']['explanation'] ?? '',
+    ] );
 }
 
 function induction_quiz_submit( WP_REST_Request $request ): WP_REST_Response {
@@ -646,15 +708,9 @@ function induction_quiz_submit( WP_REST_Request $request ): WP_REST_Response {
         return new WP_REST_Response( [ 'message' => 'Forbidden' ], 403 );
     }
 
-    // Look up all quiz blocks and their correct answers.
+    // Look up the module-level quiz's blocks and their correct answers.
     $blocks_json = get_post_meta( $module_id, 'module_blocks', true ) ?: '[]';
-    $blocks      = json_decode( $blocks_json, true ) ?: [];
-    $quiz_blocks = [];
-    foreach ( $blocks as $b ) {
-        if ( in_array( $b['type'] ?? '', [ 'multiple_choice', 'true_false' ], true ) ) {
-            $quiz_blocks[ $b['id'] ] = $b;
-        }
-    }
+    $quiz_blocks = induction_collect_quiz_blocks( $blocks_json, true );
 
     if ( empty( $quiz_blocks ) ) {
         return new WP_REST_Response( [ 'message' => 'No quiz blocks found' ], 400 );
@@ -668,7 +724,6 @@ function induction_quiz_submit( WP_REST_Request $request ): WP_REST_Response {
 
     // Grade each answer and build results.
     $results   = [];
-    $now       = current_time( 'mysql' );
 
     foreach ( $saved as $row ) {
         $block_id   = $row['block_id'];
@@ -676,14 +731,7 @@ function induction_quiz_submit( WP_REST_Request $request ): WP_REST_Response {
         if ( ! $quiz_block ) continue;
 
         $answer     = $row['answer'];
-        $is_correct = false;
-
-        if ( $quiz_block['type'] === 'multiple_choice' ) {
-            $is_correct = (int) $answer === (int) ( $quiz_block['data']['correctIndex'] ?? -1 );
-        } elseif ( $quiz_block['type'] === 'true_false' ) {
-            $correct_val = ! empty( $quiz_block['data']['correctAnswer'] );
-            $is_correct  = ( $answer === 'true' ) === $correct_val;
-        }
+        $is_correct = induction_grade_quiz_answer( $quiz_block, $answer );
 
         // Update the row with the grading result.
         $wpdb->update( $table, [ 'is_correct' => $is_correct ? 1 : 0 ], [ 'id' => $row['id'] ] );
@@ -707,7 +755,7 @@ function induction_quiz_submit( WP_REST_Request $request ): WP_REST_Response {
     $wpdb->query(
         $wpdb->prepare(
             "UPDATE $progress_table SET score = %f, passed = %d, updated_at = %s WHERE user_id = %d AND module_id = %d",
-            $score, $passed ? 1 : 0, $now, $user_id, $module_id
+            $score, $passed ? 1 : 0, current_time( 'mysql' ), $user_id, $module_id
         )
     );
 
@@ -759,6 +807,69 @@ function induction_attach_hero_image_url( WP_REST_Response $response, WP_Post $p
 
 // ─── Answer Stripping ───────────────────────────────────────────────────────
 // Strip correct answers from module_blocks before sending to non-admin users.
+// Handles both old flat Block[] and new Section[] (where quiz blocks live in
+// each section's quizBlocks sub-array).
+
+function induction_strip_answers_from_blocks_json( string $blocks_json ): string {
+    $parsed = json_decode( $blocks_json, true );
+    if ( ! is_array( $parsed ) || empty( $parsed ) ) {
+        return $blocks_json;
+    }
+
+    if ( array_key_exists( 'quizBlocks', $parsed[0] ) ) {
+        // Section[] format
+        foreach ( $parsed as &$section ) {
+            foreach ( $section['quizBlocks'] as &$block ) {
+                if ( ( $block['type'] ?? '' ) === 'multiple_choice' ) {
+                    unset( $block['data']['correctIndex'] );
+                } elseif ( ( $block['type'] ?? '' ) === 'true_false' ) {
+                    unset( $block['data']['correctAnswer'] );
+                }
+            }
+            unset( $block );
+        }
+        unset( $section );
+    } else {
+        // Flat Block[] format (legacy)
+        foreach ( $parsed as &$block ) {
+            if ( ( $block['type'] ?? '' ) === 'multiple_choice' ) {
+                unset( $block['data']['correctIndex'] );
+            } elseif ( ( $block['type'] ?? '' ) === 'true_false' ) {
+                unset( $block['data']['correctAnswer'] );
+            }
+        }
+        unset( $block );
+    }
+
+    return wp_json_encode( $parsed );
+}
+
+// $module_quiz_only = true restricts collection to the section flagged as the
+// module-level quiz (used for quiz/submit grading). false collects every
+// section's quiz blocks (used for quiz/check, which grades any single question).
+function induction_collect_quiz_blocks( string $blocks_json, bool $module_quiz_only = true ): array {
+    $parsed      = json_decode( $blocks_json, true ) ?: [];
+    $quiz_blocks = [];
+
+    if ( ! empty( $parsed ) && array_key_exists( 'quizBlocks', $parsed[0] ) ) {
+        // Section[] format
+        foreach ( $parsed as $section ) {
+            if ( $module_quiz_only && empty( $section['isModuleQuiz'] ) ) continue;
+            foreach ( (array) ( $section['quizBlocks'] ?? [] ) as $b ) {
+                $quiz_blocks[ $b['id'] ] = $b;
+            }
+        }
+    } else {
+        // Flat Block[] format (legacy)
+        foreach ( $parsed as $b ) {
+            if ( in_array( $b['type'] ?? '', [ 'multiple_choice', 'true_false' ], true ) ) {
+                $quiz_blocks[ $b['id'] ] = $b;
+            }
+        }
+    }
+
+    return $quiz_blocks;
+}
 
 add_filter( 'rest_prepare_induction_module', 'induction_strip_quiz_answers', 10, 3 );
 
@@ -772,21 +883,7 @@ function induction_strip_quiz_answers( WP_REST_Response $response, WP_Post $post
         return $response;
     }
 
-    $blocks = json_decode( $data['meta']['module_blocks'], true );
-    if ( ! is_array( $blocks ) ) {
-        return $response;
-    }
-
-    foreach ( $blocks as &$block ) {
-        if ( ( $block['type'] ?? '' ) === 'multiple_choice' ) {
-            unset( $block['data']['correctIndex'] );
-        } elseif ( ( $block['type'] ?? '' ) === 'true_false' ) {
-            unset( $block['data']['correctAnswer'] );
-        }
-    }
-    unset( $block );
-
-    $data['meta']['module_blocks'] = wp_json_encode( $blocks );
+    $data['meta']['module_blocks'] = induction_strip_answers_from_blocks_json( $data['meta']['module_blocks'] );
     $response->set_data( $data );
 
     return $response;
@@ -864,6 +961,10 @@ function induction_get_staff_member( WP_REST_Request $request ): WP_REST_Respons
 }
 
 function induction_format_module( WP_Post $post ): array {
+    $blocks_json = get_post_meta( $post->ID, 'module_blocks', true ) ?: '[]';
+    if ( ! current_user_can( 'manage_induction' ) ) {
+        $blocks_json = induction_strip_answers_from_blocks_json( $blocks_json );
+    }
     return [
         'id'       => $post->ID,
         'title'    => [ 'raw' => $post->post_title,   'rendered' => $post->post_title ],
@@ -876,7 +977,7 @@ function induction_format_module( WP_Post $post ): array {
             'module_role_targets'      => get_post_meta( $post->ID, 'module_role_targets', true ) ?: [],
             'module_estimated_minutes' => (int) get_post_meta( $post->ID, 'module_estimated_minutes', true ),
             'module_order'             => (int) get_post_meta( $post->ID, 'module_order', true ),
-            'module_blocks'            => get_post_meta( $post->ID, 'module_blocks', true ) ?: '[]',
+            'module_blocks'            => $blocks_json,
             'module_icon'              => get_post_meta( $post->ID, 'module_icon', true ) ?: '',
             'module_hero_image'        => (int) get_post_meta( $post->ID, 'module_hero_image', true ),
         ],

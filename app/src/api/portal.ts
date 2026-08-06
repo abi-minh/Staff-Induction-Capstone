@@ -146,6 +146,26 @@ export async function saveQuizAnswer(
   });
 }
 
+export interface QuizCheckResult {
+  isCorrect: boolean;
+  explanation: string;
+}
+
+export async function checkQuizAnswer(
+  userId: number,
+  moduleId: number,
+  blockId: string,
+  answer: string
+): Promise<QuizCheckResult> {
+  const { data } = await client.post<QuizCheckResult>('induction/v1/quiz/check', {
+    user_id: userId,
+    module_id: moduleId,
+    block_id: blockId,
+    answer,
+  });
+  return data;
+}
+
 export async function submitQuiz(
   userId: number,
   moduleId: number

@@ -90,6 +90,7 @@ export function parseSections(raw: string | undefined): Section[] {
         quizTitle: '',
         passingPercentage: 80,
         quizBlocks: allBlocks.filter(isQuizBlock) as QuizBlock[],
+        isModuleQuiz: true,
       }];
     }
 
@@ -109,6 +110,7 @@ export function createSection(): Section {
     quizTitle: '',
     passingPercentage: 80,
     quizBlocks: [],
+    isModuleQuiz: false,
   };
 }
 

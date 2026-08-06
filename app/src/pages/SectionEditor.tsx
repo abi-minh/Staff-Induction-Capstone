@@ -1,5 +1,5 @@
 import {
-  Box, Button, Checkbox, Divider, IconButton, MenuItem,
+  Box, Button, Checkbox, Divider, FormControlLabel, IconButton, MenuItem,
   Paper, TextField, Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -137,9 +137,26 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
       <Divider sx={{ my: 3 }} />
 
       {/* Quiz */}
-      <Typography variant="h3" sx={{ fontSize: '1.15rem', fontWeight: 700, mb: 2.5 }}>
+      <Typography variant="h3" sx={{ fontSize: '1.15rem', fontWeight: 700, mb: 1 }}>
         Quiz
       </Typography>
+
+      <FormControlLabel
+        control={
+          <Checkbox
+            checked={!!section.isModuleQuiz}
+            onChange={(e) => set('isModuleQuiz', e.target.checked)}
+          />
+        }
+        label="Use this section's quiz as the module-level quiz"
+        sx={{ mb: 1.5, display: 'block' }}
+      />
+      {section.isModuleQuiz && (
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+          Staff must complete every other section before they can attempt this quiz.
+          Marking a different section as the module-level quiz will unset this one.
+        </Typography>
+      )}
 
       <Box
         sx={{

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
-  Alert, Box, Button, Checkbox, Dialog, DialogActions, DialogContent,
+  Alert, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent,
   DialogTitle, FormControlLabel, IconButton, MenuItem, Paper, TextField, Typography,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
@@ -275,9 +275,14 @@ export default function ModuleEditPage() {
                     <Typography variant="overline" sx={{ color: 'text.secondary', fontSize: '0.68rem', lineHeight: 1 }}>
                       Section {index + 1}
                     </Typography>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 600, mt: 0.25 }} noWrap>
-                      {section.title || 'Untitled section'}
-                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.25 }}>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 600 }} noWrap>
+                        {section.title || 'Untitled section'}
+                      </Typography>
+                      {section.isModuleQuiz && (
+                        <Chip label="Module quiz" size="small" color="primary" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                      )}
+                    </Box>
                     <Typography variant="body2" color="text.secondary">
                       {section.blocks.length} block{section.blocks.length !== 1 ? 's' : ''} · {section.quizBlocks.length} question{section.quizBlocks.length !== 1 ? 's' : ''}
                     </Typography>

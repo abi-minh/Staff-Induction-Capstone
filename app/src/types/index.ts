@@ -264,6 +264,9 @@ export interface Section {
   quizTitle: string;
   passingPercentage: number;
   quizBlocks: QuizBlock[];
+  // When true, this section's quizBlocks are the module-level quiz — gated
+  // behind completion of every other section. At most one section per module.
+  isModuleQuiz?: boolean;
 }
 
 // ─── Quiz ────────────────────────────────────────────────────────────────────
