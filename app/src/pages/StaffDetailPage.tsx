@@ -33,6 +33,7 @@ export default function StaffDetailPage() {
             <th>Status</th>
             <th>Completed</th>
             <th>Time spent</th>
+            <th>Score</th>
           </tr>
         </thead>
         <tbody>
@@ -44,6 +45,11 @@ export default function StaffDetailPage() {
                 <td>{p?.status ?? 'not_started'}</td>
                 <td>{p?.completedAt ? new Date(p.completedAt).toLocaleDateString() : '—'}</td>
                 <td>{p?.timeSpent ? `${Math.round(p.timeSpent / 60)} min` : '—'}</td>
+                <td>
+                  {p?.score != null
+                    ? `${p.score}% ${p.passed ? '(Pass)' : '(Fail)'}`
+                    : '-'}
+                </td>
               </tr>
             );
           })}

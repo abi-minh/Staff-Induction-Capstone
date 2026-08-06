@@ -115,6 +115,8 @@ export interface ProgressRecord {
   startedAt: string | null;
   completedAt: string | null;
   timeSpent: number;
+  score: number | null;
+  passed: boolean | null;
 }
 
 // ─── Reports ──────────────────────────────────────────────────────────────────

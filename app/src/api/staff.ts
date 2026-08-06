@@ -51,6 +51,8 @@ interface WPProgressRecord {
   started_at: string | null;
   completed_at: string | null;
   time_spent: number;
+  score: number | null;
+  passed: boolean | null;
 }
 
 function normaliseProgress(r: WPProgressRecord): ProgressRecord {
@@ -62,6 +64,8 @@ function normaliseProgress(r: WPProgressRecord): ProgressRecord {
     startedAt: r.started_at,
     completedAt: r.completed_at,
     timeSpent: r.time_spent,
+    score: r.score,
+    passed: r.passed,
   };
 }
 
