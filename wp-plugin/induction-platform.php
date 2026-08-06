@@ -733,6 +733,11 @@ function induction_grade_quiz_answer( array $quiz_block, $answer ): bool {
         $correct_val = ! empty( $quiz_block['data']['correctAnswer'] );
         return ( $answer === 'true' ) === $correct_val;
     }
+    if ( $quiz_block['type'] === 'short_answer' ) {
+        // Case-insensitive, whitespace-trimmed exact match.
+        $expected = trim( (string) ( $quiz_block['data']['correctAnswer'] ?? '' ) );
+        return $expected !== '' && strcasecmp( trim( (string) $answer ), $expected ) === 0;
+    }
     return false;
 }
 
@@ -958,8 +963,12 @@ function induction_quiz_review_detail( WP_REST_Request $request ): WP_REST_Respo
             'question'      => $block['data']['question'] ?? '',
             'options'       => $block['data']['options'] ?? null,
             'correctIndex'  => $block['data']['correctIndex'] ?? null,
-            'correctAnswer' => array_key_exists( 'correctAnswer', $block['data'] ?? [] ) ? (bool) $block['data']['correctAnswer'] : null,
+            'correctAnswer' => $block['type'] === 'true_false' && array_key_exists( 'correctAnswer', $block['data'] ?? [] )
+                ? (bool) $block['data']['correctAnswer']
+                : null,
+            'correctText'   => $block['type'] === 'short_answer' ? ( $block['data']['correctAnswer'] ?? '' ) : null,
             'explanation'   => $block['data']['explanation'] ?? '',
+            'imageUrl'      => $block['data']['imageUrl'] ?? null,
             'userAnswer'    => $resp['answer'] ?? null,
             'isCorrect'     => ( $resp !== null && $resp['is_correct'] !== null ) ? (bool) $resp['is_correct'] : null,
         ];
@@ -1078,7 +1087,7 @@ function induction_strip_answers_from_blocks_json( string $blocks_json ): string
             foreach ( $section['quizBlocks'] as &$block ) {
                 if ( ( $block['type'] ?? '' ) === 'multiple_choice' ) {
                     unset( $block['data']['correctIndex'] );
-                } elseif ( ( $block['type'] ?? '' ) === 'true_false' ) {
+                } elseif ( in_array( $block['type'] ?? '', [ 'true_false', 'short_answer' ], true ) ) {
                     unset( $block['data']['correctAnswer'] );
                 }
             }
@@ -1090,7 +1099,7 @@ function induction_strip_answers_from_blocks_json( string $blocks_json ): string
         foreach ( $parsed as &$block ) {
             if ( ( $block['type'] ?? '' ) === 'multiple_choice' ) {
                 unset( $block['data']['correctIndex'] );
-            } elseif ( ( $block['type'] ?? '' ) === 'true_false' ) {
+            } elseif ( in_array( $block['type'] ?? '', [ 'true_false', 'short_answer' ], true ) ) {
                 unset( $block['data']['correctAnswer'] );
             }
         }

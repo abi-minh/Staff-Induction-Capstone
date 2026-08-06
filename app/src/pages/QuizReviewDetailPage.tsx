@@ -13,7 +13,8 @@ import type { QuizReviewQuestion } from '../types';
 function suggestedCorrect(q: QuizReviewQuestion): boolean {
   if (q.userAnswer === null) return false;
   if (q.type === 'multiple_choice') return Number(q.userAnswer) === q.correctIndex;
-  return (q.userAnswer === 'true') === q.correctAnswer;
+  if (q.type === 'true_false') return (q.userAnswer === 'true') === q.correctAnswer;
+  return q.userAnswer.trim().toLowerCase() === (q.correctText ?? '').trim().toLowerCase();
 }
 
 export default function QuizReviewDetailPage() {
@@ -79,35 +80,45 @@ export default function QuizReviewDetailPage() {
           </Typography>
 
           {q.type === 'multiple_choice' ? (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mb: 1.5 }}>
-              {(q.options ?? []).map((option, i) => {
-                const isCorrectOption = i === q.correctIndex;
-                const isStudentPick   = String(i) === q.userAnswer;
-                return (
-                  <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Typography
-                      variant="body2"
-                      sx={{ fontWeight: isCorrectOption ? 700 : 400, color: isCorrectOption ? 'success.main' : 'text.primary' }}
-                    >
-                      {option}
-                    </Typography>
-                    {isCorrectOption && <Chip label="Correct answer" size="small" color="success" variant="outlined" />}
-                    {isStudentPick && (
-                      <Chip
-                        label="Student's answer"
-                        size="small"
-                        color={isCorrectOption ? 'success' : 'error'}
-                        variant="outlined"
-                      />
-                    )}
-                  </Box>
-                );
-              })}
-              {q.userAnswer === null && (
-                <Typography variant="body2" color="text.secondary">No answer given.</Typography>
+            <>
+              {q.imageUrl && (
+                <Box
+                  component="img"
+                  src={q.imageUrl}
+                  alt=""
+                  sx={{ display: 'block', maxWidth: '100%', maxHeight: 280, borderRadius: 1.5, mb: 1.5 }}
+                />
               )}
-            </Box>
-          ) : (
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mb: 1.5 }}>
+                {(q.options ?? []).map((option, i) => {
+                  const isCorrectOption = i === q.correctIndex;
+                  const isStudentPick   = String(i) === q.userAnswer;
+                  return (
+                    <Box key={i} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Typography
+                        variant="body2"
+                        sx={{ fontWeight: isCorrectOption ? 700 : 400, color: isCorrectOption ? 'success.main' : 'text.primary' }}
+                      >
+                        {option}
+                      </Typography>
+                      {isCorrectOption && <Chip label="Correct answer" size="small" color="success" variant="outlined" />}
+                      {isStudentPick && (
+                        <Chip
+                          label="Student's answer"
+                          size="small"
+                          color={isCorrectOption ? 'success' : 'error'}
+                          variant="outlined"
+                        />
+                      )}
+                    </Box>
+                  );
+                })}
+                {q.userAnswer === null && (
+                  <Typography variant="body2" color="text.secondary">No answer given.</Typography>
+                )}
+              </Box>
+            </>
+          ) : q.type === 'true_false' ? (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 1.5 }}>
               <Typography variant="body2">
                 Correct answer: <strong>{q.correctAnswer ? 'True' : 'False'}</strong>
@@ -122,6 +133,24 @@ export default function QuizReviewDetailPage() {
                   }}
                 >
                   {q.userAnswer === null ? 'No answer given' : (q.userAnswer === 'true' ? 'True' : 'False')}
+                </Typography>
+              </Typography>
+            </Box>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 1.5 }}>
+              <Typography variant="body2">
+                Correct answer: <strong>{q.correctText}</strong>
+              </Typography>
+              <Typography variant="body2">
+                Student's answer:{' '}
+                <Typography
+                  component="span"
+                  sx={{
+                    fontWeight: 700,
+                    color: q.userAnswer !== null && !suggestedCorrect(q) ? 'error.main' : 'inherit',
+                  }}
+                >
+                  {q.userAnswer === null ? 'No answer given' : q.userAnswer}
                 </Typography>
               </Typography>
             </Box>

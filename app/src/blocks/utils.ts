@@ -15,7 +15,7 @@ export function generateBlockId(): string {
 }
 
 export function isQuizBlock(block: Block): block is QuizBlock {
-  return block.type === 'multiple_choice' || block.type === 'true_false';
+  return block.type === 'multiple_choice' || block.type === 'true_false' || block.type === 'short_answer';
 }
 
 const ROW_CHILD_TYPES: BlockType[] = ['heading', 'text', 'image', 'video', 'list', 'callout'];
@@ -135,6 +135,8 @@ export function createBlock(type: BlockType): Block {
       return { id, type, data: { question: '', options: ['', ''], correctIndex: 0, explanation: '' } };
     case 'true_false':
       return { id, type, data: { question: '', correctAnswer: true, explanation: '' } };
+    case 'short_answer':
+      return { id, type, data: { question: '', correctAnswer: '', explanation: '' } };
     case 'callout':
       return { id, type, data: { variant: 'info', title: '', body: '' } };
     case 'row':
@@ -150,6 +152,7 @@ export const BLOCK_LABELS: Record<BlockType, string> = {
   list: 'List',
   multiple_choice: 'Multiple Choice',
   true_false: 'True / False',
+  short_answer: 'Short Answer',
   callout: 'Callout',
   row: 'Row',
 };
@@ -186,6 +189,8 @@ function blockToHtml(block: Block): string {
     case 'multiple_choice':
       return `<p><strong>${block.data.question}</strong></p>`;
     case 'true_false':
+      return `<p><strong>${block.data.question}</strong></p>`;
+    case 'short_answer':
       return `<p><strong>${block.data.question}</strong></p>`;
   }
 }

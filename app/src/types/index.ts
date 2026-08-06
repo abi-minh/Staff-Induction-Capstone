@@ -132,12 +132,14 @@ export interface PendingQuizReview {
 
 export interface QuizReviewQuestion {
   blockId: string;
-  type: 'multiple_choice' | 'true_false';
+  type: 'multiple_choice' | 'true_false' | 'short_answer';
   question: string;
   options: string[] | null;
   correctIndex: number | null;
   correctAnswer: boolean | null;
+  correctText: string | null;
   explanation: string;
+  imageUrl: string | null;
   userAnswer: string | null;
   isCorrect: boolean | null;
 }
@@ -223,6 +225,8 @@ export interface MultipleChoiceBlock {
     options: string[];
     correctIndex: number;
     explanation: string;
+    imageMediaId?: number;
+    imageUrl?: string;
   };
 }
 
@@ -232,6 +236,16 @@ export interface TrueFalseBlock {
   data: {
     question: string;
     correctAnswer: boolean;
+    explanation: string;
+  };
+}
+
+export interface ShortAnswerBlock {
+  id: string;
+  type: 'short_answer';
+  data: {
+    question: string;
+    correctAnswer: string;
     explanation: string;
   };
 }
@@ -278,12 +292,12 @@ export const ROW_COLUMN_PRESETS: { label: string; columns: number }[] = [
 
 export type Block =
   | HeadingBlock | TextBlock | ImageBlock | VideoBlock | ListBlock
-  | MultipleChoiceBlock | TrueFalseBlock
+  | MultipleChoiceBlock | TrueFalseBlock | ShortAnswerBlock
   | CalloutBlock | RowBlock;
 
 export type BlockType = Block['type'];
 
-export type QuizBlock = MultipleChoiceBlock | TrueFalseBlock;
+export type QuizBlock = MultipleChoiceBlock | TrueFalseBlock | ShortAnswerBlock;
 
 export interface Section {
   id: string;

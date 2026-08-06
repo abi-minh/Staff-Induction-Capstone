@@ -7,9 +7,12 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
-import type { Block, MultipleChoiceBlock, PostStatus, QuizBlock, Section, TrueFalseBlock } from '../types';
+import type {
+  Block, MultipleChoiceBlock, PostStatus, QuizBlock, Section, ShortAnswerBlock, TrueFalseBlock,
+} from '../types';
 import ModuleContentEditor from '../blocks/ModuleContentEditor';
 import { createBlock } from '../blocks/utils';
+import { useUploadMedia } from '../hooks/useDocuments';
 
 const roundedButtonSx = { borderRadius: '10px' };
 
@@ -39,6 +42,7 @@ interface Props {
 
 export default function SectionEditor({ section, index, onChange, onRemove }: Props) {
   const [deleteQuestionIndex, setDeleteQuestionIndex] = useState<number | null>(null);
+  const uploadMedia = useUploadMedia();
 
   function set<K extends keyof Section>(key: K, value: Section[K]) {
     onChange({ ...section, [key]: value });
@@ -57,6 +61,18 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
     onChange({
       ...section,
       quizBlocks: section.quizBlocks.map((b, bi) => (bi === i ? updater(b) : b)),
+    });
+  }
+
+  // question/explanation are shared, same-typed fields across all quiz block
+  // variants — switch per-branch so TS keeps `data`'s shape tied to `type`.
+  function updateSharedField(i: number, field: 'question' | 'explanation', value: string) {
+    updateQuestion(i, (current) => {
+      switch (current.type) {
+        case 'multiple_choice': return { ...current, data: { ...current.data, [field]: value } };
+        case 'true_false':      return { ...current, data: { ...current.data, [field]: value } };
+        case 'short_answer':    return { ...current, data: { ...current.data, [field]: value } };
+      }
     });
   }
 
@@ -258,13 +274,7 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
               <TextField
                 label="Question"
                 value={block.data.question}
-                onChange={(e) =>
-                  updateQuestion(qi, (current) =>
-                    current.type === 'multiple_choice'
-                      ? { ...current, data: { ...current.data, question: e.target.value } }
-                      : { ...current, data: { ...current.data, question: e.target.value } }
-                  )
-                }
+                onChange={(e) => updateSharedField(qi, 'question', e.target.value)}
                 fullWidth
               />
               <TextField
@@ -282,6 +292,13 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
                         data: { question: current.data.question, correctAnswer: true, explanation: '' },
                       } as TrueFalseBlock;
                     }
+                    if (nextType === 'short_answer') {
+                      return {
+                        id: current.id,
+                        type: 'short_answer',
+                        data: { question: current.data.question, correctAnswer: '', explanation: '' },
+                      } as ShortAnswerBlock;
+                    }
                     return {
                       id: current.id,
                       type: 'multiple_choice',
@@ -293,8 +310,62 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
               >
                 <MenuItem value="multiple_choice">Multiple Choice</MenuItem>
                 <MenuItem value="true_false">True / False</MenuItem>
+                <MenuItem value="short_answer">Short Answer</MenuItem>
               </TextField>
             </Box>
+
+            {block.type === 'multiple_choice' && (
+              <Box sx={{ mb: 2 }}>
+                {block.data.imageUrl ? (
+                  <Box sx={{ position: 'relative', display: 'inline-block' }}>
+                    <Box
+                      component="img"
+                      src={block.data.imageUrl}
+                      alt=""
+                      sx={{ maxWidth: '100%', maxHeight: 220, borderRadius: 1.5, display: 'block' }}
+                    />
+                    <Button
+                      size="small"
+                      color="error"
+                      onClick={() =>
+                        updateQuestion(qi, (current) => ({
+                          ...(current as MultipleChoiceBlock),
+                          data: { ...(current as MultipleChoiceBlock).data, imageMediaId: 0, imageUrl: '' },
+                        }))
+                      }
+                      sx={{ mt: 1, ...roundedButtonSx }}
+                    >
+                      Remove Image
+                    </Button>
+                  </Box>
+                ) : (
+                  <Button
+                    component="label"
+                    variant="outlined"
+                    size="small"
+                    startIcon={<ImageOutlinedIcon fontSize="small" />}
+                    disabled={uploadMedia.isLoading}
+                    sx={roundedButtonSx}
+                  >
+                    {uploadMedia.isLoading ? 'Uploading…' : 'Add Image (optional)'}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const media = await uploadMedia.mutateAsync(file);
+                        updateQuestion(qi, (current) => ({
+                          ...(current as MultipleChoiceBlock),
+                          data: { ...(current as MultipleChoiceBlock).data, imageMediaId: media.id, imageUrl: media.sourceUrl },
+                        }));
+                      }}
+                    />
+                  </Button>
+                )}
+              </Box>
+            )}
 
             {block.type === 'multiple_choice' ? (
               <Box sx={{ display: 'grid', gap: 1.25 }}>
@@ -390,7 +461,7 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
                   Add Option
                 </Button>
               </Box>
-            ) : (
+            ) : block.type === 'true_false' ? (
               <Box sx={{ display: 'flex', gap: 1.25, flexWrap: 'wrap' }}>
                 <Button
                   variant={block.data.correctAnswer ? 'contained' : 'outlined'}
@@ -417,18 +488,25 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
                   False
                 </Button>
               </Box>
-            )}
+            ) : block.type === 'short_answer' ? (
+              <TextField
+                label="Correct Answer"
+                value={block.data.correctAnswer}
+                onChange={(e) =>
+                  updateQuestion(qi, (current) => ({
+                    ...(current as ShortAnswerBlock),
+                    data: { ...(current as ShortAnswerBlock).data, correctAnswer: e.target.value },
+                  }))
+                }
+                helperText="Graded as a case-insensitive exact match against the student's answer."
+                fullWidth
+              />
+            ) : null}
 
             <TextField
               label="Explanation (optional)"
               value={block.data.explanation}
-              onChange={(e) =>
-                updateQuestion(qi, (current) =>
-                  current.type === 'multiple_choice'
-                    ? { ...current, data: { ...current.data, explanation: e.target.value } }
-                    : { ...current, data: { ...current.data, explanation: e.target.value } }
-                )
-              }
+              onChange={(e) => updateSharedField(qi, 'explanation', e.target.value)}
               multiline
               minRows={2}
               fullWidth
