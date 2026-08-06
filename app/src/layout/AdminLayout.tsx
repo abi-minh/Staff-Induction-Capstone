@@ -1,30 +1,36 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
-  AppBar, Avatar, Box, ButtonBase, Toolbar, Typography, Button,
+  AppBar, Avatar, Badge, Box, ButtonBase, Toolbar, Typography, Button,
 } from '@mui/material';
 import DashboardOutlinedIcon   from '@mui/icons-material/DashboardOutlined';
 import SchoolOutlinedIcon      from '@mui/icons-material/SchoolOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import PeopleOutlinedIcon      from '@mui/icons-material/PeopleOutlined';
 import BarChartOutlinedIcon    from '@mui/icons-material/BarChartOutlined';
+import RateReviewOutlinedIcon  from '@mui/icons-material/RateReviewOutlined';
 import VisibilityOutlinedIcon  from '@mui/icons-material/VisibilityOutlined';
 import LogoutOutlinedIcon      from '@mui/icons-material/LogoutOutlined';
 import { useAuthStore }        from '../store/authStore';
+import { usePendingQuizReviews } from '../hooks/useQuizReviews';
 
 const DRAWER_WIDTH = 220;
 
 const NAV_ITEMS = [
-  { label: 'Dashboard', path: '/',          Icon: DashboardOutlinedIcon },
-  { label: 'Modules',   path: '/modules',   Icon: SchoolOutlinedIcon },
-  { label: 'Documents', path: '/documents', Icon: DescriptionOutlinedIcon },
-  { label: 'Staff',     path: '/staff',     Icon: PeopleOutlinedIcon },
-  { label: 'Reports',   path: '/reports',   Icon: BarChartOutlinedIcon },
+  { label: 'Dashboard',     path: '/',             Icon: DashboardOutlinedIcon },
+  { label: 'Modules',       path: '/modules',      Icon: SchoolOutlinedIcon },
+  { label: 'Documents',     path: '/documents',    Icon: DescriptionOutlinedIcon },
+  { label: 'Staff',         path: '/staff',        Icon: PeopleOutlinedIcon },
+  { label: 'Quiz Reviews',  path: '/quiz-reviews', Icon: RateReviewOutlinedIcon },
+  { label: 'Reports',       path: '/reports',      Icon: BarChartOutlinedIcon },
 ];
 
 export default function AdminLayout() {
   const { user, clearAuth } = useAuthStore();
   const navigate = useNavigate();
   const location = useLocation();
+
+  const { data: pendingReviews } = usePendingQuizReviews();
+  const pendingCount = pendingReviews?.length ?? 0;
 
   const initials = (user?.name ?? 'A')
     .split(' ')
@@ -88,7 +94,13 @@ export default function AdminLayout() {
                   '&:hover': { bgcolor: active ? 'primary.dark' : 'action.hover' },
                 }}
               >
-                <Icon sx={{ fontSize: 22, color: 'inherit' }} />
+                <Badge
+                  badgeContent={label === 'Quiz Reviews' ? pendingCount : 0}
+                  color="warning"
+                  invisible={label !== 'Quiz Reviews' || pendingCount === 0}
+                >
+                  <Icon sx={{ fontSize: 22, color: 'inherit' }} />
+                </Badge>
                 <Typography
                   variant="body2"
                   sx={{ color: 'inherit', fontWeight: 'inherit', fontSize: 14 }}

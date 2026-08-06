@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.1.1
+ * Version:     1.1.6
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -171,6 +171,53 @@ function induction_create_tables(): void {
     if ( ! in_array( 'passed', $cols, true ) ) {
         $wpdb->query( "ALTER TABLE $progress_table ADD COLUMN passed TINYINT(1) DEFAULT NULL AFTER score" );
     }
+    if ( ! in_array( 'quiz_submitted_at', $cols, true ) ) {
+        $wpdb->query( "ALTER TABLE $progress_table ADD COLUMN quiz_submitted_at DATETIME DEFAULT NULL AFTER passed" );
+    }
+
+    // One-time backfill: an earlier version of induction_quiz_grade() only
+    // wrote score/passed and left status/completed_at untouched, so grading
+    // a submission as passed never actually completed the module. Reconcile
+    // any rows still stuck in that inconsistent state.
+    if ( ! get_option( 'induction_progress_status_backfilled' ) ) {
+        $wpdb->query( "UPDATE $progress_table SET status = 'completed', completed_at = COALESCE(completed_at, updated_at) WHERE passed = 1 AND status <> 'completed'" );
+        $wpdb->query( "UPDATE $progress_table SET status = 'in_progress', completed_at = NULL WHERE passed = 0 AND status = 'completed'" );
+        update_option( 'induction_progress_status_backfilled', 1 );
+    }
+
+    // One-time dedup: on some installs the UNIQUE KEY below never actually
+    // applied (dbDelta is strict about CREATE TABLE formatting and silently
+    // skips constraints it can't parse), which let duplicate rows pile up
+    // for the same user_id + module_id. Different pages picked different
+    // duplicates (e.g. Array.find() vs a Map keyed by module id), so admin
+    // and staff views disagreed about the same student's progress. Keep
+    // only the most recently updated row per pair, then re-assert the
+    // unique index so duplicates can't reappear.
+    if ( ! get_option( 'induction_progress_deduped' ) ) {
+        $dupe_keys = $wpdb->get_results(
+            "SELECT user_id, module_id FROM $progress_table GROUP BY user_id, module_id HAVING COUNT(*) > 1",
+            ARRAY_A
+        ) ?? [];
+
+        foreach ( $dupe_keys as $key ) {
+            $ids = $wpdb->get_col( $wpdb->prepare(
+                "SELECT id FROM $progress_table WHERE user_id = %d AND module_id = %d ORDER BY updated_at DESC, id DESC",
+                $key['user_id'], $key['module_id']
+            ) );
+            $ids_to_delete = array_slice( $ids, 1 );
+            if ( $ids_to_delete ) {
+                $placeholders = implode( ',', array_fill( 0, count( $ids_to_delete ), '%d' ) );
+                $wpdb->query( $wpdb->prepare( "DELETE FROM $progress_table WHERE id IN ($placeholders)", $ids_to_delete ) );
+            }
+        }
+
+        $existing_index = $wpdb->get_col( "SHOW INDEX FROM $progress_table WHERE Key_name = 'user_module'" );
+        if ( empty( $existing_index ) ) {
+            $wpdb->query( "ALTER TABLE $progress_table ADD UNIQUE KEY user_module (user_id, module_id)" );
+        }
+
+        update_option( 'induction_progress_deduped', 1 );
+    }
 
     // Quiz responses table
     $quiz_table = $wpdb->prefix . 'induction_quiz_responses';
@@ -271,14 +318,47 @@ function induction_register_routes(): void {
         ],
     ] );
 
-    // POST /quiz/submit — grade all answers for a module
-    register_rest_route( $ns, '/quiz/submit', [
+    // POST /quiz/submit-for-review — student submits the module-level quiz
+    // as-is (unchecked); an admin grades it via /quiz/grade below.
+    register_rest_route( $ns, '/quiz/submit-for-review', [
         'methods'             => 'POST',
-        'callback'            => 'induction_quiz_submit',
+        'callback'            => 'induction_quiz_submit_for_review',
         'permission_callback' => 'is_user_logged_in',
         'args'                => [
             'user_id'   => [ 'type' => 'integer', 'required' => true ],
             'module_id' => [ 'type' => 'integer', 'required' => true ],
+        ],
+    ] );
+
+    // GET /quiz/pending-review — module-level quiz submissions awaiting grading
+    register_rest_route( $ns, '/quiz/pending-review', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_quiz_pending_review',
+        'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+    ] );
+
+    // GET /quiz/review/user/{user_id}/module/{module_id} — one submission's
+    // questions, correct answers, and the student's answers, for grading.
+    register_rest_route( $ns, '/quiz/review/user/(?P<user_id>\d+)/module/(?P<module_id>\d+)', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_quiz_review_detail',
+        'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+        'args'                => [
+            'user_id'   => [ 'type' => 'integer' ],
+            'module_id' => [ 'type' => 'integer' ],
+        ],
+    ] );
+
+    // POST /quiz/grade — admin records per-question correctness + pass/fail
+    register_rest_route( $ns, '/quiz/grade', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_quiz_grade',
+        'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+        'args'                => [
+            'user_id'   => [ 'type' => 'integer', 'required' => true ],
+            'module_id' => [ 'type' => 'integer', 'required' => true ],
+            'results'   => [ 'type' => 'object',  'required' => true ],
+            'passed'    => [ 'type' => 'boolean', 'required' => true ],
         ],
     ] );
 
@@ -405,6 +485,15 @@ function induction_upsert_progress( WP_REST_Request $request ): WP_REST_Response
         $wpdb->prepare( "SELECT * FROM $table WHERE user_id = %d AND module_id = %d", $user_id, $module_id ),
         ARRAY_A
     );
+
+    // Never let this endpoint downgrade an already-completed module back to
+    // in_progress — the client calls it opportunistically just to mark a
+    // module "visited", and a race between that call and the progress fetch
+    // resolving must not stomp a real completion. Only quiz grading (an
+    // explicit admin action) is allowed to revert a completed module.
+    if ( $existing && $existing['status'] === 'completed' && $status !== 'completed' ) {
+        return new WP_REST_Response( induction_format_progress_row( $existing ) );
+    }
 
     if ( $existing ) {
         $data = [
@@ -665,10 +754,26 @@ function induction_quiz_save( WP_REST_Request $request ): WP_REST_Response {
     return new WP_REST_Response( [ 'saved' => true ] );
 }
 
-// Grades one answer immediately — used by the "Check answer" button for both
-// section-level and module-level quiz questions. Looks up the block across all
-// sections regardless of the isModuleQuiz flag (unlike quiz/submit, which only
-// grades the module-level quiz section).
+// Returns true if $block_id belongs to the section flagged as the module-level
+// quiz. Legacy flat-format modules (no sections) have no such concept.
+function induction_is_module_quiz_block( string $blocks_json, string $block_id ): bool {
+    $parsed = json_decode( $blocks_json, true ) ?: [];
+    if ( empty( $parsed ) || ! array_key_exists( 'quizBlocks', $parsed[0] ) ) {
+        return false;
+    }
+    foreach ( $parsed as $section ) {
+        if ( empty( $section['isModuleQuiz'] ) ) continue;
+        foreach ( (array) ( $section['quizBlocks'] ?? [] ) as $b ) {
+            if ( $b['id'] === $block_id ) return true;
+        }
+    }
+    return false;
+}
+
+// Grades one answer immediately — used by the "Check answer" button for
+// section-level quiz questions only. Module-level quiz questions are graded
+// by an admin (see quiz/submit-for-review + quiz/grade below), never
+// auto-checked, so they're rejected here even if requested directly.
 function induction_quiz_check( WP_REST_Request $request ): WP_REST_Response {
     global $wpdb;
     $table     = $wpdb->prefix . 'induction_quiz_responses';
@@ -682,6 +787,13 @@ function induction_quiz_check( WP_REST_Request $request ): WP_REST_Response {
     }
 
     $blocks_json = get_post_meta( $module_id, 'module_blocks', true ) ?: '[]';
+
+    if ( induction_is_module_quiz_block( $blocks_json, $block_id ) ) {
+        return new WP_REST_Response(
+            [ 'message' => 'Module-level quiz answers are graded by an admin, not checked automatically.' ], 403
+        );
+    }
+
     $quiz_blocks = induction_collect_quiz_blocks( $blocks_json, false );
     $quiz_block  = $quiz_blocks[ $block_id ] ?? null;
 
@@ -698,73 +810,172 @@ function induction_quiz_check( WP_REST_Request $request ): WP_REST_Response {
     ] );
 }
 
-function induction_quiz_submit( WP_REST_Request $request ): WP_REST_Response {
+// Student submits their module-level quiz answers as-is, without grading.
+// Resets any prior score/passed so a resubmission goes back to "pending".
+function induction_quiz_submit_for_review( WP_REST_Request $request ): WP_REST_Response {
     global $wpdb;
-    $table     = $wpdb->prefix . 'induction_quiz_responses';
+    $table     = $wpdb->prefix . 'induction_progress';
     $user_id   = (int) $request->get_param( 'user_id' );
     $module_id = (int) $request->get_param( 'module_id' );
+    $now       = current_time( 'mysql' );
 
     if ( get_current_user_id() !== $user_id && ! current_user_can( 'manage_induction' ) ) {
         return new WP_REST_Response( [ 'message' => 'Forbidden' ], 403 );
     }
 
-    // Look up the module-level quiz's blocks and their correct answers.
+    $existing = $wpdb->get_row(
+        $wpdb->prepare( "SELECT * FROM $table WHERE user_id = %d AND module_id = %d", $user_id, $module_id ),
+        ARRAY_A
+    );
+
+    $data = [
+        'quiz_submitted_at' => $now,
+        'score'             => null,
+        'passed'            => null,
+        'updated_at'        => $now,
+    ];
+
+    if ( $existing ) {
+        $wpdb->update( $table, $data, [ 'id' => $existing['id'] ] );
+        $row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE id = %d", $existing['id'] ), ARRAY_A );
+    } else {
+        $wpdb->insert( $table, array_merge( [
+            'user_id'    => $user_id,
+            'module_id'  => $module_id,
+            'status'     => 'in_progress',
+            'started_at' => $now,
+            'time_spent' => 0,
+            'created_at' => $now,
+        ], $data ) );
+        $row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE id = %d", $wpdb->insert_id ), ARRAY_A );
+    }
+
+    return new WP_REST_Response( induction_format_progress_row( $row ) );
+}
+
+// Lists module-level quiz submissions awaiting admin grading.
+function induction_quiz_pending_review(): WP_REST_Response {
+    global $wpdb;
+    $table = $wpdb->prefix . 'induction_progress';
+
+    $rows = $wpdb->get_results(
+        "SELECT p.user_id, p.module_id, p.quiz_submitted_at, u.display_name AS user_name, po.post_title AS module_title
+         FROM $table p
+         INNER JOIN {$wpdb->users} u ON u.ID = p.user_id
+         INNER JOIN {$wpdb->posts} po ON po.ID = p.module_id
+         WHERE p.quiz_submitted_at IS NOT NULL AND p.passed IS NULL
+         ORDER BY p.quiz_submitted_at ASC",
+        ARRAY_A
+    ) ?? [];
+
+    return new WP_REST_Response( array_map( function ( $r ) {
+        return [
+            'userId'          => (int) $r['user_id'],
+            'userName'        => $r['user_name'],
+            'moduleId'        => (int) $r['module_id'],
+            'moduleTitle'     => $r['module_title'],
+            'quizSubmittedAt' => $r['quiz_submitted_at'],
+        ];
+    }, $rows ) );
+}
+
+// Returns one submission's module-level quiz questions (with correct answers)
+// alongside the student's saved answers, for an admin to grade.
+function induction_quiz_review_detail( WP_REST_Request $request ): WP_REST_Response {
+    global $wpdb;
+    $user_id   = (int) $request->get_param( 'user_id' );
+    $module_id = (int) $request->get_param( 'module_id' );
+
     $blocks_json = get_post_meta( $module_id, 'module_blocks', true ) ?: '[]';
     $quiz_blocks = induction_collect_quiz_blocks( $blocks_json, true );
 
     if ( empty( $quiz_blocks ) ) {
-        return new WP_REST_Response( [ 'message' => 'No quiz blocks found' ], 400 );
+        return new WP_REST_Response( [ 'message' => 'No module-level quiz found' ], 404 );
     }
 
-    // Get all saved answers for this user/module.
-    $saved = $wpdb->get_results(
-        $wpdb->prepare( "SELECT * FROM $table WHERE user_id = %d AND module_id = %d", $user_id, $module_id ),
+    $quiz_table = $wpdb->prefix . 'induction_quiz_responses';
+    $responses  = $wpdb->get_results(
+        $wpdb->prepare( "SELECT block_id, answer, is_correct FROM $quiz_table WHERE user_id = %d AND module_id = %d", $user_id, $module_id ),
         ARRAY_A
     ) ?? [];
 
-    // Grade each answer and build results.
-    $results   = [];
+    $answers_by_block = [];
+    foreach ( $responses as $r ) {
+        $answers_by_block[ $r['block_id'] ] = $r;
+    }
 
-    foreach ( $saved as $row ) {
-        $block_id   = $row['block_id'];
-        $quiz_block = $quiz_blocks[ $block_id ] ?? null;
-        if ( ! $quiz_block ) continue;
-
-        $answer     = $row['answer'];
-        $is_correct = induction_grade_quiz_answer( $quiz_block, $answer );
-
-        // Update the row with the grading result.
-        $wpdb->update( $table, [ 'is_correct' => $is_correct ? 1 : 0 ], [ 'id' => $row['id'] ] );
-
-        $results[ $block_id ] = [
-            'is_correct'  => $is_correct,
-            'explanation' => $quiz_block['data']['explanation'] ?? '',
+    $questions = [];
+    foreach ( $quiz_blocks as $block_id => $block ) {
+        $resp = $answers_by_block[ $block_id ] ?? null;
+        $questions[] = [
+            'blockId'       => $block_id,
+            'type'          => $block['type'],
+            'question'      => $block['data']['question'] ?? '',
+            'options'       => $block['data']['options'] ?? null,
+            'correctIndex'  => $block['data']['correctIndex'] ?? null,
+            'correctAnswer' => array_key_exists( 'correctAnswer', $block['data'] ?? [] ) ? (bool) $block['data']['correctAnswer'] : null,
+            'explanation'   => $block['data']['explanation'] ?? '',
+            'userAnswer'    => $resp['answer'] ?? null,
+            'isCorrect'     => ( $resp !== null && $resp['is_correct'] !== null ) ? (bool) $resp['is_correct'] : null,
         ];
     }
 
-    // Calculate score.
-    $total   = count( $quiz_blocks );
-    $correct = count( array_filter( $results, fn( $r ) => $r['is_correct'] ) );
-    $score   = round( ( $correct / $total ) * 100, 2 );
-
-    $threshold = (int) ( get_post_meta( $module_id, 'quiz_pass_threshold', true ) ?: 70 );
-    $passed    = $score >= $threshold;
-
-    // Update progress record.
     $progress_table = $wpdb->prefix . 'induction_progress';
-    $wpdb->query(
-        $wpdb->prepare(
-            "UPDATE $progress_table SET score = %f, passed = %d, updated_at = %s WHERE user_id = %d AND module_id = %d",
-            $score, $passed ? 1 : 0, current_time( 'mysql' ), $user_id, $module_id
-        )
+    $progress = $wpdb->get_row(
+        $wpdb->prepare( "SELECT quiz_submitted_at FROM $progress_table WHERE user_id = %d AND module_id = %d", $user_id, $module_id ),
+        ARRAY_A
     );
 
     return new WP_REST_Response( [
-        'score'   => $score,
-        'total'   => $total,
-        'passed'  => $passed,
-        'results' => $results,
+        'questions'       => $questions,
+        'quizSubmittedAt' => $progress['quiz_submitted_at'] ?? null,
     ] );
+}
+
+// Admin records per-question correctness and an overall pass/fail decision.
+function induction_quiz_grade( WP_REST_Request $request ): WP_REST_Response {
+    global $wpdb;
+    $user_id   = (int) $request->get_param( 'user_id' );
+    $module_id = (int) $request->get_param( 'module_id' );
+    $results   = (array) $request->get_param( 'results' );
+    $passed    = (bool) $request->get_param( 'passed' );
+    $now       = current_time( 'mysql' );
+
+    $quiz_table = $wpdb->prefix . 'induction_quiz_responses';
+    foreach ( $results as $block_id => $is_correct ) {
+        $wpdb->update(
+            $quiz_table,
+            [ 'is_correct' => $is_correct ? 1 : 0 ],
+            [ 'user_id' => $user_id, 'module_id' => $module_id, 'block_id' => sanitize_text_field( (string) $block_id ) ]
+        );
+    }
+
+    $total   = count( $results );
+    $correct = count( array_filter( $results ) );
+    $score   = $total > 0 ? round( ( $correct / $total ) * 100, 2 ) : null;
+
+    $progress_table = $wpdb->prefix . 'induction_progress';
+    $data = [
+        'score'      => $score,
+        'passed'     => $passed ? 1 : 0,
+        'updated_at' => $now,
+    ];
+
+    if ( $passed ) {
+        // Passing the quiz completes the module outright — the student
+        // doesn't need to take any further action on their side.
+        $data['status']       = 'completed';
+        $data['completed_at'] = $now;
+    } else {
+        // Failing the quiz reverts a completed module back to in-progress so
+        // the student can edit their answers and retake it.
+        $data['status']       = 'in_progress';
+        $data['completed_at'] = null;
+    }
+
+    $wpdb->update( $progress_table, $data, [ 'user_id' => $user_id, 'module_id' => $module_id ] );
+
+    return new WP_REST_Response( [ 'score' => $score, 'passed' => $passed ] );
 }
 
 function induction_quiz_get_responses( WP_REST_Request $request ): WP_REST_Response {
@@ -902,6 +1113,7 @@ function induction_format_progress_row( array $row ): array {
         'time_spent'  => (int) $row['time_spent'],
         'score'       => isset( $row['score'] ) ? (float) $row['score'] : null,
         'passed'      => isset( $row['passed'] ) ? (bool) $row['passed'] : null,
+        'quiz_submitted_at' => $row['quiz_submitted_at'] ?? null,
     ];
 }
 

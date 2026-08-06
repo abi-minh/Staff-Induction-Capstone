@@ -11,7 +11,9 @@ import CheckCircleOutlined  from '@mui/icons-material/CheckCircleOutlined';
 import ChevronRightIcon     from '@mui/icons-material/ChevronRight';
 import ScheduleOutlined     from '@mui/icons-material/ScheduleOutlined';
 import VisibilityOutlined   from '@mui/icons-material/VisibilityOutlined';
-import { usePortalModule, useModuleProgress, useMarkComplete } from '../../hooks/usePortal';
+import {
+  usePortalModule, useModuleProgress, useMarkComplete, useSubmitQuizForReview,
+} from '../../hooks/usePortal';
 import {
   upsertProgress, saveQuizAnswer, checkQuizAnswer, fetchQuizResponses,
 } from '../../api/portal';
@@ -38,8 +40,9 @@ export default function StaffModuleViewPage() {
   const userId   = useAuthStore((s) => s.user?.id ?? 0);
 
   const { data: module, isLoading, error } = usePortalModule(moduleId);
-  const progress     = useModuleProgress(moduleId);
-  const markComplete = useMarkComplete();
+  const { progress, isLoading: progressLoading } = useModuleProgress(moduleId);
+  const markComplete      = useMarkComplete();
+  const submitQuizReview  = useSubmitQuizForReview();
 
   const lsKey = `section-completions-${moduleId}`;
 
@@ -56,14 +59,15 @@ export default function StaffModuleViewPage() {
   const [showResults,  setShowResults]  = useState<Record<string, boolean> | null>(null);
   const [checkingQuiz, setCheckingQuiz] = useState(false);
 
-  const { sections, hasQuiz, hasAnyQuiz } = useMemo(() => {
+  const { sections, hasQuiz, moduleQuizBlockIds, hasAnyQuiz } = useMemo(() => {
     if (!module) {
-      return { sections: [] as Section[], hasQuiz: false, hasAnyQuiz: false };
+      return { sections: [] as Section[], hasQuiz: false, moduleQuizBlockIds: [] as string[], hasAnyQuiz: false };
     }
     const parsed            = parseSections(module.meta.module_blocks);
     const moduleQuizSection = parsed.find((s) => s.isModuleQuiz) ?? null;
+    const moduleQuizBlockIds = moduleQuizSection?.quizBlocks.map((b) => b.id) ?? [];
     const hasAnyQuiz        = parsed.some((s) => s.quizBlocks.length > 0);
-    return { sections: parsed, hasQuiz: (moduleQuizSection?.quizBlocks.length ?? 0) > 0, hasAnyQuiz };
+    return { sections: parsed, hasQuiz: moduleQuizBlockIds.length > 0, moduleQuizBlockIds, hasAnyQuiz };
   }, [module]);
 
   const currentSection = sections.find((s) => s.id === selectedSectionId) ?? null;
@@ -73,11 +77,15 @@ export default function StaffModuleViewPage() {
   }, [completedSectionIds, lsKey]);
 
   useEffect(() => {
-    if (!moduleId || !userId) return;
+    // Wait for the real progress record before deciding it's missing — on
+    // first mount `progress` is briefly undefined purely because the fetch
+    // hasn't resolved yet, which used to be mistaken for "never started"
+    // and stomped an already-completed module back to in_progress.
+    if (!moduleId || !userId || progressLoading) return;
     if (!progress || progress.status === 'not_started') {
       upsertProgress(userId, moduleId, 'in_progress', 0).catch(() => {});
     }
-  }, [moduleId, userId, progress]);
+  }, [moduleId, userId, progress, progressLoading]);
 
   useEffect(() => {
     if (!moduleId || !userId || !hasAnyQuiz) return;
@@ -98,14 +106,21 @@ export default function StaffModuleViewPage() {
   if (error)   return <Alert severity="error">{(error as Error).message}</Alert>;
   if (!module) return <Alert severity="warning">Module not found.</Alert>;
 
-  const isCompleted           = progress?.status === 'completed';
+  const isCompleted   = progress?.status === 'completed';
+  // The module-level quiz is graded by an admin, not self-checked — it's only
+  // "done" once progress.passed comes back true. Other sections still rely on
+  // the local completedSectionIds flag from the manual "Mark complete" button.
+  const quizSubmittedAt = progress?.quizSubmittedAt ?? null;
+  const quizPassed      = progress?.passed ?? null;
+  const quizPending      = !!quizSubmittedAt && quizPassed === null;
+  const quizLocked       = quizPending || quizPassed === true;
+
+  function isSectionComplete(section: Section): boolean {
+    return section.isModuleQuiz ? quizPassed === true : completedSectionIds.includes(section.id);
+  }
+
   // Every section other than the module-level quiz section itself must be completed.
-  const otherSectionsComplete = sections
-    .filter((s) => !s.isModuleQuiz)
-    .every((s) => completedSectionIds.includes(s.id));
-  // Every section, including the module-level quiz (which only completes once
-  // answered fully correctly), must be done before the module can be submitted.
-  const allSectionsComplete  = sections.length > 0 && sections.every((s) => completedSectionIds.includes(s.id));
+  const otherSectionsComplete = sections.filter((s) => !s.isModuleQuiz).every(isSectionComplete);
   const statusColor = isCompleted ? 'success.main' : 'warning.main';
   const StatusIcon  = isCompleted ? CheckCircleOutlined : ScheduleOutlined;
   const statusLabel = isCompleted ? 'Completed' : 'To Complete';
@@ -122,6 +137,8 @@ export default function StaffModuleViewPage() {
     saveQuizAnswer(userId, moduleId, blockId, answer).catch(() => {});
   }
 
+  // Section-level quizzes only — the module-level quiz is graded by an admin
+  // (see handleSubmitQuizForReview) and never self-checked.
   async function handleCheckQuiz(section: Section) {
     const blockIds    = section.quizBlocks.map((b) => b.id);
     const answeredIds = blockIds.filter((bid) => answers[bid] !== undefined);
@@ -134,16 +151,13 @@ export default function StaffModuleViewPage() {
       const resultMap: Record<string, boolean> = {};
       answeredIds.forEach((bid, i) => { resultMap[bid] = results[i].isCorrect; });
       setShowResults((prev) => ({ ...prev, ...resultMap }));
-
-      // The module-level quiz section auto-completes once every question is
-      // answered and correct — it has no manual "mark complete" control.
-      const allCorrect = blockIds.length > 0 && blockIds.every((bid) => resultMap[bid] === true);
-      if (section.isModuleQuiz && allCorrect) {
-        setCompletedSectionIds((prev) => (prev.includes(section.id) ? prev : [...prev, section.id]));
-      }
     } finally {
       setCheckingQuiz(false);
     }
+  }
+
+  async function handleSubmitQuizForReview() {
+    await submitQuizReview.mutateAsync(moduleId);
   }
 
   function handleMarkSectionComplete() {
@@ -174,10 +188,10 @@ export default function StaffModuleViewPage() {
   if (currentSection) {
     const sectionIndex   = sections.findIndex((s) => s.id === selectedSectionId);
     const sectionHasQuiz = currentSection.quizBlocks.length > 0;
-    const isSectionDone  = completedSectionIds.includes(currentSection.id);
+    const isSectionDone  = isSectionComplete(currentSection);
     const prevSection    = sectionIndex > 0 ? sections[sectionIndex - 1] : null;
     const nextSection    = sectionIndex < sections.length - 1 ? sections[sectionIndex + 1] : null;
-    const completedCount = completedSectionIds.filter((id) => sections.some((s) => s.id === id)).length;
+    const completedCount = sections.filter(isSectionComplete).length;
     const progressPct    = sections.length > 0 ? Math.round((completedCount / sections.length) * 100) : 0;
 
     return (
@@ -202,7 +216,7 @@ export default function StaffModuleViewPage() {
           {sections.map((s, i) => (
             <MenuItem key={s.id} value={s.id}>
               Section {i + 1}{s.title ? ` — ${s.title}` : ''}
-              {completedSectionIds.includes(s.id) ? '  ✓' : ''}
+              {isSectionComplete(s) ? '  ✓' : ''}
             </MenuItem>
           ))}
         </TextField>
@@ -237,10 +251,42 @@ export default function StaffModuleViewPage() {
             {currentSection.quizTitle && (
               <Typography variant="h3" sx={{ mb: 2.5 }}>{currentSection.quizTitle}</Typography>
             )}
-            {currentSection.isModuleQuiz && !otherSectionsComplete ? (
-              <Alert severity="warning">
-                Complete all other sections before attempting the module-level quiz.
-              </Alert>
+            {currentSection.isModuleQuiz ? (
+              !otherSectionsComplete ? (
+                <Alert severity="warning">
+                  Complete all other sections before attempting the module-level quiz.
+                </Alert>
+              ) : (
+                <>
+                  {quizPending && (
+                    <Alert severity="info" sx={{ mb: 2 }}>
+                      Submitted — awaiting review by an admin.
+                    </Alert>
+                  )}
+                  {quizPassed === true && (
+                    <Alert severity="success" sx={{ mb: 2 }}>
+                      Passed — reviewed by an admin.
+                    </Alert>
+                  )}
+                  {quizPassed === false && (
+                    <Alert severity="error" sx={{ mb: 2 }}>
+                      Not passed. You may update your answers and resubmit.
+                    </Alert>
+                  )}
+                  <BlockRenderer
+                    blocks={currentSection.quizBlocks}
+                    answers={answers}
+                    onAnswer={handleAnswer}
+                    showResults={null}
+                    disabled={quizLocked}
+                  />
+                  {!quizLocked && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      Use the "Submit Quiz for Review" button on the module overview page once you've answered every question.
+                    </Typography>
+                  )}
+                </>
+              )
             ) : (
               <>
                 <BlockRenderer
@@ -263,19 +309,7 @@ export default function StaffModuleViewPage() {
         )}
 
         {/* Section complete */}
-        {currentSection.isModuleQuiz ? (
-          isSectionDone && (
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <Chip
-                icon={<CheckCircleIcon />}
-                label="Completed — all questions answered correctly"
-                color="success"
-                variant="outlined"
-                sx={{ borderRadius: 999 }}
-              />
-            </Box>
-          )
-        ) : (
+        {currentSection.isModuleQuiz ? null : (
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 2 }}>
             {isSectionDone ? (
               <Button variant="outlined" color="error" sx={{ borderRadius: '10px' }} onClick={handleUnmarkSectionComplete}>
@@ -315,11 +349,10 @@ export default function StaffModuleViewPage() {
 
           <Button
             variant="outlined"
-            onClick={() => nextSection && setSelectedSectionId(nextSection.id)}
-            disabled={!nextSection}
+            onClick={() => (nextSection ? setSelectedSectionId(nextSection.id) : setSelectedSectionId(null))}
             sx={{ borderRadius: 999, flexShrink: 0 }}
           >
-            Next →
+            {nextSection ? 'Next →' : 'Back to Overview'}
           </Button>
         </Box>
         </Paper>
@@ -422,13 +455,13 @@ export default function StaffModuleViewPage() {
           </ToggleButtonGroup>
 
           {sections.filter((s) => {
-            const done = completedSectionIds.includes(s.id);
+            const done = isSectionComplete(s);
             if (sectionView === 'completed') return done;
             if (sectionView === 'todo')      return !done;
             return true;
           }).map((section) => {
             const index = sections.indexOf(section);
-            const done     = completedSectionIds.includes(section.id);
+            const done     = isSectionComplete(section);
             const gradient = SECTION_GRADIENTS[index % SECTION_GRADIENTS.length];
             return (
               <Card
@@ -555,36 +588,51 @@ export default function StaffModuleViewPage() {
           Complete all other sections before attempting the module-level quiz.
         </Alert>
       )}
-      {hasQuiz && otherSectionsComplete && !allSectionsComplete && !isCompleted && (
-        <Alert severity="warning">
-          Answer every question in the module-level quiz correctly before you can submit and complete this module.
+      {hasQuiz && otherSectionsComplete && quizPending && !isCompleted && (
+        <Alert severity="info">
+          Your module-level quiz has been submitted and is awaiting review by an admin.
+        </Alert>
+      )}
+      {hasQuiz && quizPassed === false && !isCompleted && (
+        <Alert severity="error">
+          Your module-level quiz submission was not passed. Update your answers in that section, then submit again below.
         </Alert>
       )}
 
-      <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
+      <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end', alignItems: 'center' }}>
         {isCompleted ? (
           <Typography sx={{ color: 'success.main', fontWeight: 600, alignSelf: 'center' }}>
             ✓ Completed
             {progress?.completedAt && ` on ${new Date(progress.completedAt).toLocaleDateString()}`}
           </Typography>
+        ) : hasQuiz ? (
+          quizPending ? (
+            <Typography sx={{ color: 'text.secondary', fontWeight: 500 }}>
+              Awaiting review by an admin
+            </Typography>
+          ) : (
+            <Button
+              variant="contained"
+              onClick={handleSubmitQuizForReview}
+              disabled={
+                !otherSectionsComplete
+                || submitQuizReview.isLoading
+                || moduleQuizBlockIds.some((bid) => answers[bid] === undefined)
+              }
+            >
+              {submitQuizReview.isLoading ? 'Submitting…' : 'Submit Quiz for Review'}
+            </Button>
+          )
         ) : confirming ? (
           <>
             <Button onClick={() => setConfirming(false)} disabled={saving}>Cancel</Button>
-            <Button
-              variant="contained"
-              onClick={handleMarkComplete}
-              disabled={saving || (hasQuiz && !allSectionsComplete)}
-            >
+            <Button variant="contained" onClick={handleMarkComplete} disabled={saving}>
               {saving ? 'Submitting…' : 'Yes, complete'}
             </Button>
           </>
         ) : (
-          <Button
-            variant="contained"
-            onClick={() => setConfirming(true)}
-            disabled={hasQuiz && !allSectionsComplete}
-          >
-            {hasQuiz ? 'Submit module & complete' : 'Mark as complete'}
+          <Button variant="contained" onClick={() => setConfirming(true)}>
+            Mark as complete
           </Button>
         )}
       </Box>

@@ -8,14 +8,15 @@ interface Props {
   answers: Record<string, string>;
   onAnswer: (blockId: string, answer: string) => void;
   showResults: Record<string, boolean> | null;
+  disabled?: boolean;
 }
 
-export default function BlockRenderer({ blocks, answers, onAnswer, showResults }: Props) {
+export default function BlockRenderer({ blocks, answers, onAnswer, showResults, disabled }: Props) {
   return (
     <Box>
       {blocks.map((block) => (
         <Box key={block.id} sx={{ mb: 2.5 }}>
-          {renderBlock(block, answers, onAnswer, showResults)}
+          {renderBlock(block, answers, onAnswer, showResults, disabled ?? false)}
         </Box>
       ))}
     </Box>
@@ -38,6 +39,7 @@ function renderBlock(
   answers: Record<string, string>,
   onAnswer: (blockId: string, answer: string) => void,
   showResults: Record<string, boolean> | null,
+  disabled: boolean,
 ) {
   switch (block.type) {
     case 'heading': {
@@ -142,7 +144,7 @@ function renderBlock(
               key={placed.block.id}
               sx={{ gridColumn: `${placed.colStart} / span ${placed.colSpan}` }}
             >
-              {renderBlock(placed.block, answers, onAnswer, showResults)}
+              {renderBlock(placed.block, answers, onAnswer, showResults, disabled)}
             </Box>
           ))}
         </Box>
@@ -160,7 +162,13 @@ function renderBlock(
             onChange={(e) => onAnswer(block.id, e.target.value)}
           >
             {block.data.options.map((option, i) => (
-              <FormControlLabel key={i} value={String(i)} control={<Radio size="small" />} label={option} />
+              <FormControlLabel
+                key={i}
+                value={String(i)}
+                control={<Radio size="small" disabled={disabled} />}
+                label={option}
+                disabled={disabled}
+              />
             ))}
           </RadioGroup>
           {hasResult && (
@@ -183,8 +191,8 @@ function renderBlock(
             value={selectedAnswer ?? ''}
             onChange={(e) => onAnswer(block.id, e.target.value)}
           >
-            <FormControlLabel value="true" control={<Radio size="small" />} label="True" />
-            <FormControlLabel value="false" control={<Radio size="small" />} label="False" />
+            <FormControlLabel value="true" control={<Radio size="small" disabled={disabled} />} label="True" disabled={disabled} />
+            <FormControlLabel value="false" control={<Radio size="small" disabled={disabled} />} label="False" disabled={disabled} />
           </RadioGroup>
           {hasResult && (
             <Alert severity={questionResult ? 'success' : 'error'} sx={{ mt: 1.5 }}>

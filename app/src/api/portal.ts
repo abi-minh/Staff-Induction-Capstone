@@ -32,6 +32,7 @@ interface WPProgressRecord {
   time_spent: number;
   score: number | null;
   passed: boolean | null;
+  quiz_submitted_at: string | null;
 }
 
 interface WPDocument {
@@ -48,13 +49,6 @@ interface WPDocument {
 
 interface WPMedia {
   source_url: string;
-}
-
-export interface QuizSubmitResult {
-  score: number;
-  total: number;
-  passed: boolean;
-  results: Record<string, { is_correct: boolean; explanation: string }>;
 }
 
 function normaliseModule(wp: WPPortalModule): Module {
@@ -89,6 +83,7 @@ function normaliseProgress(r: WPProgressRecord): ProgressRecord {
     timeSpent: r.time_spent,
     score: r.score,
     passed: r.passed,
+    quizSubmittedAt: r.quiz_submitted_at,
   };
 }
 
@@ -170,15 +165,15 @@ export async function checkQuizAnswer(
   return data;
 }
 
-export async function submitQuiz(
+export async function submitQuizForReview(
   userId: number,
   moduleId: number
-): Promise<QuizSubmitResult> {
-  const { data } = await client.post<QuizSubmitResult>('induction/v1/quiz/submit', {
+): Promise<ProgressRecord> {
+  const { data } = await client.post<WPProgressRecord>('induction/v1/quiz/submit-for-review', {
     user_id: userId,
     module_id: moduleId,
   });
-  return data;
+  return normaliseProgress(data);
 }
 
 export async function fetchQuizResponses(

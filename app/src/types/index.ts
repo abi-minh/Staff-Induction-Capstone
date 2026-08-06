@@ -117,6 +117,34 @@ export interface ProgressRecord {
   timeSpent: number;
   score: number | null;
   passed: boolean | null;
+  quizSubmittedAt: string | null;
+}
+
+// ─── Quiz review (admin grading of the module-level quiz) ────────────────────
+
+export interface PendingQuizReview {
+  userId: number;
+  userName: string;
+  moduleId: number;
+  moduleTitle: string;
+  quizSubmittedAt: string;
+}
+
+export interface QuizReviewQuestion {
+  blockId: string;
+  type: 'multiple_choice' | 'true_false';
+  question: string;
+  options: string[] | null;
+  correctIndex: number | null;
+  correctAnswer: boolean | null;
+  explanation: string;
+  userAnswer: string | null;
+  isCorrect: boolean | null;
+}
+
+export interface QuizReviewDetail {
+  questions: QuizReviewQuestion[];
+  quizSubmittedAt: string | null;
 }
 
 // ─── Reports ──────────────────────────────────────────────────────────────────

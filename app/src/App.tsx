@@ -13,6 +13,8 @@ import DocumentsPage       from './pages/DocumentsPage';
 import StaffPage           from './pages/StaffPage';
 import StaffDetailPage     from './pages/StaffDetailPage';
 import ReportsPage         from './pages/ReportsPage';
+import QuizReviewsPage     from './pages/QuizReviewsPage';
+import QuizReviewDetailPage from './pages/QuizReviewDetailPage';
 import StaffLayout         from './layout/StaffLayout';
 import StaffDashboardPage  from './pages/staff/StaffDashboardPage';
 import StaffModuleViewPage from './pages/staff/StaffModuleViewPage';
@@ -74,6 +76,8 @@ export default function App() {
             <Route path="staff"            element={<StaffPage />} />
             <Route path="staff/:id"        element={<StaffDetailPage />} />
             <Route path="reports"          element={<ReportsPage />} />
+            <Route path="quiz-reviews"                    element={<QuizReviewsPage />} />
+            <Route path="quiz-reviews/:userId/:moduleId"  element={<QuizReviewDetailPage />} />
           </Route>
         </Routes>
       </HashRouter>
