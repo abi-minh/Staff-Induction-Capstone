@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.0.9
+ * Version:     1.1.1
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */

@@ -1,6 +1,5 @@
 import {
-  Alert, Box, Button, CircularProgress, FormControlLabel,
-  List, ListItem, Paper, Radio, RadioGroup, Typography,
+  Alert, Box, FormControlLabel, List, ListItem, Paper, Radio, RadioGroup, Typography,
 } from '@mui/material';
 import type { Block, CalloutVariant, HeadingLevel } from '../types';
 
@@ -9,18 +8,14 @@ interface Props {
   answers: Record<string, string>;
   onAnswer: (blockId: string, answer: string) => void;
   showResults: Record<string, boolean> | null;
-  onCheck: (blockId: string) => void;
-  checkingBlockIds?: Set<string>;
 }
 
-export default function BlockRenderer({
-  blocks, answers, onAnswer, showResults, onCheck, checkingBlockIds,
-}: Props) {
+export default function BlockRenderer({ blocks, answers, onAnswer, showResults }: Props) {
   return (
     <Box>
       {blocks.map((block) => (
         <Box key={block.id} sx={{ mb: 2.5 }}>
-          {renderBlock(block, answers, onAnswer, showResults, onCheck, checkingBlockIds)}
+          {renderBlock(block, answers, onAnswer, showResults)}
         </Box>
       ))}
     </Box>
@@ -43,8 +38,6 @@ function renderBlock(
   answers: Record<string, string>,
   onAnswer: (blockId: string, answer: string) => void,
   showResults: Record<string, boolean> | null,
-  onCheck: (blockId: string) => void,
-  checkingBlockIds: Set<string> | undefined,
 ) {
   switch (block.type) {
     case 'heading': {
@@ -149,7 +142,7 @@ function renderBlock(
               key={placed.block.id}
               sx={{ gridColumn: `${placed.colStart} / span ${placed.colSpan}` }}
             >
-              {renderBlock(placed.block, answers, onAnswer, showResults, onCheck, checkingBlockIds)}
+              {renderBlock(placed.block, answers, onAnswer, showResults)}
             </Box>
           ))}
         </Box>
@@ -157,9 +150,8 @@ function renderBlock(
     }
     case 'multiple_choice': {
       const selectedAnswer = answers[block.id] ?? null;
-      const questionResult  = showResults?.[block.id];
-      const isAnswered      = questionResult !== undefined;
-      const isChecking      = checkingBlockIds?.has(block.id) ?? false;
+      const questionResult = showResults?.[block.id];
+      const hasResult = questionResult !== undefined;
       return (
         <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2, borderColor: 'divider' }}>
           <Typography sx={{ fontWeight: 600, mb: 1.5 }}>{block.data.question}</Typography>
@@ -168,28 +160,10 @@ function renderBlock(
             onChange={(e) => onAnswer(block.id, e.target.value)}
           >
             {block.data.options.map((option, i) => (
-              <FormControlLabel
-                key={i}
-                value={String(i)}
-                control={<Radio size="small" disabled={isAnswered} />}
-                label={option}
-                disabled={isAnswered}
-              />
+              <FormControlLabel key={i} value={String(i)} control={<Radio size="small" />} label={option} />
             ))}
           </RadioGroup>
-          {!isAnswered && (
-            <Button
-              variant="contained"
-              size="small"
-              onClick={() => onCheck(block.id)}
-              disabled={selectedAnswer === null || isChecking}
-              startIcon={isChecking ? <CircularProgress size={14} color="inherit" /> : undefined}
-              sx={{ mt: 1 }}
-            >
-              {isChecking ? 'Checking…' : 'Check Answer'}
-            </Button>
-          )}
-          {isAnswered && (
+          {hasResult && (
             <Alert severity={questionResult ? 'success' : 'error'} sx={{ mt: 1.5 }}>
               <strong>{questionResult ? 'Correct!' : 'Incorrect.'}</strong>
               {block.data.explanation && ` ${block.data.explanation}`}
@@ -200,9 +174,8 @@ function renderBlock(
     }
     case 'true_false': {
       const selectedAnswer = answers[block.id] ?? null;
-      const questionResult  = showResults?.[block.id];
-      const isAnswered      = questionResult !== undefined;
-      const isChecking      = checkingBlockIds?.has(block.id) ?? false;
+      const questionResult = showResults?.[block.id];
+      const hasResult = questionResult !== undefined;
       return (
         <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2, borderColor: 'divider' }}>
           <Typography sx={{ fontWeight: 600, mb: 1.5 }}>{block.data.question}</Typography>
@@ -210,22 +183,10 @@ function renderBlock(
             value={selectedAnswer ?? ''}
             onChange={(e) => onAnswer(block.id, e.target.value)}
           >
-            <FormControlLabel value="true" control={<Radio size="small" disabled={isAnswered} />} label="True" disabled={isAnswered} />
-            <FormControlLabel value="false" control={<Radio size="small" disabled={isAnswered} />} label="False" disabled={isAnswered} />
+            <FormControlLabel value="true" control={<Radio size="small" />} label="True" />
+            <FormControlLabel value="false" control={<Radio size="small" />} label="False" />
           </RadioGroup>
-          {!isAnswered && (
-            <Button
-              variant="contained"
-              size="small"
-              onClick={() => onCheck(block.id)}
-              disabled={selectedAnswer === null || isChecking}
-              startIcon={isChecking ? <CircularProgress size={14} color="inherit" /> : undefined}
-              sx={{ mt: 1 }}
-            >
-              {isChecking ? 'Checking…' : 'Check Answer'}
-            </Button>
-          )}
-          {isAnswered && (
+          {hasResult && (
             <Alert severity={questionResult ? 'success' : 'error'} sx={{ mt: 1.5 }}>
               <strong>{questionResult ? 'Correct!' : 'Incorrect.'}</strong>
               {block.data.explanation && ` ${block.data.explanation}`}
