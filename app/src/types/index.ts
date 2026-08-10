@@ -187,6 +187,7 @@ export interface OverdueItem {
   moduleId: number;
   moduleTitle: string;
   dueDate: string;
+  notCompletedCount: number;
 }
 
 // ─── WP Media ─────────────────────────────────────────────────────────────────

@@ -832,14 +832,30 @@ function induction_get_overdue(): WP_REST_Response {
         $now
     ), ARRAY_A ) ?? [];
 
-    $result = array_map( function ( $r ) {
+    // Per-user count of assigned modules not yet completed (for the overdue table).
+    $count_rows = $wpdb->get_results(
+        "SELECT a.user_id, COUNT(*) AS cnt
+         FROM $assignments a
+         LEFT JOIN $progress p
+           ON p.user_id = a.user_id AND p.module_id = a.module_id
+         WHERE ( p.status IS NULL OR p.status <> 'completed' )
+         GROUP BY a.user_id",
+        ARRAY_A
+    ) ?? [];
+    $not_completed = [];
+    foreach ( $count_rows as $cr ) {
+        $not_completed[ (int) $cr['user_id'] ] = (int) $cr['cnt'];
+    }
+
+    $result = array_map( function ( $r ) use ( $not_completed ) {
         $user = get_userdata( (int) $r['user_id'] );
         return [
-            'userId'      => (int) $r['user_id'],
-            'userName'    => $user ? $user->display_name : 'Unknown',
-            'moduleId'    => (int) $r['module_id'],
-            'moduleTitle' => get_the_title( (int) $r['module_id'] ) ?: '(Untitled)',
-            'dueDate'     => $r['due_date'],
+            'userId'            => (int) $r['user_id'],
+            'userName'          => $user ? $user->display_name : 'Unknown',
+            'moduleId'          => (int) $r['module_id'],
+            'moduleTitle'       => get_the_title( (int) $r['module_id'] ) ?: '(Untitled)',
+            'dueDate'           => $r['due_date'],
+            'notCompletedCount' => $not_completed[ (int) $r['user_id'] ] ?? 0,
         ];
     }, $rows );
 

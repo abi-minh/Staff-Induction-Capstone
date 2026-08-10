@@ -42,6 +42,7 @@ export default function OverduePage() {
                 <TableCell sx={{ py: 2.25, fontWeight: 700, borderBottom: '1px solid', borderColor: 'divider' }}>Staff</TableCell>
                 <TableCell sx={{ py: 2.25, fontWeight: 700, borderBottom: '1px solid', borderColor: 'divider' }}>Module</TableCell>
                 <TableCell sx={{ py: 2.25, fontWeight: 700, borderBottom: '1px solid', borderColor: 'divider' }}>Due date</TableCell>
+                <TableCell sx={{ py: 2.25, fontWeight: 700, borderBottom: '1px solid', borderColor: 'divider' }}>Not completed</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -64,6 +65,7 @@ export default function OverduePage() {
                   <TableCell sx={{ color: 'error.main', fontWeight: 500 }}>
                     {formatDate(o.dueDate)}
                   </TableCell>
+                  <TableCell>{o.notCompletedCount}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
