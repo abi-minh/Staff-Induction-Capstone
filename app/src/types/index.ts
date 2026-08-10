@@ -181,6 +181,14 @@ export interface ReportSummary {
   completionOverTime: { date: string; completed: number }[];
 }
 
+export interface OverdueItem {
+  userId: number;
+  userName: string;
+  moduleId: number;
+  moduleTitle: string;
+  dueDate: string;
+}
+
 // ─── WP Media ─────────────────────────────────────────────────────────────────
 
 export interface WPMedia {

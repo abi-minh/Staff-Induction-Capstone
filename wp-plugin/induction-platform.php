@@ -324,6 +324,13 @@ function induction_register_routes(): void {
         'permission_callback' => fn() => current_user_can( 'manage_induction' ),
     ] );
 
+    // GET /reports/overdue — overdue assignments (admin only)
+    register_rest_route( $ns, '/reports/overdue', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_get_overdue',
+        'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+    ] );
+
     // POST /quiz/save — save a single answer without grading
     register_rest_route( $ns, '/quiz/save', [
         'methods'             => 'POST',
@@ -804,6 +811,39 @@ function induction_get_reports_summary(): WP_REST_Response {
             'completed' => (int) $r['completed'],
         ], $completions_by_date ),
     ] );
+}
+
+function induction_get_overdue(): WP_REST_Response {
+    global $wpdb;
+    $assignments = $wpdb->prefix . 'induction_assignments';
+    $progress    = $wpdb->prefix . 'induction_progress';
+    $now         = current_time( 'mysql' );
+
+    // Overdue = assignment past its due date and not completed by that user.
+    $rows = $wpdb->get_results( $wpdb->prepare(
+        "SELECT a.user_id, a.module_id, a.due_date
+         FROM $assignments a
+         LEFT JOIN $progress p
+           ON p.user_id = a.user_id AND p.module_id = a.module_id
+         WHERE a.due_date IS NOT NULL
+           AND a.due_date < %s
+           AND ( p.status IS NULL OR p.status <> 'completed' )
+         ORDER BY a.due_date ASC",
+        $now
+    ), ARRAY_A ) ?? [];
+
+    $result = array_map( function ( $r ) {
+        $user = get_userdata( (int) $r['user_id'] );
+        return [
+            'userId'      => (int) $r['user_id'],
+            'userName'    => $user ? $user->display_name : 'Unknown',
+            'moduleId'    => (int) $r['module_id'],
+            'moduleTitle' => get_the_title( (int) $r['module_id'] ) ?: '(Untitled)',
+            'dueDate'     => $r['due_date'],
+        ];
+    }, $rows );
+
+    return new WP_REST_Response( $result );
 }
 
 // ─── Quiz Callbacks ─────────────────────────────────────────────────────────

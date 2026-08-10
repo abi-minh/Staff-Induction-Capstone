@@ -8,7 +8,7 @@ import InsightsOutlinedIcon from "@mui/icons-material/InsightsOutlined";
 import GridViewOutlinedIcon from "@mui/icons-material/GridViewOutlined";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { useStaff } from "../hooks/useStaff";
-import { useReports } from "../hooks/useReports";
+import { useReports, useOverdue } from "../hooks/useReports";
 
 const COMPLETED_COLOR = "#84cc16"; // green
 const NOT_COMPLETED_COLOR = "#3f51b5"; // indigo
@@ -60,6 +60,7 @@ function LegendItem({ color, label }: { color: string; label: string }) {
 export default function DashboardPage() {
   const { data: staff } = useStaff();
   const { data: reports } = useReports();
+  const { data: overdue = [] } = useOverdue();
 
   const totalStaff = staff?.length ?? reports?.totalStaff ?? 0;
   const modulesAssigned = (reports?.moduleReports ?? []).reduce(
@@ -67,7 +68,7 @@ export default function DashboardPage() {
     0,
   );
   const completionPct = reports?.overallCompletionPct ?? 0;
-  const overdueCount = 0;
+  const overdueCount = overdue.length;
 
   const donutData = [
     { name: "Completed", value: completionPct },
@@ -118,7 +119,7 @@ export default function DashboardPage() {
           <Box sx={{ mt: 1 }}>
             <Link
               component={RouterLink}
-              to="/staff"
+              to="/overdue"
               sx={{ color: "primary.main", fontWeight: 600 }}
             >
               View details
