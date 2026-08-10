@@ -1,5 +1,5 @@
 import client from './client';
-import type { StaffMember, ProgressRecord } from '../types';
+import type { StaffMember, ProgressRecord, AssignmentRecord } from '../types';
 
 interface InductionUser {
   id: number;
@@ -94,4 +94,11 @@ export async function fetchModuleProgress(moduleId: number): Promise<ProgressRec
     `induction/v1/progress/module/${moduleId}`
   );
   return data.map(normaliseProgress);
+}
+
+export async function fetchStaffAssignments(userId: number): Promise<AssignmentRecord[]> {
+  const { data } = await client.get<AssignmentRecord[]>(
+    `induction/v1/assignments/records/user/${userId}`
+  );
+  return data;
 }

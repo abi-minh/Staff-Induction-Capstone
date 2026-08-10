@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchStaff, fetchStaffMember, fetchStaffProgress, bulkAssign, unassign } from '../api/staff';
+import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign } from '../api/staff';
 
 export function useStaff() {
   return useQuery({ queryKey: ['staff'], queryFn: fetchStaff, staleTime: 1000 * 60 * 5 });
@@ -17,6 +17,14 @@ export function useStaffProgress(userId: number) {
   return useQuery({
     queryKey: ['staffProgress', userId],
     queryFn: () => fetchStaffProgress(userId),
+    enabled: userId > 0,
+  });
+}
+
+export function useStaffAssignments(userId: number) {
+  return useQuery({
+    queryKey: ['staffAssignments', userId],
+    queryFn: () => fetchStaffAssignments(userId),
     enabled: userId > 0,
   });
 }

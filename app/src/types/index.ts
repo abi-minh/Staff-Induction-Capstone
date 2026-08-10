@@ -105,6 +105,12 @@ export interface Assignment {
   assignedBy: number;
 }
 
+export interface AssignmentRecord {
+  moduleId: number;
+  assignedAt: string;
+  dueDate: string | null;
+}
+
 // ─── Progress ─────────────────────────────────────────────────────────────────
 
 export type ProgressStatus = 'not_started' | 'in_progress' | 'completed';
