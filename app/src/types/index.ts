@@ -42,6 +42,7 @@ export interface ModuleMeta {
   module_role_targets: string[];
   module_estimated_minutes: number;
   module_order: number;
+  module_duration_days: number;
   module_blocks: string; // JSON-encoded Section[]
   module_icon: string;
   module_hero_image: number;
@@ -55,6 +56,7 @@ export interface ModuleFormValues {
   module_role_targets: string[];
   module_estimated_minutes: number;
   module_order: number;
+  module_duration_days: number;
   module_blocks?: string;
   module_icon: string;
   module_hero_image: number;
