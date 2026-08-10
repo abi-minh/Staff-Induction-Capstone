@@ -277,6 +277,13 @@ function induction_register_routes(): void {
         'permission_callback' => fn() => current_user_can( 'manage_induction' ),
     ] );
 
+    // POST /assignments/remove — unassign module(s) from user(s) (admin only)
+    register_rest_route( $ns, '/assignments/remove', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_unassign',
+        'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+    ] );
+
     // GET /progress/module/{id} — all progress records for a module (admin only)
     register_rest_route( $ns, '/progress/module/(?P<id>\d+)', [
         'methods'             => 'GET',
@@ -587,6 +594,26 @@ function induction_bulk_assign( WP_REST_Request $request ): WP_REST_Response {
     update_post_meta( $module_id, 'module_role_targets', $current_targets );
 
     return new WP_REST_Response( [ 'assigned' => count( $user_ids ) ] );
+}
+
+function induction_unassign( WP_REST_Request $request ): WP_REST_Response {
+    $module_id = (int) $request->get_param( 'module_id' );
+    $user_ids  = array_map( 'intval', (array) $request->get_param( 'user_ids' ) );
+
+    if ( ! $module_id || empty( $user_ids ) ) {
+        return new WP_REST_Response( [ 'message' => 'module_id and user_ids are required' ], 400 );
+    }
+
+    // Remove each user's explicit "user:{id}" target from the module.
+    $current_targets = get_post_meta( $module_id, 'module_role_targets', true ) ?: [];
+    $remove_keys     = array_map( fn( $uid ) => 'user:' . $uid, $user_ids );
+    $updated         = array_values( array_filter(
+        $current_targets,
+        fn( $t ) => ! in_array( $t, $remove_keys, true )
+    ) );
+    update_post_meta( $module_id, 'module_role_targets', $updated );
+
+    return new WP_REST_Response( [ 'removed' => count( $user_ids ) ] );
 }
 
 function induction_get_module_progress( WP_REST_Request $request ): WP_REST_Response {

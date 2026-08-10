@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchStaff, fetchStaffMember, fetchStaffProgress, bulkAssign } from '../api/staff';
+import { fetchStaff, fetchStaffMember, fetchStaffProgress, bulkAssign, unassign } from '../api/staff';
 
 export function useStaff() {
   return useQuery({ queryKey: ['staff'], queryFn: fetchStaff, staleTime: 1000 * 60 * 5 });
@@ -26,6 +26,18 @@ export function useBulkAssign() {
   return useMutation({
     mutationFn: ({ moduleId, userIds, dueDate }: { moduleId: number; userIds: number[]; dueDate?: string }) =>
       bulkAssign(moduleId, userIds, dueDate),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['staff'] });
+      qc.invalidateQueries({ queryKey: ['modules'] });
+    },
+  });
+}
+
+export function useUnassign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ moduleId, userIds }: { moduleId: number; userIds: number[] }) =>
+      unassign(moduleId, userIds),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['staff'] });
       qc.invalidateQueries({ queryKey: ['modules'] });

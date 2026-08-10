@@ -43,6 +43,17 @@ export async function bulkAssign(
   return data;
 }
 
+export async function unassign(
+  moduleId: number,
+  userIds: number[]
+): Promise<{ removed: number }> {
+  const { data } = await client.post<{ removed: number }>('induction/v1/assignments/remove', {
+    module_id: moduleId,
+    user_ids: userIds,
+  });
+  return data;
+}
+
 interface WPProgressRecord {
   id: number;
   user_id: number;
