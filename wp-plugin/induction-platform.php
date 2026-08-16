@@ -646,7 +646,9 @@ function induction_bulk_assign( WP_REST_Request $request ): WP_REST_Response {
             $uid, $module_id
         ) );
         if ( $existing ) {
-            $wpdb->update( $assignments_table, [ 'due_date' => $due_date ], [ 'id' => (int) $existing ] );
+            if ( $due_date !== null ) {
+                $wpdb->update( $assignments_table, [ 'due_date' => $due_date ], [ 'id' => (int) $existing ] );
+            }
         } else {
             $wpdb->insert( $assignments_table, [
                 'user_id'     => $uid,

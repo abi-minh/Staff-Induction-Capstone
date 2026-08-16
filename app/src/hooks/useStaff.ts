@@ -37,6 +37,9 @@ export function useBulkAssign() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['staff'] });
       qc.invalidateQueries({ queryKey: ['modules'] });
+      qc.invalidateQueries({ queryKey: ['reports'] });
+      qc.invalidateQueries({ queryKey: ['overdue'] });
+      qc.invalidateQueries({ queryKey: ['staffAssignments'] });
     },
   });
 }
@@ -49,6 +52,9 @@ export function useUnassign() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['staff'] });
       qc.invalidateQueries({ queryKey: ['modules'] });
+      qc.invalidateQueries({ queryKey: ['reports'] });
+      qc.invalidateQueries({ queryKey: ['overdue'] });
+      qc.invalidateQueries({ queryKey: ['staffAssignments'] });
     },
   });
 }
