@@ -92,9 +92,23 @@ export interface DocumentFormValues {
 export interface StaffMember {
   id: number;
   name: string;
+  username: string;
   email: string;
   roles: string[];
   avatarUrl: string;
+}
+
+export interface Role {
+  value: string;
+  label: string;
+}
+
+export interface NewStaffInput {
+  name: string;
+  username: string;
+  email: string;
+  role: string;
+  password: string;
 }
 
 export interface Assignment {

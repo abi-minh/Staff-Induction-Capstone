@@ -1,5 +1,5 @@
 import client from './client';
-import type { StaffMember, ProgressRecord, AssignmentRecord } from '../types';
+import type { StaffMember, ProgressRecord, AssignmentRecord, Role, NewStaffInput } from '../types';
 
 interface InductionUser {
   id: number;
@@ -14,6 +14,7 @@ function normaliseUser(u: InductionUser): StaffMember {
   return {
     id: u.id,
     name: u.name,
+    username: u.slug ?? '',
     email: u.email ?? '',
     roles: u.roles ?? [],
     avatarUrl: u.avatar_urls?.['48'] ?? u.avatar_urls?.['96'] ?? '',
@@ -28,6 +29,23 @@ export async function fetchStaff(): Promise<StaffMember[]> {
 export async function fetchStaffMember(id: number): Promise<StaffMember> {
   const { data } = await client.get<InductionUser>(`induction/v1/staff/${id}`);
   return normaliseUser(data);
+}
+
+export async function fetchRoles(): Promise<Role[]> {
+  const { data } = await client.get<Role[]>('induction/v1/roles');
+  return data;
+}
+
+export async function createStaff(input: NewStaffInput): Promise<StaffMember> {
+  const { data } = await client.post<InductionUser>('induction/v1/staff', input);
+  return normaliseUser(data);
+}
+
+export async function removeStaff(userIds: number[]): Promise<{ removed: number[] }> {
+  const { data } = await client.post<{ removed: number[] }>('induction/v1/staff/remove', {
+    user_ids: userIds,
+  });
+  return data;
 }
 
 export async function bulkAssign(
