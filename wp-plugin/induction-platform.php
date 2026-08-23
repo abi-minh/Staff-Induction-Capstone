@@ -461,6 +461,14 @@ function induction_register_routes(): void {
         'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
     ] );
 
+    // POST /staff/{id}/role — change a staff member's role
+    register_rest_route( $ns, '/staff/(?P<id>\d+)/role', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_update_staff_role',
+        'permission_callback' => 'induction_is_admin_user',
+        'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+    ] );
+
     // GET /modules, POST /modules — list and create modules
     register_rest_route( $ns, '/modules', [
         [
@@ -592,10 +600,12 @@ function induction_get_user_assignments( WP_REST_Request $request ): WP_REST_Res
         return new WP_REST_Response( [ 'message' => 'User not found' ], 404 );
     }
 
-    $roles = $user->roles;
-
-    // Fetch published modules whose role_targets include any of the user's roles,
-    // OR modules explicitly assigned to this user (role target = "user:{id}").
+    // Fetch published modules explicitly assigned to this user
+    // (module_role_targets contains "user:{id}"). Role-slug and "all"
+    // broadcast targeting were retired along with the Module Edit screen's
+    // role checkboxes — per-user assignment is now the only mechanism, so
+    // legacy role/"all" entries left over on old modules are intentionally
+    // ignored here rather than making them keep showing to everyone forever.
     $modules = get_posts( [
         'post_type'      => 'induction_module',
         'post_status'    => 'publish',
@@ -605,12 +615,9 @@ function induction_get_user_assignments( WP_REST_Request $request ): WP_REST_Res
         'order'          => 'ASC',
     ] );
 
-    $assigned = array_filter( $modules, function( $post ) use ( $roles, $user_id ) {
+    $assigned = array_filter( $modules, function( $post ) use ( $user_id ) {
         $targets = get_post_meta( $post->ID, 'module_role_targets', true ) ?: [];
-        // Match by role slug or by explicit user ID target.
-        return array_intersect( $roles, $targets )
-            || in_array( 'user:' . $user_id, $targets, true )
-            || in_array( 'all', $targets, true );
+        return in_array( 'user:' . $user_id, $targets, true );
     } );
 
     // Return full REST representation of each post.
@@ -626,6 +633,15 @@ function induction_get_user_assignments( WP_REST_Request $request ): WP_REST_Res
     return new WP_REST_Response( $result );
 }
 
+// Drops legacy role-slug/"all" broadcast entries, keeping only well-formed
+// "user:{id}" targets. Per-user assignment (via bulk-assign/unassign) is the
+// only targeting mechanism left in the app; any assign/unassign call is a
+// natural point to clean up leftovers from the retired role-checkbox UI so a
+// module doesn't keep looking "assigned to everyone" forever.
+function induction_normalise_user_targets( array $targets ): array {
+    return array_values( array_filter( $targets, fn( $t ) => is_string( $t ) && str_starts_with( $t, 'user:' ) ) );
+}
+
 function induction_bulk_assign( WP_REST_Request $request ): WP_REST_Response {
     $module_id = (int) $request->get_param( 'module_id' );
     $user_ids  = array_map( 'intval', (array) $request->get_param( 'user_ids' ) );
@@ -635,7 +651,7 @@ function induction_bulk_assign( WP_REST_Request $request ): WP_REST_Response {
     }
 
     // Add each user as an explicit target on the module's role_targets meta.
-    $current_targets = get_post_meta( $module_id, 'module_role_targets', true ) ?: [];
+    $current_targets = induction_normalise_user_targets( get_post_meta( $module_id, 'module_role_targets', true ) ?: [] );
     foreach ( $user_ids as $uid ) {
         $key = 'user:' . $uid;
         if ( ! in_array( $key, $current_targets, true ) ) {
@@ -691,7 +707,7 @@ function induction_unassign( WP_REST_Request $request ): WP_REST_Response {
     }
 
     // Remove each user's explicit "user:{id}" target from the module.
-    $current_targets = get_post_meta( $module_id, 'module_role_targets', true ) ?: [];
+    $current_targets = induction_normalise_user_targets( get_post_meta( $module_id, 'module_role_targets', true ) ?: [] );
     $remove_keys     = array_map( fn( $uid ) => 'user:' . $uid, $user_ids );
     $updated         = array_values( array_filter(
         $current_targets,
@@ -1548,6 +1564,30 @@ function induction_get_staff_member( WP_REST_Request $request ): WP_REST_Respons
     return rest_ensure_response( induction_format_staff_user( $user ) );
 }
 
+function induction_update_staff_role( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id   = (int) $request['id'];
+    $role = sanitize_key( (string) $request->get_param( 'role' ) );
+
+    $user = get_user_by( 'id', $id );
+    if ( ! $user ) {
+        return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
+    }
+    if ( $id === get_current_user_id() ) {
+        return new WP_Error( 'cannot_change_own_role', 'You cannot change your own role.', [ 'status' => 400 ] );
+    }
+    if ( in_array( 'administrator', (array) $user->roles, true ) ) {
+        return new WP_Error( 'cannot_change_admin', 'Administrator roles cannot be changed here.', [ 'status' => 400 ] );
+    }
+    $assignable = induction_assignable_roles();
+    if ( ! isset( $assignable[ $role ] ) ) {
+        return new WP_Error( 'invalid_role', 'Please choose a valid role.', [ 'status' => 400 ] );
+    }
+
+    $user->set_role( $role );
+
+    return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $id ) ) );
+}
+
 function induction_format_module( WP_Post $post ): array {
     $blocks_json = get_post_meta( $post->ID, 'module_blocks', true ) ?: '[]';
     if ( ! current_user_can( 'manage_induction' ) ) {
@@ -1708,6 +1748,38 @@ function induction_is_portal_page(): bool {
     }
     $post = get_post();
     return $post && has_shortcode( $post->post_content, 'induction_portal' );
+}
+
+// This page bypasses the theme entirely for the SPA (see portal-page.php),
+// so wp_head() still pulls in third-party CSS/JS meant for the theme's own
+// pages — none of which this page has any use for. Buffer wp_head() and
+// strip the two known offenders out of this page only, rather than
+// disabling them site-wide:
+//   - MailerLite's universal.js: injected as raw markup (not via
+//     wp_enqueue_script, so there's no handle to dequeue) and conflicts
+//     with the SPA's own scripts.
+//   - Elementor's global Kit CSS: a site-wide default stylesheet
+//     (input[type=...], select, textarea { border / padding / width... })
+//     that WordPress enqueues on every front-end page regardless of
+//     whether that page has any Elementor content. It overrides the SPA's
+//     MUI-styled inputs because a plain `input[type=text]` selector has
+//     higher specificity than a single MUI class.
+function induction_portal_render_head(): void {
+    ob_start();
+    wp_head();
+    $head_output = ob_get_clean();
+    $head_output = preg_replace_callback(
+        '#<script\b[^>]*>.*?</script>#is',
+        fn( $matches ) => ( stripos( $matches[0], 'mailerlite' ) !== false ) ? '' : $matches[0],
+        $head_output
+    );
+    $head_output = preg_replace( '#<link\b[^>]*href=["\'][^"\']*elementor[^"\']*["\'][^>]*/?>#i', '', $head_output );
+    $head_output = preg_replace_callback(
+        '#<style\b[^>]*id=["\'][^"\']*elementor[^"\']*["\'][^>]*>.*?</style>#is',
+        fn() => '',
+        $head_output
+    );
+    echo $head_output;
 }
 
 function induction_portal_template( string $template ): string {
