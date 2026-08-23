@@ -42,6 +42,7 @@ export interface ModuleMeta {
   module_role_targets: string[];
   module_estimated_minutes: number;
   module_order: number;
+  module_duration_days: number;
   module_blocks: string; // JSON-encoded Section[]
   module_icon: string;
   module_hero_image: number;
@@ -55,6 +56,7 @@ export interface ModuleFormValues {
   module_role_targets: string[];
   module_estimated_minutes: number;
   module_order: number;
+  module_duration_days: number;
   module_blocks?: string;
   module_icon: string;
   module_hero_image: number;
@@ -101,6 +103,12 @@ export interface Assignment {
   dueDate: string | null;
   assignedAt: string;
   assignedBy: number;
+}
+
+export interface AssignmentRecord {
+  moduleId: number;
+  assignedAt: string;
+  dueDate: string | null;
 }
 
 // ─── Progress ─────────────────────────────────────────────────────────────────
@@ -171,6 +179,15 @@ export interface ReportSummary {
   overallCompletionPct: number;
   moduleReports: ModuleCompletionReport[];
   completionOverTime: { date: string; completed: number }[];
+}
+
+export interface OverdueItem {
+  userId: number;
+  userName: string;
+  moduleId: number;
+  moduleTitle: string;
+  dueDate: string;
+  notCompletedCount: number;
 }
 
 // ─── WP Media ─────────────────────────────────────────────────────────────────

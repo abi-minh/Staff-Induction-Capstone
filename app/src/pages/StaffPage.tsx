@@ -20,7 +20,7 @@ import {
 } from "@mui/material";
 import SearchIcon from "@mui/icons-material/Search";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
-import { useStaff, useBulkAssign } from "../hooks/useStaff";
+import { useStaff, useBulkAssign, useUnassign } from "../hooks/useStaff";
 import { useModules } from "../hooks/useModules";
 import { useReports } from "../hooks/useReports";
 import type { ReportSummary } from "../types";
@@ -110,6 +110,7 @@ export default function StaffPage() {
   const { data: modules = [], isLoading: modulesLoading } = useModules();
   const { data: reports } = useReports();
   const bulkAssign = useBulkAssign();
+  const unassign = useUnassign();
 
   const [search, setSearch] = useState("");
   const [assigningUserId, setAssigningUserId] = useState<number | null>(null);
@@ -198,6 +199,18 @@ export default function StaffPage() {
     setSelectedModules([]);
     setDueDate("");
   }
+
+  async function handleUnassign(moduleId: number) {
+    if (assigningUserId == null) return;
+    await unassign.mutateAsync({ moduleId, userIds: [assigningUserId] });
+  }
+
+  const assignedModules =
+    assigningUserId == null
+      ? []
+      : modules.filter((m) =>
+          (m.meta.module_role_targets ?? []).includes(`user:${assigningUserId}`),
+        );
 
   if (staffLoading) {
     return <Typography>Loading...</Typography>;
@@ -438,6 +451,28 @@ export default function StaffPage() {
                 </li>
               ))}
             </ul>
+          )}
+          {assignedModules.length > 0 && (
+            <Box sx={{ mt: 1, mb: 1 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                Currently assigned
+              </Typography>
+              <ul>
+                {assignedModules.map((m) => (
+                  <li key={m.id}>
+                    {m.title || "(Untitled)"}{" "}
+                    <Button
+                      size="small"
+                      color="error"
+                      onClick={() => handleUnassign(m.id)}
+                      disabled={unassign.isLoading}
+                    >
+                      Remove
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </Box>
           )}
           <div>
             <label>Due date (optional) </label>

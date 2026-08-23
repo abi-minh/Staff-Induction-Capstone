@@ -59,6 +59,7 @@ function induction_register_post_types(): void {
     register_post_meta( 'induction_module', 'module_role_targets',      [ 'type' => 'array',   'single' => true, 'show_in_rest' => [ 'schema' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ] ], 'default' => [],   'auth_callback' => $induction_auth ] );
     register_post_meta( 'induction_module', 'module_estimated_minutes', [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,   'auth_callback' => $induction_auth ] );
     register_post_meta( 'induction_module', 'module_order',             [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,   'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_module', 'module_duration_days',     [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,   'auth_callback' => $induction_auth ] );
     register_post_meta( 'induction_module', 'module_blocks',            [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '[]', 'sanitize_callback' => 'induction_sanitize_blocks_json', 'auth_callback' => $induction_auth ] );
     register_post_meta( 'induction_module', 'quiz_pass_threshold',      [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 70,  'auth_callback' => $induction_auth ] );
     register_post_meta( 'induction_module', 'module_icon',              [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',  'auth_callback' => $induction_auth ] );
@@ -234,6 +235,22 @@ function induction_create_tables(): void {
             KEY idx_user_module (user_id, module_id)
         ) $charset;" );
     }
+
+    // Assignments table — one row per (user, module) assignment, with a due date.
+    $assignments_table = $wpdb->prefix . 'induction_assignments';
+    if ( $wpdb->get_var( "SHOW TABLES LIKE '$assignments_table'" ) !== $assignments_table ) {
+        dbDelta( "CREATE TABLE $assignments_table (
+            id           BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            user_id      BIGINT UNSIGNED NOT NULL,
+            module_id    BIGINT UNSIGNED NOT NULL,
+            assigned_at  DATETIME NOT NULL,
+            due_date     DATETIME NULL,
+            assigned_by  BIGINT UNSIGNED NULL,
+            UNIQUE KEY user_module (user_id, module_id),
+            KEY idx_user_id (user_id),
+            KEY idx_module_id (module_id)
+        ) $charset;" );
+    }
 }
 
 // ─── REST API endpoints ──────────────────────────────────────────────────────
@@ -270,10 +287,25 @@ function induction_register_routes(): void {
         'args'                => [ 'id' => [ 'type' => 'integer' ] ],
     ] );
 
+    // GET /assignments/records/user/{id} — raw assignment rows (with due dates)
+    register_rest_route( $ns, '/assignments/records/user/(?P<id>\d+)', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_get_user_assignment_records',
+        'permission_callback' => 'induction_can_view_own_progress',
+        'args'                => [ 'id' => [ 'type' => 'integer' ] ],
+    ] );
+
     // POST /assignments/bulk — assign module(s) to user(s) (admin only)
     register_rest_route( $ns, '/assignments/bulk', [
         'methods'             => 'POST',
         'callback'            => 'induction_bulk_assign',
+        'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+    ] );
+
+    // POST /assignments/remove — unassign module(s) from user(s) (admin only)
+    register_rest_route( $ns, '/assignments/remove', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_unassign',
         'permission_callback' => fn() => current_user_can( 'manage_induction' ),
     ] );
 
@@ -289,6 +321,13 @@ function induction_register_routes(): void {
     register_rest_route( $ns, '/reports/summary', [
         'methods'             => 'GET',
         'callback'            => 'induction_get_reports_summary',
+        'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+    ] );
+
+    // GET /reports/overdue — overdue assignments (admin only)
+    register_rest_route( $ns, '/reports/overdue', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_get_overdue',
         'permission_callback' => fn() => current_user_can( 'manage_induction' ),
     ] );
 
@@ -586,7 +625,86 @@ function induction_bulk_assign( WP_REST_Request $request ): WP_REST_Response {
     }
     update_post_meta( $module_id, 'module_role_targets', $current_targets );
 
+    // Record an assignment row per user, with an auto-calculated due date.
+    global $wpdb;
+    $assignments_table = $wpdb->prefix . 'induction_assignments';
+    $now               = current_time( 'mysql' );
+    $duration_days     = (int) get_post_meta( $module_id, 'module_duration_days', true );
+    $explicit_due      = $request->get_param( 'due_date' );
+
+    if ( $explicit_due ) {
+        $due_date = $explicit_due;
+    } elseif ( $duration_days > 0 ) {
+        $due_date = date( 'Y-m-d H:i:s', strtotime( $now . ' +' . $duration_days . ' days' ) );
+    } else {
+        $due_date = null;
+    }
+
+    foreach ( $user_ids as $uid ) {
+        $existing = $wpdb->get_var( $wpdb->prepare(
+            "SELECT id FROM $assignments_table WHERE user_id = %d AND module_id = %d",
+            $uid, $module_id
+        ) );
+        if ( $existing ) {
+            if ( $due_date !== null ) {
+                $wpdb->update( $assignments_table, [ 'due_date' => $due_date ], [ 'id' => (int) $existing ] );
+            }
+        } else {
+            $wpdb->insert( $assignments_table, [
+                'user_id'     => $uid,
+                'module_id'   => $module_id,
+                'assigned_at' => $now,
+                'due_date'    => $due_date,
+                'assigned_by' => get_current_user_id(),
+            ] );
+        }
+    }
+
     return new WP_REST_Response( [ 'assigned' => count( $user_ids ) ] );
+}
+
+function induction_unassign( WP_REST_Request $request ): WP_REST_Response {
+    $module_id = (int) $request->get_param( 'module_id' );
+    $user_ids  = array_map( 'intval', (array) $request->get_param( 'user_ids' ) );
+
+    if ( ! $module_id || empty( $user_ids ) ) {
+        return new WP_REST_Response( [ 'message' => 'module_id and user_ids are required' ], 400 );
+    }
+
+    // Remove each user's explicit "user:{id}" target from the module.
+    $current_targets = get_post_meta( $module_id, 'module_role_targets', true ) ?: [];
+    $remove_keys     = array_map( fn( $uid ) => 'user:' . $uid, $user_ids );
+    $updated         = array_values( array_filter(
+        $current_targets,
+        fn( $t ) => ! in_array( $t, $remove_keys, true )
+    ) );
+    update_post_meta( $module_id, 'module_role_targets', $updated );
+
+    // Delete the assignment rows for these users.
+    global $wpdb;
+    $assignments_table = $wpdb->prefix . 'induction_assignments';
+    $placeholders      = implode( ',', array_fill( 0, count( $user_ids ), '%d' ) );
+    $wpdb->query( $wpdb->prepare(
+        "DELETE FROM $assignments_table WHERE module_id = %d AND user_id IN ($placeholders)",
+        array_merge( [ $module_id ], $user_ids )
+    ) );
+
+    return new WP_REST_Response( [ 'removed' => count( $user_ids ) ] );
+}
+
+function induction_get_user_assignment_records( WP_REST_Request $request ): WP_REST_Response {
+    global $wpdb;
+    $user_id = (int) $request->get_param( 'id' );
+    $table   = $wpdb->prefix . 'induction_assignments';
+    $rows    = $wpdb->get_results(
+        $wpdb->prepare( "SELECT module_id, assigned_at, due_date FROM $table WHERE user_id = %d", $user_id ),
+        ARRAY_A
+    ) ?? [];
+    return new WP_REST_Response( array_map( fn( $r ) => [
+        'moduleId'   => (int) $r['module_id'],
+        'assignedAt' => $r['assigned_at'],
+        'dueDate'    => $r['due_date'] ?: null,
+    ], $rows ) );
 }
 
 function induction_get_module_progress( WP_REST_Request $request ): WP_REST_Response {
@@ -695,6 +813,55 @@ function induction_get_reports_summary(): WP_REST_Response {
             'completed' => (int) $r['completed'],
         ], $completions_by_date ),
     ] );
+}
+
+function induction_get_overdue(): WP_REST_Response {
+    global $wpdb;
+    $assignments = $wpdb->prefix . 'induction_assignments';
+    $progress    = $wpdb->prefix . 'induction_progress';
+    $now         = current_time( 'mysql' );
+
+    // Overdue = assignment past its due date and not completed by that user.
+    $rows = $wpdb->get_results( $wpdb->prepare(
+        "SELECT a.user_id, a.module_id, a.due_date
+         FROM $assignments a
+         LEFT JOIN $progress p
+           ON p.user_id = a.user_id AND p.module_id = a.module_id
+         WHERE a.due_date IS NOT NULL
+           AND a.due_date < %s
+           AND ( p.status IS NULL OR p.status <> 'completed' )
+         ORDER BY a.due_date ASC",
+        $now
+    ), ARRAY_A ) ?? [];
+
+    // Per-user count of assigned modules not yet completed (for the overdue table).
+    $count_rows = $wpdb->get_results(
+        "SELECT a.user_id, COUNT(*) AS cnt
+         FROM $assignments a
+         LEFT JOIN $progress p
+           ON p.user_id = a.user_id AND p.module_id = a.module_id
+         WHERE ( p.status IS NULL OR p.status <> 'completed' )
+         GROUP BY a.user_id",
+        ARRAY_A
+    ) ?? [];
+    $not_completed = [];
+    foreach ( $count_rows as $cr ) {
+        $not_completed[ (int) $cr['user_id'] ] = (int) $cr['cnt'];
+    }
+
+    $result = array_map( function ( $r ) use ( $not_completed ) {
+        $user = get_userdata( (int) $r['user_id'] );
+        return [
+            'userId'            => (int) $r['user_id'],
+            'userName'          => $user ? $user->display_name : 'Unknown',
+            'moduleId'          => (int) $r['module_id'],
+            'moduleTitle'       => get_the_title( (int) $r['module_id'] ) ?: '(Untitled)',
+            'dueDate'           => $r['due_date'],
+            'notCompletedCount' => $not_completed[ (int) $r['user_id'] ] ?? 0,
+        ];
+    }, $rows );
+
+    return new WP_REST_Response( $result );
 }
 
 // ─── Quiz Callbacks ─────────────────────────────────────────────────────────
@@ -1285,6 +1452,7 @@ function induction_format_module( WP_Post $post ): array {
             'module_role_targets'      => get_post_meta( $post->ID, 'module_role_targets', true ) ?: [],
             'module_estimated_minutes' => (int) get_post_meta( $post->ID, 'module_estimated_minutes', true ),
             'module_order'             => (int) get_post_meta( $post->ID, 'module_order', true ),
+            'module_duration_days'     => (int) get_post_meta( $post->ID, 'module_duration_days', true ),
             'module_blocks'            => $blocks_json,
             'module_icon'              => get_post_meta( $post->ID, 'module_icon', true ) ?: '',
             'module_hero_image'        => (int) get_post_meta( $post->ID, 'module_hero_image', true ),
@@ -1301,6 +1469,9 @@ function induction_save_module_meta( int $id, array $meta ): void {
     }
     if ( isset( $meta['module_order'] ) ) {
         update_post_meta( $id, 'module_order', (int) $meta['module_order'] );
+    }
+    if ( isset( $meta['module_duration_days'] ) ) {
+        update_post_meta( $id, 'module_duration_days', (int) $meta['module_duration_days'] );
     }
     if ( isset( $meta['module_blocks'] ) ) {
         update_post_meta( $id, 'module_blocks', (string) $meta['module_blocks'] );

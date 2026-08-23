@@ -1,5 +1,5 @@
 import client from './client';
-import type { ReportSummary } from '../types';
+import type { ReportSummary, OverdueItem } from '../types';
 
 interface WPReportSummary {
   total_modules: number;
@@ -42,4 +42,9 @@ export async function fetchReportSummary(): Promise<ReportSummary> {
       })),
     })),
   };
+}
+
+export async function fetchOverdue(): Promise<OverdueItem[]> {
+  const { data } = await client.get<OverdueItem[]>('induction/v1/reports/overdue');
+  return data;
 }
