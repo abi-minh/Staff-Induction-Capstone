@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { Alert, Box, Button, Chip, Typography } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import { useModule, useUpdateModule } from '../hooks/useModules';
+import { fetchModule } from '../api/modules';
 import SectionEditor from './SectionEditor';
 import { parseSections } from '../blocks/utils';
-import type { Section } from '../types';
+import type { Module, Section } from '../types';
 
 const roundedButtonSx = { borderRadius: '10px' };
 
@@ -17,6 +19,7 @@ export default function SectionEditPage() {
 
   const { data: module, isLoading, error } = useModule(moduleId);
   const updateModule = useUpdateModule(moduleId);
+  const queryClient = useQueryClient();
 
   const [section, setSection] = useState<Section | null>(null);
   const [allSections, setAllSections] = useState<Section[]>([]);
@@ -43,19 +46,34 @@ export default function SectionEditPage() {
     setSection(updated);
   }
 
+  // Re-fetches the module right before writing so the merge is based on the
+  // latest server state, not the snapshot loaded when this page first
+  // mounted — otherwise saving here can clobber sections changed elsewhere
+  // (another tab, or edits made since this page was opened) with stale data.
+  async function fetchLatestModule(): Promise<Module> {
+    return queryClient.fetchQuery({
+      queryKey: ['module', moduleId],
+      queryFn: () => fetchModule(moduleId),
+    });
+  }
+
   async function handleSave() {
     if (!section || !module) return;
-    const updated = allSections.map((s) => (s.id === sectionId ? section : s));
+    const latest = await fetchLatestModule();
+    const latestSections = parseSections(latest.meta.module_blocks);
+    const updated = latestSections.some((s) => s.id === sectionId)
+      ? latestSections.map((s) => (s.id === sectionId ? section : s))
+      : [...latestSections, section];
     await updateModule.mutateAsync({
-      title: module.title,
-      content: module.content,
-      excerpt: module.excerpt,
-      status: module.status,
-      module_role_targets: module.meta.module_role_targets,
-      module_estimated_minutes: module.meta.module_estimated_minutes,
-      module_order: module.meta.module_order,
-      module_icon: module.meta.module_icon,
-      module_hero_image: module.meta.module_hero_image,
+      title: latest.title,
+      content: latest.content,
+      excerpt: latest.excerpt,
+      status: latest.status,
+      module_role_targets: latest.meta.module_role_targets,
+      module_estimated_minutes: latest.meta.module_estimated_minutes,
+      module_order: latest.meta.module_order,
+      module_icon: latest.meta.module_icon,
+      module_hero_image: latest.meta.module_hero_image,
       module_blocks: JSON.stringify(updated),
     });
     navigate(`/modules/${id}`);
@@ -63,17 +81,18 @@ export default function SectionEditPage() {
 
   async function handleRemove() {
     if (!module) return;
-    const updated = allSections.filter((s) => s.id !== sectionId);
+    const latest = await fetchLatestModule();
+    const updated = parseSections(latest.meta.module_blocks).filter((s) => s.id !== sectionId);
     await updateModule.mutateAsync({
-      title: module.title,
-      content: module.content,
-      excerpt: module.excerpt,
-      status: module.status,
-      module_role_targets: module.meta.module_role_targets,
-      module_estimated_minutes: module.meta.module_estimated_minutes,
-      module_order: module.meta.module_order,
-      module_icon: module.meta.module_icon,
-      module_hero_image: module.meta.module_hero_image,
+      title: latest.title,
+      content: latest.content,
+      excerpt: latest.excerpt,
+      status: latest.status,
+      module_role_targets: latest.meta.module_role_targets,
+      module_estimated_minutes: latest.meta.module_estimated_minutes,
+      module_order: latest.meta.module_order,
+      module_icon: latest.meta.module_icon,
+      module_hero_image: latest.meta.module_hero_image,
       module_blocks: JSON.stringify(updated),
     });
     navigate(`/modules/${id}`);
