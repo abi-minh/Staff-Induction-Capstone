@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, fetchRoles, createStaff, removeStaff } from '../api/staff';
+import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, fetchRoles, createStaff, removeStaff, updateStaffRole } from '../api/staff';
 import type { NewStaffInput } from '../types';
 
 export function useStaff() {
@@ -46,6 +46,17 @@ export function useCreateStaff() {
   });
 }
 
+export function useUpdateStaffRole() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, role }: { id: number; role: string }) => updateStaffRole(id, role),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['staff'] });
+      qc.invalidateQueries({ queryKey: ['staff', variables.id] });
+    },
+  });
+}
+
 export function useRemoveStaff() {
   const qc = useQueryClient();
   return useMutation({
@@ -63,12 +74,15 @@ export function useBulkAssign() {
   return useMutation({
     mutationFn: ({ moduleId, userIds, dueDate }: { moduleId: number; userIds: number[]; dueDate?: string }) =>
       bulkAssign(moduleId, userIds, dueDate),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['staff'] });
       qc.invalidateQueries({ queryKey: ['modules'] });
+      qc.invalidateQueries({ queryKey: ['module', variables.moduleId] });
       qc.invalidateQueries({ queryKey: ['reports'] });
       qc.invalidateQueries({ queryKey: ['overdue'] });
       qc.invalidateQueries({ queryKey: ['staffAssignments'] });
+      qc.invalidateQueries({ queryKey: ['portal', 'module', variables.moduleId] });
+      qc.invalidateQueries({ queryKey: ['portal', 'modules', 'assigned'] });
     },
   });
 }
@@ -78,12 +92,15 @@ export function useUnassign() {
   return useMutation({
     mutationFn: ({ moduleId, userIds }: { moduleId: number; userIds: number[] }) =>
       unassign(moduleId, userIds),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['staff'] });
       qc.invalidateQueries({ queryKey: ['modules'] });
+      qc.invalidateQueries({ queryKey: ['module', variables.moduleId] });
       qc.invalidateQueries({ queryKey: ['reports'] });
       qc.invalidateQueries({ queryKey: ['overdue'] });
       qc.invalidateQueries({ queryKey: ['staffAssignments'] });
+      qc.invalidateQueries({ queryKey: ['portal', 'module', variables.moduleId] });
+      qc.invalidateQueries({ queryKey: ['portal', 'modules', 'assigned'] });
     },
   });
 }

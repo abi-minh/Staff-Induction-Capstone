@@ -41,6 +41,11 @@ export async function createStaff(input: NewStaffInput): Promise<StaffMember> {
   return normaliseUser(data);
 }
 
+export async function updateStaffRole(id: number, role: string): Promise<StaffMember> {
+  const { data } = await client.post<InductionUser>(`induction/v1/staff/${id}/role`, { role });
+  return normaliseUser(data);
+}
+
 export async function removeStaff(userIds: number[]): Promise<{ removed: number[] }> {
   const { data } = await client.post<{ removed: number[] }>('induction/v1/staff/remove', {
     user_ids: userIds,

@@ -6,6 +6,7 @@ import {
 import type {
   Block, BlockType, PlacedBlock, QuizBlock, RowBlock, RowChildBlock, Section,
 } from '../types';
+import { stripHtml } from '../util/strings';
 
 let blockCounter = 0;
 let sectionCounter = 0;
@@ -197,4 +198,35 @@ function blockToHtml(block: Block): string {
 
 export function blocksToHtml(blocks: Block[]): string {
   return blocks.map(blockToHtml).join('\n');
+}
+
+// Plain-text extraction for text-to-speech — quiz blocks are skipped since
+// question/answer content isn't meant to be read aloud as prose.
+function blockToSpeechText(block: Block): string {
+  switch (block.type) {
+    case 'heading':
+      return block.data.text;
+    case 'text':
+      return stripHtml(block.data.html);
+    case 'image':
+      return block.data.caption ?? '';
+    case 'video':
+      return block.data.caption ?? '';
+    case 'list':
+      return block.data.items.filter(Boolean).join('. ');
+    case 'callout':
+      return [block.data.title, block.data.body].filter(Boolean).join('. ');
+    case 'row':
+      return block.data.children.map((p) => blockToSpeechText(p.block)).filter(Boolean).join('. ');
+    case 'multiple_choice':
+    case 'true_false':
+    case 'short_answer':
+      return '';
+  }
+}
+
+export function sectionToSpeechText(section: Section): string {
+  return [section.title, section.description, ...section.blocks.map(blockToSpeechText)]
+    .filter(Boolean)
+    .join('. ');
 }

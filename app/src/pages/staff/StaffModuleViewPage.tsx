@@ -21,8 +21,12 @@ import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CheckCircleOutlined from "@mui/icons-material/CheckCircleOutlined";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import PauseCircleOutlined from "@mui/icons-material/PauseCircleOutlined";
+import PlayCircleOutlined from "@mui/icons-material/PlayCircleOutlined";
 import ScheduleOutlined from "@mui/icons-material/ScheduleOutlined";
+import StopCircleOutlined from "@mui/icons-material/StopCircleOutlined";
 import VisibilityOutlined from "@mui/icons-material/VisibilityOutlined";
+import VolumeUpOutlined from "@mui/icons-material/VolumeUpOutlined";
 import {
   usePortalModule,
   useModuleProgress,
@@ -36,9 +40,10 @@ import {
   fetchQuizResponses,
 } from "../../api/portal";
 import { useAuthStore } from "../../store/authStore";
+import { useSpeech } from "../../hooks/useSpeech";
 import BlockRenderer from "../../components/BlockRenderer";
 import HeroBanner from "../../components/HeroBanner";
-import { parseSections } from "../../blocks/utils";
+import { parseSections, sectionToSpeechText } from "../../blocks/utils";
 import type { Section } from "../../types";
 
 // Fallback gradients for sections without a hero image
@@ -61,6 +66,7 @@ export default function StaffModuleViewPage() {
   const { progress, isLoading: progressLoading } = useModuleProgress(moduleId);
   const markComplete = useMarkComplete();
   const submitQuizReview = useSubmitQuizForReview();
+  const speech = useSpeech();
 
   const lsKey = `section-completions-${moduleId}`;
 
@@ -123,6 +129,16 @@ export default function StaffModuleViewPage() {
   useEffect(() => {
     localStorage.setItem(lsKey, JSON.stringify(completedSectionIds));
   }, [completedSectionIds, lsKey]);
+
+  // Stop any in-progress narration when the viewer moves to a different
+  // section (or back to the overview) rather than letting it keep reading.
+  // speech.stop is stable (useCallback in useSpeech); the `speech` object
+  // itself is recreated every render, so depending on it here would cancel
+  // playback on the very next render after speak() is called.
+  useEffect(() => {
+    speech.stop();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedSectionId, speech.stop]);
 
   useEffect(() => {
     // Wait for the real progress record before deciding it's missing — on
@@ -257,6 +273,7 @@ export default function StaffModuleViewPage() {
       sections.length > 0
         ? Math.round((completedCount / sections.length) * 100)
         : 0;
+    const speechText = sectionToSpeechText(currentSection);
 
     return (
       <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -295,17 +312,62 @@ export default function StaffModuleViewPage() {
         </TextField>
 
         {/* Title and description */}
-        {(currentSection.title || currentSection.description) && (
-          <Box>
-            {currentSection.title && (
-              <Typography variant="h2" sx={{ mb: 0.5 }}>
-                {currentSection.title}
-              </Typography>
-            )}
-            {currentSection.description && (
-              <Typography color="text.secondary" sx={{ lineHeight: 1.6 }}>
-                {currentSection.description}
-              </Typography>
+        {(currentSection.title || currentSection.description || speechText) && (
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              gap: 2,
+              flexWrap: "wrap",
+            }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              {currentSection.title && (
+                <Typography variant="h2" sx={{ mb: 0.5 }}>
+                  {currentSection.title}
+                </Typography>
+              )}
+              {currentSection.description && (
+                <Typography color="text.secondary" sx={{ lineHeight: 1.6 }}>
+                  {currentSection.description}
+                </Typography>
+              )}
+            </Box>
+
+            {speech.supported && speechText && (
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={
+                    speech.status === "playing" ? (
+                      <PauseCircleOutlined />
+                    ) : speech.status === "paused" ? (
+                      <PlayCircleOutlined />
+                    ) : (
+                      <VolumeUpOutlined />
+                    )
+                  }
+                  onClick={() => {
+                    if (speech.status === "playing") speech.pause();
+                    else if (speech.status === "paused") speech.resume();
+                    else speech.speak(speechText);
+                  }}
+                  sx={{ borderRadius: 999 }}
+                >
+                  {speech.status === "playing"
+                    ? "Pause"
+                    : speech.status === "paused"
+                      ? "Resume"
+                      : "Read aloud"}
+                </Button>
+                {speech.status !== "idle" && (
+                  <IconButton size="small" onClick={speech.stop} aria-label="Stop reading">
+                    <StopCircleOutlined fontSize="small" />
+                  </IconButton>
+                )}
+              </Box>
             )}
           </Box>
         )}

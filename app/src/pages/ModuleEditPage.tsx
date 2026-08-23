@@ -11,11 +11,10 @@ import PublishIcon from '@mui/icons-material/SendOutlined';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import { useCreateModule, useModule, useUpdateModule } from '../hooks/useModules';
 import { useUploadMedia } from '../hooks/useDocuments';
+import { useStaff, useBulkAssign, useUnassign } from '../hooks/useStaff';
 import { createSection, parseSections } from '../blocks/utils';
 import { ICON_OPTIONS, getIconByKey } from '../components/iconLibrary';
 import type { ModuleFormValues, Section } from '../types';
-
-const ROLES = ['staff', 'manager', 'casual', 'all'];
 
 const empty: ModuleFormValues = {
   title: '',
@@ -32,8 +31,15 @@ const empty: ModuleFormValues = {
 
 const roundedButtonSx = { borderRadius: '10px' };
 
-function createEditorSnapshot(form: ModuleFormValues, sections: Section[]): string {
-  return JSON.stringify({ form, sections });
+function createEditorSnapshot(form: ModuleFormValues, sections: Section[], assignedUserIds: number[]): string {
+  return JSON.stringify({ form, sections, assignedUserIds: [...assignedUserIds].sort((a, b) => a - b) });
+}
+
+function extractAssignedUserIds(targets: string[]): number[] {
+  return targets
+    .filter((t) => t.startsWith('user:'))
+    .map((t) => Number(t.slice('user:'.length)))
+    .filter((n) => Number.isFinite(n));
 }
 
 export default function ModuleEditPage() {
@@ -46,19 +52,25 @@ export default function ModuleEditPage() {
   const createModule = useCreateModule();
   const updateModule = useUpdateModule(moduleId);
   const uploadMedia = useUploadMedia();
+  const { data: staff = [] } = useStaff();
+  const bulkAssign = useBulkAssign();
+  const unassign = useUnassign();
 
   const [form, setForm] = useState<ModuleFormValues>(empty);
   const [sections, setSections] = useState<Section[]>([]);
   const [heroPreview, setHeroPreview] = useState('');
+  const [assignedUserIds, setAssignedUserIds] = useState<number[]>([]);
+  const [initialAssignedUserIds, setInitialAssignedUserIds] = useState<number[]>([]);
+  const [staffSearch, setStaffSearch] = useState('');
   const [initialSnapshot, setInitialSnapshot] = useState(() =>
-    createEditorSnapshot(empty, [])
+    createEditorSnapshot(empty, [], [])
   );
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const heroFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isNew) {
-      setInitialSnapshot(createEditorSnapshot(empty, []));
+      setInitialSnapshot(createEditorSnapshot(empty, [], []));
       return;
     }
     if (!existing) return;
@@ -76,44 +88,72 @@ export default function ModuleEditPage() {
       module_hero_image: existing.meta.module_hero_image,
     };
     const nextSections = parseSections(existing.meta.module_blocks);
+    const nextAssignedUserIds = extractAssignedUserIds(existing.meta.module_role_targets ?? []);
 
     setForm(nextForm);
     setSections(nextSections);
-    setInitialSnapshot(createEditorSnapshot(nextForm, nextSections));
+    setAssignedUserIds(nextAssignedUserIds);
+    setInitialAssignedUserIds(nextAssignedUserIds);
+    setInitialSnapshot(createEditorSnapshot(nextForm, nextSections, nextAssignedUserIds));
   }, [existing, isNew]);
 
-  const saving = createModule.isLoading || updateModule.isLoading;
+  const saving =
+    createModule.isLoading || updateModule.isLoading || bulkAssign.isLoading || unassign.isLoading;
   const SelectedIcon = getIconByKey(form.module_icon);
-  const isDirty = createEditorSnapshot(form, sections) !== initialSnapshot;
+  const isDirty = createEditorSnapshot(form, sections, assignedUserIds) !== initialSnapshot;
+  const filteredStaffForPicker = staff.filter((s) =>
+    s.name.toLowerCase().includes(staffSearch.trim().toLowerCase())
+  );
 
   function set<K extends keyof ModuleFormValues>(key: K, value: ModuleFormValues[K]) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
-  function toggleRole(role: string) {
-    set(
-      'module_role_targets',
-      form.module_role_targets.includes(role)
-        ? form.module_role_targets.filter((r) => r !== role)
-        : [...form.module_role_targets, role]
+  function toggleAssignedUser(userId: number) {
+    setAssignedUserIds((prev) =>
+      prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
     );
   }
 
   async function handleSave(statusOverride?: 'draft' | 'publish') {
-    const values = {
-      ...form,
-      status: statusOverride ?? form.status,
-      module_blocks: JSON.stringify(sections),
-    };
-
     if (isNew) {
+      const values = {
+        ...form,
+        status: statusOverride ?? form.status,
+        module_blocks: JSON.stringify(sections),
+      };
       await createModule.mutateAsync(values);
       navigate('/modules', { replace: true });
       return;
     }
 
-    await updateModule.mutateAsync(values);
-    setInitialSnapshot(createEditorSnapshot(form, sections));
+    // Staff assignment changes go through bulkAssign/unassign (not the plain
+    // module meta update below) so the induction_assignments table — due
+    // dates, assigned-at timestamps, the Overdue report — stays in sync.
+    // These run before the module update so its module_role_targets
+    // invalidation refetch reflects the finished assignment writes rather
+    // than racing ahead of them.
+    const toAssign = assignedUserIds.filter((uid) => !initialAssignedUserIds.includes(uid));
+    const toUnassign = initialAssignedUserIds.filter((uid) => !assignedUserIds.includes(uid));
+    await Promise.all([
+      ...toAssign.map((uid) => bulkAssign.mutateAsync({ moduleId, userIds: [uid] })),
+      ...toUnassign.map((uid) => unassign.mutateAsync({ moduleId, userIds: [uid] })),
+    ]);
+
+    await updateModule.mutateAsync({
+      title: form.title,
+      content: form.content,
+      excerpt: form.excerpt,
+      status: statusOverride ?? form.status,
+      module_estimated_minutes: form.module_estimated_minutes,
+      module_order: form.module_order,
+      module_duration_days: form.module_duration_days,
+      module_icon: form.module_icon,
+      module_hero_image: form.module_hero_image,
+      module_blocks: JSON.stringify(sections),
+    });
+    setInitialSnapshot(createEditorSnapshot(form, sections, assignedUserIds));
+    setInitialAssignedUserIds(assignedUserIds);
   }
 
   async function handleAddSection() {
@@ -124,7 +164,7 @@ export default function ModuleEditPage() {
       module_blocks: JSON.stringify(newSections),
     });
     setSections(newSections);
-    setInitialSnapshot(createEditorSnapshot(form, newSections));
+    setInitialSnapshot(createEditorSnapshot(form, newSections, assignedUserIds));
     navigate(`/modules/${id}/sections/${newSection.id}`);
   }
 
@@ -215,16 +255,53 @@ export default function ModuleEditPage() {
           </Box>
 
           <Box>
-            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>Role Assignment</Typography>
-            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
-              {ROLES.map((role) => (
-                <FormControlLabel
-                  key={role}
-                  control={<Checkbox checked={form.module_role_targets.includes(role)} onChange={() => toggleRole(role)} />}
-                  label={role}
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>Assigned Staff</Typography>
+            {isNew ? (
+              <Box sx={{ border: '1px dashed', borderColor: 'divider', borderRadius: 2, p: 2.5, color: 'text.secondary' }}>
+                <Typography variant="body2">Save the module first, then assign staff.</Typography>
+              </Box>
+            ) : (
+              <>
+                <TextField
+                  value={staffSearch}
+                  onChange={(e) => setStaffSearch(e.target.value)}
+                  placeholder="Search staff..."
+                  size="small"
+                  fullWidth
+                  sx={{ mb: 1.5 }}
                 />
-              ))}
-            </Box>
+                <Box sx={{ maxHeight: 280, overflowY: 'auto', border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+                  {filteredStaffForPicker.length === 0 ? (
+                    <Typography color="text.secondary" sx={{ p: 2 }}>No staff match your search.</Typography>
+                  ) : (
+                    filteredStaffForPicker.map((s) => (
+                      <Box
+                        key={s.id}
+                        sx={{
+                          display: 'flex', alignItems: 'center', gap: 1, pl: 1, pr: 2,
+                          borderBottom: '1px solid', borderColor: 'divider',
+                          '&:last-of-type': { borderBottom: 'none' },
+                        }}
+                      >
+                        <FormControlLabel
+                          sx={{ flex: 1, minWidth: 0, mr: 0 }}
+                          control={
+                            <Checkbox
+                              checked={assignedUserIds.includes(s.id)}
+                              onChange={() => toggleAssignedUser(s.id)}
+                            />
+                          }
+                          label={s.name}
+                        />
+                      </Box>
+                    ))
+                  )}
+                </Box>
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
+                  {assignedUserIds.length} staff member{assignedUserIds.length !== 1 ? 's' : ''} assigned. Changes are saved when you click Save or Publish.
+                </Typography>
+              </>
+            )}
           </Box>
 
           <Box>

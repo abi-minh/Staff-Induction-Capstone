@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link as RouterLink } from "react-router-dom";
 import {
   Alert,
@@ -6,10 +6,12 @@ import {
   Box,
   Button,
   Checkbox,
+  Chip,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   InputAdornment,
   Link,
   MenuItem,
@@ -48,6 +50,34 @@ const ROLE_LABELS: Record<string, string> = {
 
 function formatRoles(roles: string[]): string {
   return roles.map((r) => ROLE_LABELS[r] ?? r).join(", ") || "-";
+}
+
+function slugifyNamePart(part: string): string {
+  return part
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+// First name + last name, squashed together (e.g. "Jane Q. Doe" -> "janedoe").
+function suggestUsername(fullName: string): string {
+  const words = fullName
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(slugifyNamePart)
+    .filter(Boolean);
+  if (words.length === 0) return "";
+  if (words.length === 1) return words[0];
+  return words[0] + words[words.length - 1];
+}
+
+function uniqueUsername(base: string, taken: Set<string>): string {
+  if (!base || !taken.has(base)) return base;
+  let suffix = 2;
+  while (taken.has(`${base}${suffix}`)) suffix++;
+  return `${base}${suffix}`;
 }
 
 type CompletionStatus = "completed" | "in_progress" | "not_started" | "none";
@@ -149,11 +179,23 @@ export default function StaffPage() {
   });
   const [addError, setAddError] = useState("");
   const [created, setCreated] = useState<StaffMember | null>(null);
+  // Tracks whether the admin has typed into Username directly, so the
+  // auto-fill-from-Name watcher below stops overwriting a deliberate edit.
+  const usernameEditedRef = useRef(false);
+
+  useEffect(() => {
+    if (!addOpen || usernameEditedRef.current) return;
+    const base = suggestUsername(addForm.name);
+    const taken = new Set(staff.map((s) => s.username.toLowerCase()));
+    const next = base ? uniqueUsername(base, taken) : "";
+    setAddForm((f) => (f.username === next ? f : { ...f, username: next }));
+  }, [addForm.name, addOpen, staff]);
 
   const [search, setSearch] = useState("");
   const [assigningUserId, setAssigningUserId] = useState<number | null>(null);
   const [selectedModules, setSelectedModules] = useState<number[]>([]);
   const [dueDate, setDueDate] = useState("");
+  const [moduleSearch, setModuleSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [roleFilter, setRoleFilter] = useState("");
@@ -230,6 +272,7 @@ export default function StaffPage() {
     setAddForm({ name: "", username: "", email: "", role: "", password: "" });
     setAddError("");
     setCreated(null);
+    usernameEditedRef.current = false;
     setAddOpen(true);
   }
 
@@ -312,25 +355,21 @@ export default function StaffPage() {
     );
   }
 
-  async function handleAssign() {
-    if (!assigningUserId) return;
-    await Promise.all(
-      selectedModules.map((mid) =>
-        bulkAssign.mutateAsync({
-          moduleId: mid,
-          userIds: [assigningUserId],
-          dueDate: dueDate || undefined,
-        }),
-      ),
-    );
+  function openAssign(userId: number) {
+    const assignedIds = modules
+      .filter((m) => (m.meta.module_role_targets ?? []).includes(`user:${userId}`))
+      .map((m) => m.id);
+    setAssigningUserId(userId);
+    setSelectedModules(assignedIds);
+    setDueDate("");
+    setModuleSearch("");
+  }
+
+  function closeAssign() {
     setAssigningUserId(null);
     setSelectedModules([]);
     setDueDate("");
-  }
-
-  async function handleUnassign(moduleId: number) {
-    if (assigningUserId == null) return;
-    await unassign.mutateAsync({ moduleId, userIds: [assigningUserId] });
+    setModuleSearch("");
   }
 
   const assignedModules =
@@ -341,6 +380,32 @@ export default function StaffPage() {
             `user:${assigningUserId}`,
           ),
         );
+  const assignedModuleIds = assignedModules.map((m) => m.id);
+  const isAssignDirty =
+    selectedModules.length !== assignedModuleIds.length ||
+    selectedModules.some((id) => !assignedModuleIds.includes(id));
+  const filteredAssignModules = modules.filter((m) =>
+    (m.title || "(Untitled)").toLowerCase().includes(moduleSearch.trim().toLowerCase()),
+  );
+
+  async function handleAssign() {
+    if (!assigningUserId) return;
+    const toAssign = selectedModules.filter((id) => !assignedModuleIds.includes(id));
+    const toUnassign = assignedModuleIds.filter((id) => !selectedModules.includes(id));
+    await Promise.all([
+      ...toAssign.map((mid) =>
+        bulkAssign.mutateAsync({
+          moduleId: mid,
+          userIds: [assigningUserId],
+          dueDate: dueDate || undefined,
+        }),
+      ),
+      ...toUnassign.map((mid) =>
+        unassign.mutateAsync({ moduleId: mid, userIds: [assigningUserId] }),
+      ),
+    ]);
+    closeAssign();
+  }
 
   if (staffLoading) {
     return <Typography>Loading...</Typography>;
@@ -363,7 +428,15 @@ export default function StaffPage() {
             mb: 2,
           }}
         >
-          <Typography variant="h1">Staff</Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1.5, flexWrap: "wrap" }}>
+            <Typography variant="h1">Staff</Typography>
+            <Chip
+              label={`${staff.length} total`}
+              size="small"
+              variant="outlined"
+              sx={{ fontWeight: 600 }}
+            />
+          </Box>
           <Box sx={{ display: "flex", gap: 1.5, flexWrap: "wrap" }}>
             <Button
               variant="contained"
@@ -613,10 +686,7 @@ export default function StaffPage() {
                       </Button>
                       <Button
                         size="small"
-                        onClick={() => {
-                          setAssigningUserId(s.id);
-                          setSelectedModules([]);
-                        }}
+                        onClick={() => openAssign(s.id)}
                         sx={{ color: "text.secondary" }}
                       >
                         Assign
@@ -640,72 +710,107 @@ export default function StaffPage() {
         </Paper>
       </Box>
 
-      {assigningUserId !== null && (
-        <Box sx={{ mt: 3 }}>
-          <Typography variant="h2" sx={{ mb: 1 }}>
-            Assign modules to{" "}
-            {staff.find((s) => s.id === assigningUserId)?.name}
-          </Typography>
+      <Dialog open={assigningUserId !== null} onClose={closeAssign} maxWidth="sm" fullWidth>
+        <DialogTitle>
+          Assign Modules to {staff.find((s) => s.id === assigningUserId)?.name}
+        </DialogTitle>
+        <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
+          <TextField
+            value={moduleSearch}
+            onChange={(e) => setModuleSearch(e.target.value)}
+            placeholder="Search modules..."
+            size="small"
+            fullWidth
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon sx={{ color: "text.secondary" }} fontSize="small" />
+                  </InputAdornment>
+                ),
+              },
+            }}
+          />
+
           {modulesLoading ? (
-            <Typography>Loading modules…</Typography>
+            <Typography color="text.secondary">Loading modules…</Typography>
           ) : (
-            <ul>
-              {modules.map((m) => (
-                <li key={m.id}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={selectedModules.includes(m.id)}
-                      onChange={() => toggleModule(m.id)}
-                    />{" "}
-                    {m.title || "(Untitled)"}
-                  </label>
-                </li>
-              ))}
-            </ul>
-          )}
-          {assignedModules.length > 0 && (
-            <Box sx={{ mt: 1, mb: 1 }}>
-              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
-                Currently assigned
-              </Typography>
-              <ul>
-                {assignedModules.map((m) => (
-                  <li key={m.id}>
-                    {m.title || "(Untitled)"}{" "}
-                    <Button
-                      size="small"
-                      color="error"
-                      onClick={() => handleUnassign(m.id)}
-                      disabled={unassign.isLoading}
-                    >
-                      Remove
-                    </Button>
-                  </li>
-                ))}
-              </ul>
+            <Box
+              sx={{
+                maxHeight: 320,
+                overflowY: "auto",
+                border: "1px solid",
+                borderColor: "divider",
+                borderRadius: 1.5,
+              }}
+            >
+              {filteredAssignModules.length === 0 ? (
+                <Typography color="text.secondary" sx={{ p: 2 }}>
+                  No modules match your search.
+                </Typography>
+              ) : (
+                filteredAssignModules.map((m) => (
+                  <Box
+                    key={m.id}
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 1,
+                      pl: 1,
+                      pr: 2,
+                      borderBottom: "1px solid",
+                      borderColor: "divider",
+                      "&:last-of-type": { borderBottom: "none" },
+                    }}
+                  >
+                    <FormControlLabel
+                      sx={{ flex: 1, minWidth: 0, mr: 0 }}
+                      control={
+                        <Checkbox
+                          checked={selectedModules.includes(m.id)}
+                          onChange={() => toggleModule(m.id)}
+                        />
+                      }
+                      label={m.title || "(Untitled)"}
+                    />
+                    {assignedModuleIds.includes(m.id) && (
+                      <Chip
+                        label="Assigned"
+                        size="small"
+                        color="success"
+                        variant="outlined"
+                        sx={{ height: 22, fontSize: "0.7rem", flexShrink: 0 }}
+                      />
+                    )}
+                  </Box>
+                ))
+              )}
             </Box>
           )}
-          <div>
-            <label>Due date (optional) </label>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-            />
-          </div>
+
+          <TextField
+            label="Due date for new assignments (optional)"
+            type="date"
+            value={dueDate}
+            onChange={(e) => setDueDate(e.target.value)}
+            fullWidth
+            slotProps={{ inputLabel: { shrink: true } }}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={closeAssign}>Cancel</Button>
           <Button
             variant="contained"
             onClick={handleAssign}
-            disabled={selectedModules.length === 0 || bulkAssign.isLoading}
+            disabled={!isAssignDirty || bulkAssign.isLoading || unassign.isLoading}
+            sx={{ borderRadius: 999 }}
           >
-            {bulkAssign.isLoading
-              ? "Assigning…"
+            {bulkAssign.isLoading || unassign.isLoading
+              ? "Saving…"
               : `Assign (${selectedModules.length})`}
-          </Button>{" "}
-          <Button onClick={() => setAssigningUserId(null)}>Cancel</Button>
-        </Box>
-      )}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={addOpen} onClose={closeAdd} maxWidth="xs" fullWidth>
         <DialogTitle>{created ? "Staff added" : "Add Staff"}</DialogTitle>
@@ -734,11 +839,13 @@ export default function StaffPage() {
               <TextField
                 label="Username"
                 value={addForm.username}
-                onChange={(e) =>
-                  setAddForm((f) => ({ ...f, username: e.target.value }))
-                }
+                onChange={(e) => {
+                  const value = e.target.value;
+                  usernameEditedRef.current = value.trim() !== "";
+                  setAddForm((f) => ({ ...f, username: value }));
+                }}
                 fullWidth
-                helperText="They can sign in with this or their email."
+                helperText="Auto-filled from Name. They can sign in with this or their email."
               />
               <TextField
                 label="Email Address"

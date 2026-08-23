@@ -1,13 +1,17 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useParams, Link as RouterLink } from 'react-router-dom';
 import {
-  Alert, Box, Button, Chip, Link, Paper, Table, TableBody,
-  TableCell, TableHead, TableRow, Typography,
+  Alert, Box, Button, Chip, IconButton, Link, MenuItem, Paper, Table, TableBody,
+  TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutlined';
-import { useStaffMember, useStaffProgress, useStaffAssignments } from '../hooks/useStaff';
+import {
+  useStaffMember, useStaffProgress, useStaffAssignments, useRoles, useUpdateStaffRole,
+} from '../hooks/useStaff';
 import { useModules } from '../hooks/useModules';
+import { useAuthStore } from '../store/authStore';
 import { parseSections } from '../blocks/utils';
 import type { ProgressRecord, ProgressStatus } from '../types';
 
@@ -55,6 +59,12 @@ export default function StaffDetailPage() {
   const { data: progress, isLoading: l2 } = useStaffProgress(userId);
   const { data: modules,  isLoading: l3 } = useModules();
   const { data: assignments = [], isLoading: l4 } = useStaffAssignments(userId);
+  const { data: roles = [] } = useRoles();
+  const updateRole = useUpdateStaffRole();
+  const currentUserId = useAuthStore((s) => s.user?.id);
+
+  const [editingRole, setEditingRole] = useState(false);
+  const [roleError, setRoleError] = useState('');
 
   const moduleQuizFlags = useMemo(() => {
     const flags = new Map<number, boolean>();
@@ -67,6 +77,21 @@ export default function StaffDetailPage() {
 
   if (l1 || l2 || l3 || l4) return <Typography>Loading...</Typography>;
   if (!staff) return <Alert severity="warning">Staff member not found.</Alert>;
+
+  const isAdmin = staff.roles.includes('administrator');
+  const isSelf = staff.id === currentUserId;
+  const canEditRole = !isAdmin && !isSelf;
+  const currentRoleValue = staff.roles.find((r) => roles.some((opt) => opt.value === r)) ?? staff.roles[0] ?? '';
+
+  async function handleRoleChange(role: string) {
+    setRoleError('');
+    try {
+      await updateRole.mutateAsync({ id: userId, role });
+      setEditingRole(false);
+    } catch (err) {
+      setRoleError((err as Error).message);
+    }
+  }
 
   // Most recently created progress row per module wins.
   const progressMap = new Map<number, ProgressRecord>();
@@ -114,7 +139,36 @@ export default function StaffDetailPage() {
           </Box>
           <Box>
             <Typography variant="caption" color="text.secondary">Role</Typography>
-            <Typography>{formatRoles(staff.roles)}</Typography>
+            {editingRole ? (
+              <TextField
+                select
+                size="small"
+                value={currentRoleValue}
+                onChange={(e) => handleRoleChange(e.target.value)}
+                disabled={updateRole.isLoading}
+                sx={{ mt: 0.5, minWidth: 200, display: 'block' }}
+              >
+                {roles.map((r) => (
+                  <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>
+                ))}
+              </TextField>
+            ) : (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Typography>{formatRoles(staff.roles)}</Typography>
+                {canEditRole && (
+                  <Tooltip title="Change role">
+                    <IconButton size="small" onClick={() => setEditingRole(true)}>
+                      <EditOutlinedIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                )}
+              </Box>
+            )}
+            {roleError && (
+              <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
+                {roleError}
+              </Typography>
+            )}
           </Box>
         </Box>
       </Paper>
