@@ -1292,7 +1292,22 @@ function induction_format_module( WP_Post $post ): array {
     ];
 }
 
-function induction_save_module_meta( int $id, array $meta ): void {
+function induction_save_module_meta( int $id, array $meta ): true|WP_Error {
+    // Validate module_blocks before writing anything: a malformed/truncated
+    // payload must never be allowed to silently overwrite the sections that
+    // are already saved on the post.
+    $decoded_blocks = null;
+    if ( isset( $meta['module_blocks'] ) ) {
+        $decoded_blocks = json_decode( (string) $meta['module_blocks'], true );
+        if ( ! is_array( $decoded_blocks ) || json_last_error() !== JSON_ERROR_NONE ) {
+            return new WP_Error(
+                'induction_invalid_module_blocks',
+                'Module content was not saved because the submitted section data was not valid JSON.',
+                [ 'status' => 400 ]
+            );
+        }
+    }
+
     if ( isset( $meta['module_role_targets'] ) ) {
         update_post_meta( $id, 'module_role_targets', (array) $meta['module_role_targets'] );
     }
@@ -1302,8 +1317,8 @@ function induction_save_module_meta( int $id, array $meta ): void {
     if ( isset( $meta['module_order'] ) ) {
         update_post_meta( $id, 'module_order', (int) $meta['module_order'] );
     }
-    if ( isset( $meta['module_blocks'] ) ) {
-        update_post_meta( $id, 'module_blocks', (string) $meta['module_blocks'] );
+    if ( $decoded_blocks !== null ) {
+        update_post_meta( $id, 'module_blocks', wp_json_encode( $decoded_blocks ) );
     }
     if ( isset( $meta['module_icon'] ) ) {
         update_post_meta( $id, 'module_icon', sanitize_text_field( (string) $meta['module_icon'] ) );
@@ -1311,6 +1326,7 @@ function induction_save_module_meta( int $id, array $meta ): void {
     if ( isset( $meta['module_hero_image'] ) ) {
         update_post_meta( $id, 'module_hero_image', (int) $meta['module_hero_image'] );
     }
+    return true;
 }
 
 function induction_get_modules(): WP_REST_Response {
@@ -1346,7 +1362,10 @@ function induction_create_module( WP_REST_Request $request ): WP_REST_Response|W
     if ( is_wp_error( $id ) ) {
         return $id;
     }
-    induction_save_module_meta( $id, $params['meta'] ?? [] );
+    $meta_result = induction_save_module_meta( $id, $params['meta'] ?? [] );
+    if ( is_wp_error( $meta_result ) ) {
+        return $meta_result;
+    }
     return rest_ensure_response( induction_format_module( get_post( $id ) ) );
 }
 
@@ -1369,7 +1388,10 @@ function induction_update_module( WP_REST_Request $request ): WP_REST_Response|W
         return $result;
     }
     if ( isset( $params['meta'] ) ) {
-        induction_save_module_meta( $id, $params['meta'] );
+        $meta_result = induction_save_module_meta( $id, $params['meta'] );
+        if ( is_wp_error( $meta_result ) ) {
+            return $meta_result;
+        }
     }
     return rest_ensure_response( induction_format_module( get_post( $id ) ) );
 }
