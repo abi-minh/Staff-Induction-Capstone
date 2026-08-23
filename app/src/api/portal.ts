@@ -16,6 +16,7 @@ interface WPPortalModule {
     module_role_targets: string[];
     module_estimated_minutes: number;
     module_order: number;
+    module_duration_days: number;
     module_blocks: string;
     module_icon: string;
     module_hero_image: number;
@@ -65,6 +66,7 @@ function normaliseModule(wp: WPPortalModule): Module {
       module_role_targets: wp.meta.module_role_targets ?? [],
       module_estimated_minutes: wp.meta.module_estimated_minutes ?? 0,
       module_order: wp.meta.module_order ?? 0,
+      module_duration_days: wp.meta.module_duration_days ?? 0,
       module_blocks: wp.meta.module_blocks ?? '[]',
       module_icon: wp.meta.module_icon ?? '',
       module_hero_image: wp.meta.module_hero_image ?? 0,

@@ -1,5 +1,5 @@
 import client from './client';
-import type { StaffMember, ProgressRecord } from '../types';
+import type { StaffMember, ProgressRecord, AssignmentRecord } from '../types';
 
 interface InductionUser {
   id: number;
@@ -39,6 +39,17 @@ export async function bulkAssign(
     module_id: moduleId,
     user_ids: userIds,
     due_date: dueDate ?? null,
+  });
+  return data;
+}
+
+export async function unassign(
+  moduleId: number,
+  userIds: number[]
+): Promise<{ removed: number }> {
+  const { data } = await client.post<{ removed: number }>('induction/v1/assignments/remove', {
+    module_id: moduleId,
+    user_ids: userIds,
   });
   return data;
 }
@@ -83,4 +94,11 @@ export async function fetchModuleProgress(moduleId: number): Promise<ProgressRec
     `induction/v1/progress/module/${moduleId}`
   );
   return data.map(normaliseProgress);
+}
+
+export async function fetchStaffAssignments(userId: number): Promise<AssignmentRecord[]> {
+  const { data } = await client.get<AssignmentRecord[]>(
+    `induction/v1/assignments/records/user/${userId}`
+  );
+  return data;
 }

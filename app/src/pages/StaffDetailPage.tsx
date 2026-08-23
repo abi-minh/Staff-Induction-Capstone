@@ -1,14 +1,25 @@
 import { useMemo } from 'react';
 import { useParams, Link as RouterLink } from 'react-router-dom';
 import {
-  Alert, Avatar, Box, Button, Chip, Link, Paper, Table, TableBody,
+  Alert, Box, Button, Chip, Link, Paper, Table, TableBody,
   TableCell, TableHead, TableRow, Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
-import { useStaffMember, useStaffProgress } from '../hooks/useStaff';
+import PersonOutlineIcon from '@mui/icons-material/PersonOutlined';
+import { useStaffMember, useStaffProgress, useStaffAssignments } from '../hooks/useStaff';
 import { useModules } from '../hooks/useModules';
 import { parseSections } from '../blocks/utils';
 import type { ProgressRecord, ProgressStatus } from '../types';
+
+const ROLE_LABELS: Record<string, string> = {
+  staff:           'Staff',
+  induction_admin: 'Induction Admin',
+  administrator:   'Administrator',
+};
+
+function formatRoles(roles: string[]): string {
+  return roles.map((r) => ROLE_LABELS[r] ?? r).join(', ') || '-';
+}
 
 const STATUS_LABELS: Record<ProgressStatus, string> = {
   completed: 'Completed',
@@ -29,6 +40,13 @@ function quizStatus(p: ProgressRecord | undefined): { label: string; color: 'def
   return { label: 'Awaiting review', color: 'warning' };
 }
 
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 export default function StaffDetailPage() {
   const { id }   = useParams<{ id: string }>();
   const userId   = Number(id);
@@ -36,6 +54,7 @@ export default function StaffDetailPage() {
   const { data: staff,    isLoading: l1 } = useStaffMember(userId);
   const { data: progress, isLoading: l2 } = useStaffProgress(userId);
   const { data: modules,  isLoading: l3 } = useModules();
+  const { data: assignments = [], isLoading: l4 } = useStaffAssignments(userId);
 
   const moduleQuizFlags = useMemo(() => {
     const flags = new Map<number, boolean>();
@@ -46,17 +65,16 @@ export default function StaffDetailPage() {
     return flags;
   }, [modules]);
 
-  if (l1 || l2 || l3) return <Typography>Loading...</Typography>;
+  if (l1 || l2 || l3 || l4) return <Typography>Loading...</Typography>;
   if (!staff) return <Alert severity="warning">Staff member not found.</Alert>;
 
-  // Build the map deterministically (most recently created row per module
-  // wins) rather than trusting array order, in case the API ever returns
-  // more than one progress row for the same module.
+  // Most recently created progress row per module wins.
   const progressMap = new Map<number, ProgressRecord>();
   (progress ?? []).forEach((p) => {
     const existing = progressMap.get(p.moduleId);
     if (!existing || p.id > existing.id) progressMap.set(p.moduleId, p);
   });
+  const assignmentMap  = new Map(assignments.map((a) => [a.moduleId, a]));
   const completedCount = Array.from(progressMap.values()).filter((p) => p.status === 'completed').length;
   const totalModules   = modules?.length ?? 0;
   const pct            = totalModules > 0 ? Math.round((completedCount / totalModules) * 100) : 0;
@@ -73,20 +91,35 @@ export default function StaffDetailPage() {
         Back to Staff
       </Button>
 
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 3 }}>
-        <Avatar src={staff.avatarUrl} sx={{ width: 64, height: 64, fontSize: '1.5rem', bgcolor: 'primary.main' }}>
-          {staff.name.charAt(0).toUpperCase()}
-        </Avatar>
-        <Box>
-          <Typography variant="h1" sx={{ mb: 0.25 }}>{staff.name}</Typography>
-          {staff.email && <Typography color="text.secondary">{staff.email}</Typography>}
-        </Box>
-      </Box>
+      <Typography variant="h1" sx={{ fontSize: '1.9rem', mb: 3 }}>Staff Info</Typography>
 
+      {/* Employee Description (PB-016) */}
+      <Paper variant="outlined" sx={{ p: 3, mb: 3, borderRadius: 2, maxWidth: 820 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2.5, color: 'primary.main' }}>
+          <PersonOutlineIcon />
+          <Typography sx={{ fontWeight: 700, color: 'text.primary' }}>Employee Description</Typography>
+        </Box>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, gap: 2 }}>
+          <Box>
+            <Typography variant="caption" color="text.secondary">Name</Typography>
+            <Typography sx={{ fontWeight: 600 }}>{staff.name}</Typography>
+          </Box>
+          <Box>
+            <Typography variant="caption" color="text.secondary">Email</Typography>
+            <Typography>{staff.email || '-'}</Typography>
+          </Box>
+          <Box>
+            <Typography variant="caption" color="text.secondary">Role</Typography>
+            <Typography>{formatRoles(staff.roles)}</Typography>
+          </Box>
+        </Box>
+      </Paper>
+
+      {/* Completion summary */}
       <Paper
         sx={{
           display: 'flex', gap: 5, p: { xs: 2.5, md: 3 }, mb: 3,
-          border: '1px solid', borderColor: 'divider', borderRadius: 2,
+          border: '1px solid', borderColor: 'divider', borderRadius: 2, maxWidth: 820,
         }}
       >
         <Box>
@@ -99,9 +132,10 @@ export default function StaffDetailPage() {
         </Box>
       </Paper>
 
+      {/* Module table: Minh's quiz-review table + PB-017 assigned/due columns */}
       <Paper
         sx={{
-          overflow: 'hidden',
+          overflow: 'auto',
           boxShadow: '0 14px 40px rgba(15, 23, 42, 0.06)',
           border: '1px solid',
           borderColor: 'divider',
@@ -110,7 +144,7 @@ export default function StaffDetailPage() {
         <Table>
           <TableHead>
             <TableRow>
-              {['Module', 'Status', 'Completed', 'Time Spent', 'Quiz Status'].map((label) => (
+              {['Module', 'Status', 'Assigned', 'Due', 'Completed', 'Time Spent', 'Quiz Status'].map((label) => (
                 <TableCell key={label} sx={{ py: 2.25, fontWeight: 700, borderBottom: '1px solid', borderColor: 'divider' }}>
                   {label}
                 </TableCell>
@@ -120,6 +154,7 @@ export default function StaffDetailPage() {
           <TableBody>
             {(modules ?? []).map((m) => {
               const p = progressMap.get(m.id);
+              const a = assignmentMap.get(m.id);
               const hasModuleQuiz = moduleQuizFlags.get(m.id) ?? false;
               const status = p?.status ?? 'not_started';
               const qs = quizStatus(p);
@@ -141,6 +176,8 @@ export default function StaffDetailPage() {
                   <TableCell>
                     <Chip label={STATUS_LABELS[status]} color={STATUS_COLORS[status]} size="small" variant="outlined" sx={{ borderRadius: 999, fontWeight: 500 }} />
                   </TableCell>
+                  <TableCell>{a ? formatDate(a.assignedAt) : '—'}</TableCell>
+                  <TableCell>{a?.dueDate ? formatDate(a.dueDate) : '—'}</TableCell>
                   <TableCell>{p?.completedAt ? new Date(p.completedAt).toLocaleDateString() : '—'}</TableCell>
                   <TableCell>{p?.timeSpent ? `${Math.round(p.timeSpent / 60)} min` : '—'}</TableCell>
                   <TableCell>
@@ -154,7 +191,7 @@ export default function StaffDetailPage() {
 
             {!(modules ?? []).length && (
               <TableRow>
-                <TableCell colSpan={5} sx={{ py: 6 }}>
+                <TableCell colSpan={7} sx={{ py: 6 }}>
                   <Typography color="text.secondary">No modules found.</Typography>
                 </TableCell>
               </TableRow>

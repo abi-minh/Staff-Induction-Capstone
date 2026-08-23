@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchStaff, fetchStaffMember, fetchStaffProgress, bulkAssign } from '../api/staff';
+import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign } from '../api/staff';
 
 export function useStaff() {
   return useQuery({ queryKey: ['staff'], queryFn: fetchStaff, staleTime: 1000 * 60 * 5 });
@@ -21,6 +21,14 @@ export function useStaffProgress(userId: number) {
   });
 }
 
+export function useStaffAssignments(userId: number) {
+  return useQuery({
+    queryKey: ['staffAssignments', userId],
+    queryFn: () => fetchStaffAssignments(userId),
+    enabled: userId > 0,
+  });
+}
+
 export function useBulkAssign() {
   const qc = useQueryClient();
   return useMutation({
@@ -29,6 +37,24 @@ export function useBulkAssign() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['staff'] });
       qc.invalidateQueries({ queryKey: ['modules'] });
+      qc.invalidateQueries({ queryKey: ['reports'] });
+      qc.invalidateQueries({ queryKey: ['overdue'] });
+      qc.invalidateQueries({ queryKey: ['staffAssignments'] });
+    },
+  });
+}
+
+export function useUnassign() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ moduleId, userIds }: { moduleId: number; userIds: number[] }) =>
+      unassign(moduleId, userIds),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['staff'] });
+      qc.invalidateQueries({ queryKey: ['modules'] });
+      qc.invalidateQueries({ queryKey: ['reports'] });
+      qc.invalidateQueries({ queryKey: ['overdue'] });
+      qc.invalidateQueries({ queryKey: ['staffAssignments'] });
     },
   });
 }
