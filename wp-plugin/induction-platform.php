@@ -429,8 +429,27 @@ function induction_register_routes(): void {
 
     // GET /staff — list all staff users (avoids wp/v2/users which hosts may block)
     register_rest_route( $ns, '/staff', [
+        [
+            'methods'             => 'GET',
+            'callback'            => 'induction_get_staff_list',
+            'permission_callback' => 'induction_is_admin_user',
+        ],
+        [
+            'methods'             => 'POST',
+            'callback'            => 'induction_create_staff',
+            'permission_callback' => 'induction_is_admin_user',
+        ],
+    ] );
+
+    register_rest_route( $ns, '/roles', [
         'methods'             => 'GET',
-        'callback'            => 'induction_get_staff_list',
+        'callback'            => 'induction_get_roles',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    register_rest_route( $ns, '/staff/remove', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_delete_staff',
         'permission_callback' => 'induction_is_admin_user',
     ] );
 
@@ -1422,9 +1441,103 @@ function induction_format_staff_user( WP_User $user ): array {
     ];
 }
 
+function induction_assignable_roles(): array {
+    $core  = [ 'administrator', 'editor', 'author', 'contributor', 'subscriber' ];
+    $names = wp_roles()->get_names();
+    return array_diff_key( $names, array_flip( $core ) );
+}
+
+function induction_get_roles(): WP_REST_Response {
+    $out = [];
+    foreach ( induction_assignable_roles() as $slug => $label ) {
+        $out[] = [ 'value' => $slug, 'label' => $label ];
+    }
+    return rest_ensure_response( $out );
+}
+
 function induction_get_staff_list(): WP_REST_Response {
-    $users = get_users( [ 'role__in' => [ 'staff', 'induction_admin' ], 'number' => 200 ] );
+    $roles = array_keys( induction_assignable_roles() );
+    if ( empty( $roles ) ) {
+        return rest_ensure_response( [] );
+    }
+    $users = get_users( [ 'role__in' => $roles, 'number' => 200 ] );
     return rest_ensure_response( array_map( 'induction_format_staff_user', $users ) );
+}
+
+function induction_create_staff( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $name     = sanitize_text_field( (string) $request->get_param( 'name' ) );
+    $username = sanitize_user( (string) $request->get_param( 'username' ), true );
+    $email    = sanitize_email( (string) $request->get_param( 'email' ) );
+    $role     = sanitize_key( (string) $request->get_param( 'role' ) );
+    $password = (string) $request->get_param( 'password' );
+
+    if ( $username === '' ) {
+        return new WP_Error( 'invalid_username', 'Please enter a valid username.', [ 'status' => 400 ] );
+    }
+    if ( username_exists( $username ) ) {
+        return new WP_Error( 'username_exists', 'That username is already taken.', [ 'status' => 409 ] );
+    }
+    if ( ! is_email( $email ) ) {
+        return new WP_Error( 'invalid_email', 'A valid email address is required.', [ 'status' => 400 ] );
+    }
+    if ( email_exists( $email ) ) {
+        return new WP_Error( 'email_exists', 'That email address is already registered.', [ 'status' => 409 ] );
+    }
+    $assignable = induction_assignable_roles();
+    if ( ! isset( $assignable[ $role ] ) ) {
+        return new WP_Error( 'invalid_role', 'Please choose a valid role.', [ 'status' => 400 ] );
+    }
+    if ( strlen( $password ) < 8 ) {
+        return new WP_Error( 'weak_password', 'Password must be at least 8 characters.', [ 'status' => 400 ] );
+    }
+
+    $user_id = wp_insert_user( [
+        'user_login'   => $username,
+        'user_email'   => $email,
+        'user_pass'    => $password,
+        'display_name' => $name !== '' ? $name : $username,
+        'role'         => $role,
+    ] );
+
+    if ( is_wp_error( $user_id ) ) {
+        return new WP_Error( 'create_failed', $user_id->get_error_message(), [ 'status' => 400 ] );
+    }
+
+    return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $user_id ) ) );
+}
+
+function induction_delete_staff( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    require_once ABSPATH . 'wp-admin/includes/user.php';
+    global $wpdb;
+
+    $ids = array_filter( array_map( 'intval', (array) $request->get_param( 'user_ids' ) ) );
+    if ( empty( $ids ) ) {
+        return new WP_Error( 'no_users', 'No staff members selected.', [ 'status' => 400 ] );
+    }
+
+    $current    = get_current_user_id();
+    $assignable = array_keys( induction_assignable_roles() );
+    $removed    = [];
+
+    foreach ( $ids as $id ) {
+        if ( $id === $current ) {
+            continue;
+        }
+        $user = get_user_by( 'id', $id );
+        if ( ! $user
+            || in_array( 'administrator', (array) $user->roles, true )
+            || ! array_intersect( $user->roles, $assignable ) ) {
+            continue;
+        }
+        if ( wp_delete_user( $id, $current ) ) {
+            foreach ( [ 'induction_progress', 'induction_quiz_responses', 'induction_assignments' ] as $table ) {
+                $wpdb->delete( $wpdb->prefix . $table, [ 'user_id' => $id ] );
+            }
+            $removed[] = $id;
+        }
+    }
+
+    return rest_ensure_response( [ 'removed' => $removed ] );
 }
 
 function induction_get_staff_member( WP_REST_Request $request ): WP_REST_Response|WP_Error {

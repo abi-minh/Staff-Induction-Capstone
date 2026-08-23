@@ -99,10 +99,14 @@ export default function StaffDetailPage() {
           <PersonOutlineIcon />
           <Typography sx={{ fontWeight: 700, color: 'text.primary' }}>Employee Description</Typography>
         </Box>
-        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' }, gap: 2 }}>
+        <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' }, gap: 2 }}>
           <Box>
             <Typography variant="caption" color="text.secondary">Name</Typography>
             <Typography sx={{ fontWeight: 600 }}>{staff.name}</Typography>
+          </Box>
+          <Box>
+            <Typography variant="caption" color="text.secondary">Username</Typography>
+            <Typography>{staff.username || '-'}</Typography>
           </Box>
           <Box>
             <Typography variant="caption" color="text.secondary">Email</Typography>
