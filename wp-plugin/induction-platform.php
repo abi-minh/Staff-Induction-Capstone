@@ -1642,6 +1642,27 @@ function induction_save_module_meta( int $id, array $meta ): true|WP_Error {
         update_post_meta( $id, 'module_duration_days', (int) $meta['module_duration_days'] );
     }
     if ( $decoded_blocks !== null ) {
+        // Belt-and-suspenders against silent wipes: something upstream of
+        // this function (observed in practice: Wordfence's WAF stripping
+        // attribute="value"-looking content — e.g. the style="..." attributes
+        // any pasted-from-Office/OneNote rich text is full of — from POST
+        // bodies hitting this custom REST namespace, while leaving the
+        // request otherwise looking like a normal 200) can turn a legitimate
+        // edit into an empty array before it ever reaches PHP validation. A
+        // save that would drop an existing module from having sections to
+        // having none is far more likely to be corruption than intent — a
+        // real "delete everything" is done section-by-section, not via a
+        // single whole-module save.
+        $existing_raw     = get_post_meta( $id, 'module_blocks', true );
+        $existing_decoded = $existing_raw ? json_decode( $existing_raw, true ) : [];
+        $existing_count   = is_array( $existing_decoded ) ? count( $existing_decoded ) : 0;
+        if ( $existing_count > 0 && count( $decoded_blocks ) === 0 ) {
+            return new WP_Error(
+                'induction_blocks_wipe_rejected',
+                'Module content was not saved: the submitted section data was empty even though this module currently has saved sections. This looks like the request was corrupted in transit rather than an intentional edit. If you really want to remove every section, delete them one at a time instead.',
+                [ 'status' => 409 ]
+            );
+        }
         update_post_meta( $id, 'module_blocks', wp_json_encode( $decoded_blocks ) );
     }
     if ( isset( $meta['module_icon'] ) ) {
@@ -1790,7 +1811,12 @@ function induction_portal_template( string $template ): string {
 }
 
 function induction_maybe_enqueue_portal(): void {
-    if ( ! induction_is_portal_page() || ! is_user_logged_in() ) {
+    // No is_user_logged_in() gate here: the SPA authenticates with its own
+    // JWT flow, not a WordPress session, so an anonymous visitor must still
+    // get the bundle in order to see the SPA's own login screen. Gating on
+    // a WP session (as this used to) sent them to wp-login.php instead —
+    // the wrong login form for a JWT-only app.
+    if ( ! induction_is_portal_page() ) {
         return;
     }
 

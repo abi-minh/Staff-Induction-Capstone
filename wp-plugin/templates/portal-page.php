@@ -6,11 +6,6 @@
  */
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-if ( ! is_user_logged_in() ) {
-    wp_redirect( wp_login_url( get_permalink() ) );
-    exit;
-}
-
 // This page bypasses the theme entirely for the SPA, so the admin bar must be
 // turned off properly (not just hidden with CSS) — otherwise WordPress still
 // fires admin_bar_menu and lets admin-bar-dependent plugins (e.g. Simple
