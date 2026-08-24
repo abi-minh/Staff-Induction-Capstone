@@ -11,7 +11,7 @@ import PublishIcon from '@mui/icons-material/SendOutlined';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import { useCreateModule, useModule, useUpdateModule } from '../hooks/useModules';
 import { useUploadMedia } from '../hooks/useDocuments';
-import { useStaff, useBulkAssign, useUnassign } from '../hooks/useStaff';
+import { useStaff, useBulkAssign, useUnassign, useRoles, useAssignRole, useUnassignRole } from '../hooks/useStaff';
 import { createSection, parseSections } from '../blocks/utils';
 import { ICON_OPTIONS, getIconByKey } from '../components/iconLibrary';
 import type { ModuleFormValues, Section } from '../types';
@@ -31,8 +31,18 @@ const empty: ModuleFormValues = {
 
 const roundedButtonSx = { borderRadius: '10px' };
 
-function createEditorSnapshot(form: ModuleFormValues, sections: Section[], assignedUserIds: number[]): string {
-  return JSON.stringify({ form, sections, assignedUserIds: [...assignedUserIds].sort((a, b) => a - b) });
+function createEditorSnapshot(
+  form: ModuleFormValues,
+  sections: Section[],
+  assignedUserIds: number[],
+  assignedRoles: string[]
+): string {
+  return JSON.stringify({
+    form,
+    sections,
+    assignedUserIds: [...assignedUserIds].sort((a, b) => a - b),
+    assignedRoles: [...assignedRoles].sort(),
+  });
 }
 
 function extractAssignedUserIds(targets: string[]): number[] {
@@ -40,6 +50,10 @@ function extractAssignedUserIds(targets: string[]): number[] {
     .filter((t) => t.startsWith('user:'))
     .map((t) => Number(t.slice('user:'.length)))
     .filter((n) => Number.isFinite(n));
+}
+
+function extractAssignedRoles(targets: string[], validRoleValues: string[]): string[] {
+  return targets.filter((t) => validRoleValues.includes(t));
 }
 
 export default function ModuleEditPage() {
@@ -53,24 +67,29 @@ export default function ModuleEditPage() {
   const updateModule = useUpdateModule(moduleId);
   const uploadMedia = useUploadMedia();
   const { data: staff = [] } = useStaff();
+  const { data: roles = [] } = useRoles();
   const bulkAssign = useBulkAssign();
   const unassign = useUnassign();
+  const assignRole = useAssignRole();
+  const unassignRole = useUnassignRole();
 
   const [form, setForm] = useState<ModuleFormValues>(empty);
   const [sections, setSections] = useState<Section[]>([]);
   const [heroPreview, setHeroPreview] = useState('');
   const [assignedUserIds, setAssignedUserIds] = useState<number[]>([]);
   const [initialAssignedUserIds, setInitialAssignedUserIds] = useState<number[]>([]);
+  const [assignedRoles, setAssignedRoles] = useState<string[]>([]);
+  const [initialAssignedRoles, setInitialAssignedRoles] = useState<string[]>([]);
   const [staffSearch, setStaffSearch] = useState('');
   const [initialSnapshot, setInitialSnapshot] = useState(() =>
-    createEditorSnapshot(empty, [], [])
+    createEditorSnapshot(empty, [], [], [])
   );
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const heroFileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (isNew) {
-      setInitialSnapshot(createEditorSnapshot(empty, [], []));
+      setInitialSnapshot(createEditorSnapshot(empty, [], [], []));
       return;
     }
     if (!existing) return;
@@ -89,24 +108,41 @@ export default function ModuleEditPage() {
     };
     const nextSections = parseSections(existing.meta.module_blocks);
     const nextAssignedUserIds = extractAssignedUserIds(existing.meta.module_role_targets ?? []);
+    const nextAssignedRoles = extractAssignedRoles(
+      existing.meta.module_role_targets ?? [],
+      roles.map((r) => r.value)
+    );
 
     setForm(nextForm);
     setSections(nextSections);
     setAssignedUserIds(nextAssignedUserIds);
     setInitialAssignedUserIds(nextAssignedUserIds);
-    setInitialSnapshot(createEditorSnapshot(nextForm, nextSections, nextAssignedUserIds));
-  }, [existing, isNew]);
+    setAssignedRoles(nextAssignedRoles);
+    setInitialAssignedRoles(nextAssignedRoles);
+    setInitialSnapshot(createEditorSnapshot(nextForm, nextSections, nextAssignedUserIds, nextAssignedRoles));
+  }, [existing, isNew, roles]);
 
   const saving =
-    createModule.isLoading || updateModule.isLoading || bulkAssign.isLoading || unassign.isLoading;
+    createModule.isLoading ||
+    updateModule.isLoading ||
+    bulkAssign.isLoading ||
+    unassign.isLoading ||
+    assignRole.isLoading ||
+    unassignRole.isLoading;
   const SelectedIcon = getIconByKey(form.module_icon);
-  const isDirty = createEditorSnapshot(form, sections, assignedUserIds) !== initialSnapshot;
+  const isDirty = createEditorSnapshot(form, sections, assignedUserIds, assignedRoles) !== initialSnapshot;
   const filteredStaffForPicker = staff.filter((s) =>
     s.name.toLowerCase().includes(staffSearch.trim().toLowerCase())
   );
 
   function set<K extends keyof ModuleFormValues>(key: K, value: ModuleFormValues[K]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function toggleAssignedRole(role: string) {
+    setAssignedRoles((prev) =>
+      prev.includes(role) ? prev.filter((r) => r !== role) : [...prev, role]
+    );
   }
 
   function toggleAssignedUser(userId: number) {
@@ -127,18 +163,30 @@ export default function ModuleEditPage() {
       return;
     }
 
-    // Staff assignment changes go through bulkAssign/unassign (not the plain
-    // module meta update below) so the induction_assignments table — due
-    // dates, assigned-at timestamps, the Overdue report — stays in sync.
-    // These run before the module update so its module_role_targets
-    // invalidation refetch reflects the finished assignment writes rather
-    // than racing ahead of them.
+    // Staff/role assignment changes go through bulkAssign/unassign/assignRole
+    // (not the plain module meta update below) so the induction_assignments
+    // table — due dates, assigned-at timestamps, the Overdue report — stays
+    // in sync. Each of these does a read-modify-write of the same
+    // module_role_targets meta field, so they run one at a time rather than
+    // in parallel — concurrent calls would each read the same starting
+    // state and the last write to land would silently discard the others.
     const toAssign = assignedUserIds.filter((uid) => !initialAssignedUserIds.includes(uid));
     const toUnassign = initialAssignedUserIds.filter((uid) => !assignedUserIds.includes(uid));
-    await Promise.all([
-      ...toAssign.map((uid) => bulkAssign.mutateAsync({ moduleId, userIds: [uid] })),
-      ...toUnassign.map((uid) => unassign.mutateAsync({ moduleId, userIds: [uid] })),
-    ]);
+    const rolesToAssign = assignedRoles.filter((r) => !initialAssignedRoles.includes(r));
+    const rolesToUnassign = initialAssignedRoles.filter((r) => !assignedRoles.includes(r));
+
+    if (toAssign.length > 0) {
+      await bulkAssign.mutateAsync({ moduleId, userIds: toAssign });
+    }
+    if (toUnassign.length > 0) {
+      await unassign.mutateAsync({ moduleId, userIds: toUnassign });
+    }
+    for (const role of rolesToAssign) {
+      await assignRole.mutateAsync({ moduleId, role });
+    }
+    for (const role of rolesToUnassign) {
+      await unassignRole.mutateAsync({ moduleId, role });
+    }
 
     await updateModule.mutateAsync({
       title: form.title,
@@ -152,8 +200,9 @@ export default function ModuleEditPage() {
       module_hero_image: form.module_hero_image,
       module_blocks: JSON.stringify(sections),
     });
-    setInitialSnapshot(createEditorSnapshot(form, sections, assignedUserIds));
+    setInitialSnapshot(createEditorSnapshot(form, sections, assignedUserIds, assignedRoles));
     setInitialAssignedUserIds(assignedUserIds);
+    setInitialAssignedRoles(assignedRoles);
   }
 
   async function handleAddSection() {
@@ -164,7 +213,7 @@ export default function ModuleEditPage() {
       module_blocks: JSON.stringify(newSections),
     });
     setSections(newSections);
-    setInitialSnapshot(createEditorSnapshot(form, newSections, assignedUserIds));
+    setInitialSnapshot(createEditorSnapshot(form, newSections, assignedUserIds, assignedRoles));
     navigate(`/modules/${id}/sections/${newSection.id}`);
   }
 
@@ -252,6 +301,35 @@ export default function ModuleEditPage() {
             <TextField label="Estimated Minutes" type="number" value={form.module_estimated_minutes} onChange={(e) => set('module_estimated_minutes', Number(e.target.value))} />
             <TextField label="Display Order" type="number" value={form.module_order} onChange={(e) => set('module_order', Number(e.target.value))} />
             <TextField label="Duration (days to complete)" type="number" value={form.module_duration_days} onChange={(e) => set('module_duration_days', Number(e.target.value))} helperText="Sets a due date when the module is assigned. 0 = no due date." />
+          </Box>
+
+          <Box>
+            <Typography variant="subtitle1" sx={{ fontWeight: 700, mb: 1.5 }}>Assigned Roles</Typography>
+            {isNew ? (
+              <Box sx={{ border: '1px dashed', borderColor: 'divider', borderRadius: 2, p: 2.5, color: 'text.secondary' }}>
+                <Typography variant="body2">Save the module first, then assign roles.</Typography>
+              </Box>
+            ) : (
+              <>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                  {roles.map((r) => (
+                    <FormControlLabel
+                      key={r.value}
+                      control={
+                        <Checkbox
+                          checked={assignedRoles.includes(r.value)}
+                          onChange={() => toggleAssignedRole(r.value)}
+                        />
+                      }
+                      label={r.label}
+                    />
+                  ))}
+                </Box>
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                  Everyone currently in a checked role is assigned this module, and anyone who joins that role later picks it up automatically. Changes are saved when you click Save or Publish.
+                </Typography>
+              </>
+            )}
           </Box>
 
           <Box>

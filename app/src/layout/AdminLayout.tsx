@@ -6,6 +6,7 @@ import DashboardOutlinedIcon   from '@mui/icons-material/DashboardOutlined';
 import SchoolOutlinedIcon      from '@mui/icons-material/SchoolOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import PeopleOutlinedIcon      from '@mui/icons-material/PeopleOutlined';
+import BadgeOutlinedIcon       from '@mui/icons-material/BadgeOutlined';
 import BarChartOutlinedIcon    from '@mui/icons-material/BarChartOutlined';
 import RateReviewOutlinedIcon  from '@mui/icons-material/RateReviewOutlined';
 import VisibilityOutlinedIcon  from '@mui/icons-material/VisibilityOutlined';
@@ -20,6 +21,7 @@ const NAV_ITEMS = [
   { label: 'Modules',       path: '/modules',      Icon: SchoolOutlinedIcon },
   { label: 'Documents',     path: '/documents',    Icon: DescriptionOutlinedIcon },
   { label: 'Staff',         path: '/staff',        Icon: PeopleOutlinedIcon },
+  { label: 'Staff Roles',   path: '/staff-roles',  Icon: BadgeOutlinedIcon },
   { label: 'Quiz Reviews',  path: '/quiz-reviews', Icon: RateReviewOutlinedIcon },
   { label: 'Reports',       path: '/reports',      Icon: BarChartOutlinedIcon },
 ];
@@ -70,9 +72,13 @@ export default function AdminLayout() {
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, px: 1.5, flexGrow: 1 }}>
           {NAV_ITEMS.map(({ label, path, Icon }) => {
+            // Match the exact path or a real sub-route (path + "/...") only —
+            // a plain startsWith would also match "/staff-roles" for the
+            // "/staff" item, since one path string literally starts with
+            // the other despite being unrelated routes.
             const active = path === '/'
               ? location.pathname === '/'
-              : location.pathname.startsWith(path);
+              : location.pathname === path || location.pathname.startsWith(`${path}/`);
             return (
               <ButtonBase
                 key={path}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link as RouterLink } from "react-router-dom";
+import { Link as RouterLink, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Avatar,
@@ -198,7 +198,8 @@ export default function StaffPage() {
   const [moduleSearch, setModuleSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [roleFilter, setRoleFilter] = useState("");
+  const [searchParams] = useSearchParams();
+  const [roleFilter, setRoleFilter] = useState(searchParams.get("role") ?? "");
   const [statusFilter, setStatusFilter] = useState<CompletionStatus | "">("");
 
   useEffect(() => {

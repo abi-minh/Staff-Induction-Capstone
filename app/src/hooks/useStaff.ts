@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, fetchRoles, createStaff, removeStaff, updateStaffRole } from '../api/staff';
+import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, assignRole, unassignRole, fetchRoles, createStaffRole, deleteStaffRole, createStaff, removeStaff, updateStaffRole } from '../api/staff';
 import type { NewStaffInput } from '../types';
 
 export function useStaff() {
@@ -32,6 +32,26 @@ export function useStaffAssignments(userId: number) {
 
 export function useRoles() {
   return useQuery({ queryKey: ['roles'], queryFn: fetchRoles, staleTime: 1000 * 60 * 30 });
+}
+
+export function useCreateStaffRole() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => createStaffRole(name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['roles'] });
+    },
+  });
+}
+
+export function useDeleteStaffRole() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (slug: string) => deleteStaffRole(slug),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['roles'] });
+    },
+  });
 }
 
 export function useCreateStaff() {
@@ -92,6 +112,41 @@ export function useUnassign() {
   return useMutation({
     mutationFn: ({ moduleId, userIds }: { moduleId: number; userIds: number[] }) =>
       unassign(moduleId, userIds),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['staff'] });
+      qc.invalidateQueries({ queryKey: ['modules'] });
+      qc.invalidateQueries({ queryKey: ['module', variables.moduleId] });
+      qc.invalidateQueries({ queryKey: ['reports'] });
+      qc.invalidateQueries({ queryKey: ['overdue'] });
+      qc.invalidateQueries({ queryKey: ['staffAssignments'] });
+      qc.invalidateQueries({ queryKey: ['portal', 'module', variables.moduleId] });
+      qc.invalidateQueries({ queryKey: ['portal', 'modules', 'assigned'] });
+    },
+  });
+}
+
+export function useAssignRole() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ moduleId, role, dueDate }: { moduleId: number; role: string; dueDate?: string }) =>
+      assignRole(moduleId, role, dueDate),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['staff'] });
+      qc.invalidateQueries({ queryKey: ['modules'] });
+      qc.invalidateQueries({ queryKey: ['module', variables.moduleId] });
+      qc.invalidateQueries({ queryKey: ['reports'] });
+      qc.invalidateQueries({ queryKey: ['overdue'] });
+      qc.invalidateQueries({ queryKey: ['staffAssignments'] });
+      qc.invalidateQueries({ queryKey: ['portal', 'module', variables.moduleId] });
+      qc.invalidateQueries({ queryKey: ['portal', 'modules', 'assigned'] });
+    },
+  });
+}
+
+export function useUnassignRole() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ moduleId, role }: { moduleId: number; role: string }) => unassignRole(moduleId, role),
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['staff'] });
       qc.invalidateQueries({ queryKey: ['modules'] });

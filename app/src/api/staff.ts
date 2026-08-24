@@ -36,6 +36,16 @@ export async function fetchRoles(): Promise<Role[]> {
   return data;
 }
 
+export async function createStaffRole(name: string): Promise<Role> {
+  const { data } = await client.post<Role>('induction/v1/staff-roles', { name });
+  return data;
+}
+
+export async function deleteStaffRole(slug: string): Promise<{ removed: string }> {
+  const { data } = await client.delete<{ removed: string }>(`induction/v1/staff-roles/${slug}`);
+  return data;
+}
+
 export async function createStaff(input: NewStaffInput): Promise<StaffMember> {
   const { data } = await client.post<InductionUser>('induction/v1/staff', input);
   return normaliseUser(data);
@@ -73,6 +83,30 @@ export async function unassign(
   const { data } = await client.post<{ removed: number }>('induction/v1/assignments/remove', {
     module_id: moduleId,
     user_ids: userIds,
+  });
+  return data;
+}
+
+export async function assignRole(
+  moduleId: number,
+  role: string,
+  dueDate?: string
+): Promise<{ assigned_role: string }> {
+  const { data } = await client.post<{ assigned_role: string }>('induction/v1/assignments/role', {
+    module_id: moduleId,
+    role,
+    due_date: dueDate ?? null,
+  });
+  return data;
+}
+
+export async function unassignRole(
+  moduleId: number,
+  role: string
+): Promise<{ removed_role: string }> {
+  const { data } = await client.post<{ removed_role: string }>('induction/v1/assignments/role/remove', {
+    module_id: moduleId,
+    role,
   });
   return data;
 }

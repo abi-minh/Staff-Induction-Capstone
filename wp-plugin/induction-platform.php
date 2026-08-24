@@ -309,6 +309,20 @@ function induction_register_routes(): void {
         'permission_callback' => fn() => current_user_can( 'manage_induction' ),
     ] );
 
+    // POST /assignments/role — assign a module to every current member of a role
+    register_rest_route( $ns, '/assignments/role', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_assign_role',
+        'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+    ] );
+
+    // POST /assignments/role/remove — unassign a module from a role
+    register_rest_route( $ns, '/assignments/role/remove', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_unassign_role',
+        'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+    ] );
+
     // GET /progress/module/{id} — all progress records for a module (admin only)
     register_rest_route( $ns, '/progress/module/(?P<id>\d+)', [
         'methods'             => 'GET',
@@ -445,6 +459,21 @@ function induction_register_routes(): void {
         'methods'             => 'GET',
         'callback'            => 'induction_get_roles',
         'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    // POST /staff-roles — create a new staff role (a custom WordPress role)
+    register_rest_route( $ns, '/staff-roles', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_create_staff_role',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    // DELETE /staff-roles/{slug} — remove a staff role (blocked while in use)
+    register_rest_route( $ns, '/staff-roles/(?P<slug>[a-zA-Z0-9_-]+)', [
+        'methods'             => 'DELETE',
+        'callback'            => 'induction_delete_staff_role',
+        'permission_callback' => 'induction_is_admin_user',
+        'args'                => [ 'slug' => [ 'type' => 'string', 'required' => true ] ],
     ] );
 
     register_rest_route( $ns, '/staff/remove', [
@@ -600,12 +629,14 @@ function induction_get_user_assignments( WP_REST_Request $request ): WP_REST_Res
         return new WP_REST_Response( [ 'message' => 'User not found' ], 404 );
     }
 
-    // Fetch published modules explicitly assigned to this user
-    // (module_role_targets contains "user:{id}"). Role-slug and "all"
-    // broadcast targeting were retired along with the Module Edit screen's
-    // role checkboxes — per-user assignment is now the only mechanism, so
-    // legacy role/"all" entries left over on old modules are intentionally
-    // ignored here rather than making them keep showing to everyone forever.
+    // Fetch published modules assigned to this user, either explicitly
+    // (module_role_targets contains "user:{id}") or via one of their current
+    // roles. The old "all" broadcast sentinel stays retired — it's not a
+    // real role, and re-legitimising it would bring back the "shows to
+    // literally everyone forever" failure mode; explicit per-role targeting
+    // (a real, currently-registered role) is what replaced it.
+    $roles = $user->roles;
+
     $modules = get_posts( [
         'post_type'      => 'induction_module',
         'post_status'    => 'publish',
@@ -615,9 +646,9 @@ function induction_get_user_assignments( WP_REST_Request $request ): WP_REST_Res
         'order'          => 'ASC',
     ] );
 
-    $assigned = array_filter( $modules, function( $post ) use ( $user_id ) {
+    $assigned = array_filter( $modules, function( $post ) use ( $user_id, $roles ) {
         $targets = get_post_meta( $post->ID, 'module_role_targets', true ) ?: [];
-        return in_array( 'user:' . $user_id, $targets, true );
+        return in_array( 'user:' . $user_id, $targets, true ) || array_intersect( $roles, $targets );
     } );
 
     // Return full REST representation of each post.
@@ -633,13 +664,65 @@ function induction_get_user_assignments( WP_REST_Request $request ): WP_REST_Res
     return new WP_REST_Response( $result );
 }
 
-// Drops legacy role-slug/"all" broadcast entries, keeping only well-formed
-// "user:{id}" targets. Per-user assignment (via bulk-assign/unassign) is the
-// only targeting mechanism left in the app; any assign/unassign call is a
-// natural point to clean up leftovers from the retired role-checkbox UI so a
-// module doesn't keep looking "assigned to everyone" forever.
-function induction_normalise_user_targets( array $targets ): array {
-    return array_values( array_filter( $targets, fn( $t ) => is_string( $t ) && str_starts_with( $t, 'user:' ) ) );
+// Keeps well-formed "user:{id}" targets and real, currently-registered role
+// slugs; drops anything else (e.g. the old "all" broadcast sentinel, or a
+// role that no longer exists). Every assign/unassign call runs targets
+// through this so stale/invalid entries don't linger indefinitely.
+function induction_normalise_targets( array $targets ): array {
+    $valid_roles = array_keys( induction_assignable_roles() );
+    return array_values( array_filter( $targets, function ( $t ) use ( $valid_roles ) {
+        return is_string( $t ) && ( str_starts_with( $t, 'user:' ) || in_array( $t, $valid_roles, true ) );
+    } ) );
+}
+
+// Due date for a new/updated assignment: an explicit override wins, otherwise
+// it's auto-calculated from the module's configured duration, otherwise none.
+function induction_calculate_due_date( int $module_id, $explicit_due, string $now ): ?string {
+    if ( $explicit_due ) {
+        return $explicit_due;
+    }
+    $duration_days = (int) get_post_meta( $module_id, 'module_duration_days', true );
+    if ( $duration_days > 0 ) {
+        return date( 'Y-m-d H:i:s', strtotime( $now . ' +' . $duration_days . ' days' ) );
+    }
+    return null;
+}
+
+// Creates the tracked assignment row if it doesn't exist yet; if it does,
+// only touches the due date when a non-null one was actually computed (so
+// re-syncing an already-tracked user never blanks out an existing due date).
+function induction_ensure_assignment_row( int $user_id, int $module_id, ?string $due_date, string $now ): void {
+    global $wpdb;
+    $assignments_table = $wpdb->prefix . 'induction_assignments';
+    $existing = $wpdb->get_var( $wpdb->prepare(
+        "SELECT id FROM $assignments_table WHERE user_id = %d AND module_id = %d",
+        $user_id, $module_id
+    ) );
+    if ( $existing ) {
+        if ( $due_date !== null ) {
+            $wpdb->update( $assignments_table, [ 'due_date' => $due_date ], [ 'id' => (int) $existing ] );
+        }
+    } else {
+        $wpdb->insert( $assignments_table, [
+            'user_id'     => $user_id,
+            'module_id'   => $module_id,
+            'assigned_at' => $now,
+            'due_date'    => $due_date,
+            'assigned_by' => get_current_user_id(),
+        ] );
+    }
+}
+
+// Ensures every CURRENT member of $role has a tracked assignment row for
+// $module_id. Shared by the "assign to role" endpoint and by the new-hire /
+// role-change sync, so a module already targeted at a role stays in sync
+// with who's actually in that role over time.
+function induction_sync_role_assignments( int $module_id, string $role, $explicit_due = null ): void {
+    $now      = current_time( 'mysql' );
+    $due_date = induction_calculate_due_date( $module_id, $explicit_due, $now );
+    foreach ( get_users( [ 'role' => $role, 'fields' => 'ID' ] ) as $uid ) {
+        induction_ensure_assignment_row( (int) $uid, $module_id, $due_date, $now );
+    }
 }
 
 function induction_bulk_assign( WP_REST_Request $request ): WP_REST_Response {
@@ -651,7 +734,7 @@ function induction_bulk_assign( WP_REST_Request $request ): WP_REST_Response {
     }
 
     // Add each user as an explicit target on the module's role_targets meta.
-    $current_targets = induction_normalise_user_targets( get_post_meta( $module_id, 'module_role_targets', true ) ?: [] );
+    $current_targets = induction_normalise_targets( get_post_meta( $module_id, 'module_role_targets', true ) ?: [] );
     foreach ( $user_ids as $uid ) {
         $key = 'user:' . $uid;
         if ( ! in_array( $key, $current_targets, true ) ) {
@@ -660,39 +743,10 @@ function induction_bulk_assign( WP_REST_Request $request ): WP_REST_Response {
     }
     update_post_meta( $module_id, 'module_role_targets', $current_targets );
 
-    // Record an assignment row per user, with an auto-calculated due date.
-    global $wpdb;
-    $assignments_table = $wpdb->prefix . 'induction_assignments';
-    $now               = current_time( 'mysql' );
-    $duration_days     = (int) get_post_meta( $module_id, 'module_duration_days', true );
-    $explicit_due      = $request->get_param( 'due_date' );
-
-    if ( $explicit_due ) {
-        $due_date = $explicit_due;
-    } elseif ( $duration_days > 0 ) {
-        $due_date = date( 'Y-m-d H:i:s', strtotime( $now . ' +' . $duration_days . ' days' ) );
-    } else {
-        $due_date = null;
-    }
-
+    $now      = current_time( 'mysql' );
+    $due_date = induction_calculate_due_date( $module_id, $request->get_param( 'due_date' ), $now );
     foreach ( $user_ids as $uid ) {
-        $existing = $wpdb->get_var( $wpdb->prepare(
-            "SELECT id FROM $assignments_table WHERE user_id = %d AND module_id = %d",
-            $uid, $module_id
-        ) );
-        if ( $existing ) {
-            if ( $due_date !== null ) {
-                $wpdb->update( $assignments_table, [ 'due_date' => $due_date ], [ 'id' => (int) $existing ] );
-            }
-        } else {
-            $wpdb->insert( $assignments_table, [
-                'user_id'     => $uid,
-                'module_id'   => $module_id,
-                'assigned_at' => $now,
-                'due_date'    => $due_date,
-                'assigned_by' => get_current_user_id(),
-            ] );
-        }
+        induction_ensure_assignment_row( $uid, $module_id, $due_date, $now );
     }
 
     return new WP_REST_Response( [ 'assigned' => count( $user_ids ) ] );
@@ -707,7 +761,7 @@ function induction_unassign( WP_REST_Request $request ): WP_REST_Response {
     }
 
     // Remove each user's explicit "user:{id}" target from the module.
-    $current_targets = induction_normalise_user_targets( get_post_meta( $module_id, 'module_role_targets', true ) ?: [] );
+    $current_targets = induction_normalise_targets( get_post_meta( $module_id, 'module_role_targets', true ) ?: [] );
     $remove_keys     = array_map( fn( $uid ) => 'user:' . $uid, $user_ids );
     $updated         = array_values( array_filter(
         $current_targets,
@@ -725,6 +779,56 @@ function induction_unassign( WP_REST_Request $request ): WP_REST_Response {
     ) );
 
     return new WP_REST_Response( [ 'removed' => count( $user_ids ) ] );
+}
+
+function induction_assign_role( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $module_id = (int) $request->get_param( 'module_id' );
+    $role      = sanitize_key( (string) $request->get_param( 'role' ) );
+
+    if ( ! $module_id || $role === '' ) {
+        return new WP_REST_Response( [ 'message' => 'module_id and role are required' ], 400 );
+    }
+    $assignable = induction_assignable_roles();
+    if ( ! isset( $assignable[ $role ] ) ) {
+        return new WP_Error( 'invalid_role', 'Please choose a valid role.', [ 'status' => 400 ] );
+    }
+
+    $current_targets = induction_normalise_targets( get_post_meta( $module_id, 'module_role_targets', true ) ?: [] );
+    if ( ! in_array( $role, $current_targets, true ) ) {
+        $current_targets[] = $role;
+        update_post_meta( $module_id, 'module_role_targets', $current_targets );
+    }
+
+    induction_sync_role_assignments( $module_id, $role, $request->get_param( 'due_date' ) );
+
+    return new WP_REST_Response( [ 'assigned_role' => $role ] );
+}
+
+function induction_unassign_role( WP_REST_Request $request ): WP_REST_Response {
+    $module_id = (int) $request->get_param( 'module_id' );
+    $role      = sanitize_key( (string) $request->get_param( 'role' ) );
+
+    if ( ! $module_id || $role === '' ) {
+        return new WP_REST_Response( [ 'message' => 'module_id and role are required' ], 400 );
+    }
+
+    $current_targets = induction_normalise_targets( get_post_meta( $module_id, 'module_role_targets', true ) ?: [] );
+    $updated         = array_values( array_filter( $current_targets, fn( $t ) => $t !== $role ) );
+    update_post_meta( $module_id, 'module_role_targets', $updated );
+
+    // Drop the tracked assignment for each current member of this role,
+    // unless they're also individually targeted — that assignment is
+    // independent of the role and must survive the role being unassigned.
+    global $wpdb;
+    $assignments_table = $wpdb->prefix . 'induction_assignments';
+    foreach ( get_users( [ 'role' => $role, 'fields' => 'ID' ] ) as $uid ) {
+        if ( in_array( 'user:' . $uid, $updated, true ) ) {
+            continue;
+        }
+        $wpdb->delete( $assignments_table, [ 'module_id' => $module_id, 'user_id' => (int) $uid ] );
+    }
+
+    return new WP_REST_Response( [ 'removed_role' => $role ] );
 }
 
 function induction_get_user_assignment_records( WP_REST_Request $request ): WP_REST_Response {
@@ -1457,10 +1561,14 @@ function induction_format_staff_user( WP_User $user ): array {
     ];
 }
 
+// Allowlist, not a blocklist: only the two built-in roles plus roles this
+// plugin itself created (tracked in the induction_custom_roles option) are
+// ever offered as assignable. A blocklist-of-core-roles approach would leak
+// in any custom role some unrelated theme/plugin happens to register.
 function induction_assignable_roles(): array {
-    $core  = [ 'administrator', 'editor', 'author', 'contributor', 'subscriber' ];
-    $names = wp_roles()->get_names();
-    return array_diff_key( $names, array_flip( $core ) );
+    $allowed = array_merge( [ 'staff', 'induction_admin' ], get_option( 'induction_custom_roles', [] ) );
+    $names   = wp_roles()->get_names();
+    return array_intersect_key( $names, array_flip( $allowed ) );
 }
 
 function induction_get_roles(): WP_REST_Response {
@@ -1469,6 +1577,68 @@ function induction_get_roles(): WP_REST_Response {
         $out[] = [ 'value' => $slug, 'label' => $label ];
     }
     return rest_ensure_response( $out );
+}
+
+// Staff roles ("Fishing Instructor", "Office Admin") are plain custom
+// WordPress roles — the same mechanism as the built-in "staff"/
+// "induction_admin" roles, so they automatically show up everywhere
+// induction_assignable_roles() is already used (Add Staff, Change Role, the
+// Module Edit screen's Assigned Roles picker) with no further wiring. The
+// induction_custom_roles option is what lets induction_assignable_roles()
+// tell "a role this plugin created" apart from any other role that happens
+// to exist on the site.
+function induction_create_staff_role( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $name = sanitize_text_field( (string) $request->get_param( 'name' ) );
+    if ( $name === '' ) {
+        return new WP_Error( 'invalid_name', 'Please enter a staff role name.', [ 'status' => 400 ] );
+    }
+    $slug = sanitize_key( $name );
+    if ( $slug === '' ) {
+        return new WP_Error( 'invalid_name', 'Please enter a valid staff role name.', [ 'status' => 400 ] );
+    }
+    if ( get_role( $slug ) ) {
+        return new WP_Error( 'staff_role_exists', 'A staff role with that name already exists.', [ 'status' => 409 ] );
+    }
+
+    // A staff role is a staff-portal classification, not an access level —
+    // grant the same baseline capabilities as the built-in "staff" role.
+    add_role( $slug, $name, [ 'read' => true, 'read_private_posts' => true ] );
+
+    $custom_roles   = get_option( 'induction_custom_roles', [] );
+    $custom_roles[] = $slug;
+    update_option( 'induction_custom_roles', array_values( array_unique( $custom_roles ) ) );
+
+    return rest_ensure_response( [ 'value' => $slug, 'label' => $name ] );
+}
+
+function induction_delete_staff_role( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $slug = sanitize_key( (string) $request['slug'] );
+
+    if ( in_array( $slug, [ 'staff', 'induction_admin' ], true ) ) {
+        return new WP_Error(
+            'protected_role',
+            'This staff role is built into the plugin and cannot be deleted.',
+            [ 'status' => 400 ]
+        );
+    }
+    if ( ! get_role( $slug ) ) {
+        return new WP_Error( 'not_found', 'Staff role not found.', [ 'status' => 404 ] );
+    }
+    $holders = get_users( [ 'role' => $slug, 'fields' => 'ID', 'number' => 1 ] );
+    if ( ! empty( $holders ) ) {
+        return new WP_Error(
+            'staff_role_in_use',
+            'This staff role is still assigned to one or more staff members — reassign them first.',
+            [ 'status' => 409 ]
+        );
+    }
+
+    remove_role( $slug );
+
+    $custom_roles = get_option( 'induction_custom_roles', [] );
+    update_option( 'induction_custom_roles', array_values( array_diff( $custom_roles, [ $slug ] ) ) );
+
+    return rest_ensure_response( [ 'removed' => $slug ] );
 }
 
 function induction_get_staff_list(): WP_REST_Response {
@@ -1519,7 +1689,55 @@ function induction_create_staff( WP_REST_Request $request ): WP_REST_Response|WP
         return new WP_Error( 'create_failed', $user_id->get_error_message(), [ 'status' => 400 ] );
     }
 
+    induction_sync_user_into_role( $user_id, $role );
+
     return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $user_id ) ) );
+}
+
+// Picks up any modules already targeted at $role for a single user — used
+// when a new staff member is created, or when an existing member's role
+// changes, so they don't have to wait for an admin to re-touch that
+// module's assignments before their due-date tracking starts.
+function induction_sync_user_into_role( int $user_id, string $role ): void {
+    $now     = current_time( 'mysql' );
+    $modules = get_posts( [
+        'post_type'      => 'induction_module',
+        'post_status'    => 'publish',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+    ] );
+    foreach ( $modules as $module_id ) {
+        $targets = get_post_meta( $module_id, 'module_role_targets', true ) ?: [];
+        if ( in_array( $role, $targets, true ) ) {
+            $due_date = induction_calculate_due_date( $module_id, null, $now );
+            induction_ensure_assignment_row( $user_id, $module_id, $due_date, $now );
+        }
+    }
+}
+
+// After a user's role changes, drops their tracked assignment for any
+// module that was only reachable via a role they no longer have — unless
+// the new role also covers it, or they're individually targeted on it.
+function induction_prune_stale_role_assignments( int $user_id, array $old_roles, string $new_role ): void {
+    global $wpdb;
+    $assignments_table = $wpdb->prefix . 'induction_assignments';
+    $modules = get_posts( [
+        'post_type'      => 'induction_module',
+        'post_status'    => 'publish',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+    ] );
+    foreach ( $modules as $module_id ) {
+        $targets = get_post_meta( $module_id, 'module_role_targets', true ) ?: [];
+        if ( ! array_intersect( $old_roles, $targets ) ) {
+            continue;
+        }
+        $covered_by_new = in_array( $new_role, $targets, true );
+        $has_user       = in_array( 'user:' . $user_id, $targets, true );
+        if ( ! $covered_by_new && ! $has_user ) {
+            $wpdb->delete( $assignments_table, [ 'module_id' => $module_id, 'user_id' => $user_id ] );
+        }
+    }
 }
 
 function induction_delete_staff( WP_REST_Request $request ): WP_REST_Response|WP_Error {
@@ -1583,7 +1801,11 @@ function induction_update_staff_role( WP_REST_Request $request ): WP_REST_Respon
         return new WP_Error( 'invalid_role', 'Please choose a valid role.', [ 'status' => 400 ] );
     }
 
+    $old_roles = $user->roles;
     $user->set_role( $role );
+
+    induction_sync_user_into_role( $id, $role );
+    induction_prune_stale_role_assignments( $id, $old_roles, $role );
 
     return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $id ) ) );
 }

@@ -10,6 +10,7 @@ import SectionEditPage from "./pages/SectionEditPage";
 import DocumentsPage from "./pages/DocumentsPage";
 import StaffPage from "./pages/StaffPage";
 import StaffDetailPage from "./pages/StaffDetailPage";
+import StaffRolesPage from "./pages/StaffRolesPage";
 import ReportsPage from "./pages/ReportsPage";
 import OverduePage from "./pages/OverduePage";
 import QuizReviewsPage from "./pages/QuizReviewsPage";
@@ -77,6 +78,7 @@ export default function App() {
             <Route path="documents" element={<DocumentsPage />} />
             <Route path="staff" element={<StaffPage />} />
             <Route path="staff/:id" element={<StaffDetailPage />} />
+            <Route path="staff-roles" element={<StaffRolesPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="overdue" element={<OverduePage />} />
             <Route path="quiz-reviews" element={<QuizReviewsPage />} />
