@@ -1,19 +1,26 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link as RouterLink } from 'react-router-dom';
 import {
-  Alert, Box, Button, Chip, IconButton, Link, MenuItem, Paper, Table, TableBody,
-  TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
+  Alert, Avatar, Box, Button, Checkbox, Chip, FormControlLabel, IconButton, Link, MenuItem,
+  Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import BadgeOutlinedIcon from '@mui/icons-material/BadgeOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutlined';
 import {
   useStaffMember, useStaffProgress, useStaffAssignments, useRoles, useUpdateStaffRole,
+  useUpdateTeamProfile,
 } from '../hooks/useStaff';
 import { useModules } from '../hooks/useModules';
+import { useUploadMedia } from '../hooks/useDocuments';
 import { useAuthStore } from '../store/authStore';
 import { parseSections } from '../blocks/utils';
 import type { ProgressRecord, ProgressStatus } from '../types';
+
+const TEAM_TITLE_MAX_LENGTH = 60;
+const TEAM_REGION_MAX_LENGTH = 60;
+const TEAM_BIO_MAX_LENGTH = 280;
 
 const ROLE_LABELS: Record<string, string> = {
   staff:           'Staff',
@@ -61,10 +68,35 @@ export default function StaffDetailPage() {
   const { data: assignments = [], isLoading: l4 } = useStaffAssignments(userId);
   const { data: roles = [] } = useRoles();
   const updateRole = useUpdateStaffRole();
+  const uploadMedia = useUploadMedia();
+  const updateTeamProfile = useUpdateTeamProfile();
   const currentUserId = useAuthStore((s) => s.user?.id);
 
   const [editingRole, setEditingRole] = useState(false);
   const [roleError, setRoleError] = useState('');
+
+  const [teamTitle, setTeamTitle] = useState('');
+  const [teamRegion, setTeamRegion] = useState('');
+  const [teamBio, setTeamBio] = useState('');
+  const [teamVisible, setTeamVisible] = useState(false);
+  const [teamIsOwner, setTeamIsOwner] = useState(false);
+  const [teamPhotoPreview, setTeamPhotoPreview] = useState('');
+  const [teamPhotoMediaId, setTeamPhotoMediaId] = useState<number | null>(null);
+  const [teamError, setTeamError] = useState('');
+  const [teamSaved, setTeamSaved] = useState(false);
+  const teamPhotoFileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!staff) return;
+    setTeamTitle(staff.teamTitle);
+    setTeamRegion(staff.teamRegion);
+    setTeamBio(staff.teamBio);
+    setTeamVisible(staff.teamVisible);
+    setTeamIsOwner(staff.teamIsOwner);
+    setTeamPhotoPreview(staff.teamPhotoUrl);
+    setTeamPhotoMediaId(null);
+    setTeamSaved(false);
+  }, [staff]);
 
   const moduleQuizFlags = useMemo(() => {
     const flags = new Map<number, boolean>();
@@ -82,6 +114,13 @@ export default function StaffDetailPage() {
   const isSelf = staff.id === currentUserId;
   const canEditRole = !isAdmin && !isSelf;
   const currentRoleValue = staff.roles.find((r) => roles.some((opt) => opt.value === r)) ?? staff.roles[0] ?? '';
+  const teamDirty =
+    teamTitle !== staff.teamTitle ||
+    teamRegion !== staff.teamRegion ||
+    teamBio !== staff.teamBio ||
+    teamVisible !== staff.teamVisible ||
+    teamIsOwner !== staff.teamIsOwner ||
+    teamPhotoMediaId !== null;
 
   async function handleRoleChange(role: string) {
     setRoleError('');
@@ -90,6 +129,41 @@ export default function StaffDetailPage() {
       setEditingRole(false);
     } catch (err) {
       setRoleError((err as Error).message);
+    }
+  }
+
+  async function handleTeamPhotoUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const media = await uploadMedia.mutateAsync(file);
+    setTeamPhotoMediaId(media.id);
+    setTeamPhotoPreview(media.sourceUrl);
+  }
+
+  function handleRemoveTeamPhoto() {
+    setTeamPhotoMediaId(0);
+    setTeamPhotoPreview('');
+  }
+
+  async function handleSaveTeamProfile() {
+    setTeamError('');
+    setTeamSaved(false);
+    try {
+      await updateTeamProfile.mutateAsync({
+        id: userId,
+        update: {
+          title: teamTitle,
+          region: teamRegion,
+          bio: teamBio,
+          visible: teamVisible,
+          isOwner: teamIsOwner,
+          ...(teamPhotoMediaId !== null ? { photoMediaId: teamPhotoMediaId } : {}),
+        },
+      });
+      setTeamPhotoMediaId(null);
+      setTeamSaved(true);
+    } catch (err) {
+      setTeamError(err instanceof Error ? err.message : 'Could not save team profile.');
     }
   }
 
@@ -169,6 +243,104 @@ export default function StaffDetailPage() {
                 {roleError}
               </Typography>
             )}
+          </Box>
+        </Box>
+      </Paper>
+
+      {/* Meet Our Team profile */}
+      <Paper variant="outlined" sx={{ p: 3, mb: 3, borderRadius: 2, maxWidth: 820 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2.5, color: 'primary.main' }}>
+          <BadgeOutlinedIcon />
+          <Typography sx={{ fontWeight: 700, color: 'text.primary' }}>Meet Our Team Profile</Typography>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+            <Avatar src={teamPhotoPreview || undefined} sx={{ width: 96, height: 96, fontSize: 32, bgcolor: 'primary.main' }}>
+              {staff.name.charAt(0).toUpperCase()}
+            </Avatar>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => teamPhotoFileRef.current?.click()}
+              sx={{ borderRadius: '10px' }}
+            >
+              {teamPhotoPreview ? 'Replace Photo' : 'Choose Photo'}
+            </Button>
+            {teamPhotoPreview && (
+              <Button size="small" color="error" onClick={handleRemoveTeamPhoto}>Remove</Button>
+            )}
+            <input ref={teamPhotoFileRef} type="file" hidden accept="image/*" onChange={handleTeamPhotoUpload} />
+            {uploadMedia.isLoading && (
+              <Typography variant="caption" color="text.secondary">Uploading...</Typography>
+            )}
+          </Box>
+
+          <Box sx={{ flex: 1, minWidth: 240 }}>
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mb: 1.5 }}>
+              <TextField
+                label="Job Title"
+                value={teamTitle}
+                onChange={(e) => setTeamTitle(e.target.value.slice(0, TEAM_TITLE_MAX_LENGTH))}
+                placeholder="Senior Instructor"
+                helperText="Shown under the name — falls back to the WP role if blank"
+                sx={{ flex: 1, minWidth: 200 }}
+              />
+              <TextField
+                label="Region"
+                value={teamRegion}
+                onChange={(e) => setTeamRegion(e.target.value.slice(0, TEAM_REGION_MAX_LENGTH))}
+                placeholder="Gold Coast"
+                helperText="Location shown on the team card"
+                sx={{ flex: 1, minWidth: 200 }}
+              />
+            </Box>
+            <TextField
+              label="Short Bio"
+              value={teamBio}
+              onChange={(e) => setTeamBio(e.target.value.slice(0, TEAM_BIO_MAX_LENGTH))}
+              multiline
+              minRows={3}
+              fullWidth
+              helperText={`${teamBio.length}/${TEAM_BIO_MAX_LENGTH} — shown on the Meet Our Team page`}
+              sx={{ mb: 1.5 }}
+            />
+            <Box sx={{ display: 'flex', flexDirection: 'column' }}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={teamVisible}
+                    onChange={(e) => setTeamVisible(e.target.checked)}
+                  />
+                }
+                label="Show on the Meet Our Team page"
+              />
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={teamIsOwner}
+                    onChange={(e) => setTeamIsOwner(e.target.checked)}
+                  />
+                }
+                label="Feature as the Owner"
+              />
+              <Typography variant="caption" color="text.secondary" sx={{ ml: 4, mt: -0.5 }}>
+                Only one staff member can be the Owner — saving this moves the badge off whoever holds it.
+              </Typography>
+            </Box>
+            {teamError && <Alert severity="error" sx={{ mt: 1.5 }}>{teamError}</Alert>}
+            {teamSaved && !teamDirty && (
+              <Alert severity="success" sx={{ mt: 1.5 }}>Team profile saved.</Alert>
+            )}
+            <Box sx={{ mt: 1.5 }}>
+              <Button
+                variant="contained"
+                onClick={handleSaveTeamProfile}
+                disabled={!teamDirty || updateTeamProfile.isLoading}
+                sx={{ borderRadius: '10px' }}
+              >
+                {updateTeamProfile.isLoading ? 'Saving…' : 'Save Team Profile'}
+              </Button>
+            </Box>
           </Box>
         </Box>
       </Paper>

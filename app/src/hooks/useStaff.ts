@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, assignRole, unassignRole, fetchRoles, createStaffRole, deleteStaffRole, createStaff, removeStaff, updateStaffRole } from '../api/staff';
+import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, assignRole, unassignRole, fetchRoles, createStaffRole, deleteStaffRole, createStaff, removeStaff, updateStaffRole, updateTeamProfile } from '../api/staff';
+import type { TeamProfileUpdate } from '../api/staff';
 import type { NewStaffInput } from '../types';
 
 export function useStaff() {
@@ -73,6 +74,18 @@ export function useUpdateStaffRole() {
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['staff'] });
       qc.invalidateQueries({ queryKey: ['staff', variables.id] });
+    },
+  });
+}
+
+export function useUpdateTeamProfile() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, update }: { id: number; update: TeamProfileUpdate }) => updateTeamProfile(id, update),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['staff'] });
+      qc.invalidateQueries({ queryKey: ['staff', variables.id] });
+      qc.invalidateQueries({ queryKey: ['team'] });
     },
   });
 }

@@ -8,6 +8,12 @@ interface InductionUser {
   email: string;
   roles: string[];
   avatar_urls: Record<string, string>;
+  team_photo_url?: string;
+  team_title?: string;
+  team_region?: string;
+  team_bio?: string;
+  team_visible?: boolean;
+  team_is_owner?: boolean;
 }
 
 function normaliseUser(u: InductionUser): StaffMember {
@@ -18,6 +24,12 @@ function normaliseUser(u: InductionUser): StaffMember {
     email: u.email ?? '',
     roles: u.roles ?? [],
     avatarUrl: u.avatar_urls?.['48'] ?? u.avatar_urls?.['96'] ?? '',
+    teamPhotoUrl: u.team_photo_url ?? '',
+    teamTitle: u.team_title ?? '',
+    teamRegion: u.team_region ?? '',
+    teamBio: u.team_bio ?? '',
+    teamVisible: u.team_visible ?? false,
+    teamIsOwner: u.team_is_owner ?? false,
   };
 }
 
@@ -53,6 +65,27 @@ export async function createStaff(input: NewStaffInput): Promise<StaffMember> {
 
 export async function updateStaffRole(id: number, role: string): Promise<StaffMember> {
   const { data } = await client.post<InductionUser>(`induction/v1/staff/${id}/role`, { role });
+  return normaliseUser(data);
+}
+
+export interface TeamProfileUpdate {
+  photoMediaId?: number;
+  title?: string;
+  region?: string;
+  bio?: string;
+  visible?: boolean;
+  isOwner?: boolean;
+}
+
+export async function updateTeamProfile(id: number, update: TeamProfileUpdate): Promise<StaffMember> {
+  const { data } = await client.post<InductionUser>(`induction/v1/staff/${id}/team-profile`, {
+    ...(update.photoMediaId !== undefined && { photo_media_id: update.photoMediaId }),
+    ...(update.title !== undefined && { title: update.title }),
+    ...(update.region !== undefined && { region: update.region }),
+    ...(update.bio !== undefined && { bio: update.bio }),
+    ...(update.visible !== undefined && { visible: update.visible }),
+    ...(update.isOwner !== undefined && { is_owner: update.isOwner }),
+  });
   return normaliseUser(data);
 }
 

@@ -7,6 +7,7 @@ import {
   upsertProgress,
   submitQuizForReview,
   fetchPortalDocuments,
+  fetchTeam,
 } from '../api/portal';
 import type { ProgressRecord } from '../types';
 
@@ -85,4 +86,8 @@ export function usePortalDocuments(search?: string) {
     staleTime: 1000 * 60 * 5,
     keepPreviousData: true,
   });
+}
+
+export function useTeamMembers() {
+  return useQuery({ queryKey: ['team'], queryFn: fetchTeam, staleTime: 1000 * 60 * 5 });
 }

@@ -19,6 +19,7 @@ import StaffLayout from "./layout/StaffLayout";
 import StaffDashboardPage from "./pages/staff/StaffDashboardPage";
 import StaffModuleViewPage from "./pages/staff/StaffModuleViewPage";
 import StaffLibraryPage from "./pages/staff/StaffLibraryPage";
+import MeetTheTeamPage from "./pages/staff/MeetTheTeamPage";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -59,6 +60,7 @@ export default function App() {
             <Route index element={<StaffDashboardPage />} />
             <Route path="training/:id" element={<StaffModuleViewPage />} />
             <Route path="library" element={<StaffLibraryPage />} />
+            <Route path="team" element={<MeetTheTeamPage />} />
           </Route>
 
           <Route

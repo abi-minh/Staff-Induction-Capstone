@@ -28,10 +28,18 @@ define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
 define( 'INDUCTION_VERSION', '1.0.0' );
 
+// "Meet Our Team" limits. These are enforced server-side as well as in the admin
+// UI, so a direct REST call cannot store text the team page can't lay out.
+define( 'INDUCTION_TEAM_TITLE_MAX_LENGTH',  60 );
+define( 'INDUCTION_TEAM_REGION_MAX_LENGTH', 60 );
+define( 'INDUCTION_TEAM_BIO_MAX_LENGTH',    280 );
+define( 'INDUCTION_TEAM_MAX_ENTRIES',       200 );
+
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 add_action( 'init',            'induction_register_post_types' );
 add_action( 'init',            'induction_register_roles' );
+add_action( 'init',            'induction_register_user_meta' );
 add_action( 'rest_api_init',   'induction_register_routes' );
 add_action( 'wp_enqueue_scripts', 'induction_maybe_enqueue_portal' );
 add_action( 'plugins_loaded',  'induction_create_tables' );
@@ -80,6 +88,23 @@ function induction_register_post_types(): void {
     register_post_meta( 'induction_document', 'document_category',     [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',  'auth_callback' => $induction_auth ] );
     register_post_meta( 'induction_document', 'document_file_id',      [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,   'auth_callback' => $induction_auth ] );
     register_post_meta( 'induction_document', 'document_role_targets', [ 'type' => 'array',   'single' => true, 'show_in_rest' => [ 'schema' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ] ], 'default' => [],   'auth_callback' => $induction_auth ] );
+}
+
+// A staff member's "Meet Our Team" profile — an optional photo, job title,
+// region and short bio shown on the staff portal's team page, gated behind an
+// explicit opt-in checkbox so nobody appears there without an admin
+// deliberately enabling it. The job title is its own field rather than a
+// rendering of the WP role: "Senior Instructor" is what the team page should
+// show, while the role stays purely a permissions concern.
+function induction_register_user_meta(): void {
+    $induction_auth = fn() => current_user_can( 'manage_induction' );
+
+    register_meta( 'user', 'induction_team_photo',    [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,     'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_team_title',    [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',    'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_team_region',   [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',    'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_team_bio',      [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',    'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_team_visible',  [ 'type' => 'boolean', 'single' => true, 'show_in_rest' => true, 'default' => false, 'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_team_is_owner', [ 'type' => 'boolean', 'single' => true, 'show_in_rest' => true, 'default' => false, 'auth_callback' => $induction_auth ] );
 }
 
 // ─── Sanitization ───────────────────────────────────────────────────────────
@@ -496,6 +521,21 @@ function induction_register_routes(): void {
         'callback'            => 'induction_update_staff_role',
         'permission_callback' => 'induction_is_admin_user',
         'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+    ] );
+
+    // POST /staff/{id}/team-profile — set a staff member's Meet Our Team photo/bio/visibility
+    register_rest_route( $ns, '/staff/(?P<id>\d+)/team-profile', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_update_team_profile',
+        'permission_callback' => 'induction_is_admin_user',
+        'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+    ] );
+
+    // GET /team — published Meet Our Team entries (any signed-in staff member)
+    register_rest_route( $ns, '/team', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_get_team',
+        'permission_callback' => 'is_user_logged_in',
     ] );
 
     // GET /modules, POST /modules — list and create modules
@@ -1548,16 +1588,23 @@ function induction_hide_admin_bar_for_portal_users( bool $show ): bool {
 }
 
 function induction_format_staff_user( WP_User $user ): array {
+    $team_photo_id = (int) get_user_meta( $user->ID, 'induction_team_photo', true );
     return [
-        'id'          => $user->ID,
-        'name'        => $user->display_name,
-        'slug'        => $user->user_login,
-        'email'       => $user->user_email,
-        'roles'       => $user->roles,
-        'avatar_urls' => [
+        'id'             => $user->ID,
+        'name'           => $user->display_name,
+        'slug'           => $user->user_login,
+        'email'          => $user->user_email,
+        'roles'          => $user->roles,
+        'avatar_urls'    => [
             '48' => get_avatar_url( $user->ID, [ 'size' => 48 ] ),
             '96' => get_avatar_url( $user->ID, [ 'size' => 96 ] ),
         ],
+        'team_photo_url' => $team_photo_id ? ( wp_get_attachment_image_url( $team_photo_id, 'medium' ) ?: '' ) : '',
+        'team_title'     => (string) get_user_meta( $user->ID, 'induction_team_title', true ),
+        'team_region'    => (string) get_user_meta( $user->ID, 'induction_team_region', true ),
+        'team_bio'       => (string) get_user_meta( $user->ID, 'induction_team_bio', true ),
+        'team_visible'   => (bool) get_user_meta( $user->ID, 'induction_team_visible', true ),
+        'team_is_owner'  => (bool) get_user_meta( $user->ID, 'induction_team_is_owner', true ),
     ];
 }
 
@@ -1808,6 +1855,100 @@ function induction_update_staff_role( WP_REST_Request $request ): WP_REST_Respon
     induction_prune_stale_role_assignments( $id, $old_roles, $role );
 
     return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $id ) ) );
+}
+
+function induction_update_team_profile( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id   = (int) $request['id'];
+    $user = get_user_by( 'id', $id );
+    if ( ! $user ) {
+        return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
+    }
+
+    $params = $request->get_json_params();
+
+    // photo_media_id is nullable-by-omission: only touch it if the client
+    // actually sent one (0 explicitly clears the photo; omitting the key
+    // leaves whatever photo is already set untouched).
+    if ( isset( $params['photo_media_id'] ) ) {
+        update_user_meta( $id, 'induction_team_photo', (int) $params['photo_media_id'] );
+    }
+    if ( isset( $params['title'] ) ) {
+        $title = sanitize_text_field( (string) $params['title'] );
+        update_user_meta( $id, 'induction_team_title', mb_substr( $title, 0, INDUCTION_TEAM_TITLE_MAX_LENGTH ) );
+    }
+    if ( isset( $params['region'] ) ) {
+        $region = sanitize_text_field( (string) $params['region'] );
+        update_user_meta( $id, 'induction_team_region', mb_substr( $region, 0, INDUCTION_TEAM_REGION_MAX_LENGTH ) );
+    }
+    if ( isset( $params['bio'] ) ) {
+        $bio = sanitize_textarea_field( (string) $params['bio'] );
+        update_user_meta( $id, 'induction_team_bio', mb_substr( $bio, 0, INDUCTION_TEAM_BIO_MAX_LENGTH ) );
+    }
+    if ( isset( $params['visible'] ) ) {
+        update_user_meta( $id, 'induction_team_visible', $params['visible'] ? '1' : '' );
+    }
+    // Owner is a single slot, not a flag: promoting someone demotes whoever
+    // held it, so the team page always has exactly zero or one owner.
+    if ( isset( $params['is_owner'] ) ) {
+        if ( $params['is_owner'] ) {
+            foreach ( induction_team_owner_ids() as $previous_id ) {
+                if ( $previous_id !== $id ) {
+                    delete_user_meta( $previous_id, 'induction_team_is_owner' );
+                }
+            }
+            update_user_meta( $id, 'induction_team_is_owner', '1' );
+        } else {
+            delete_user_meta( $id, 'induction_team_is_owner' );
+        }
+    }
+
+    return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $id ) ) );
+}
+
+// Every user currently flagged as the owner. Normally zero or one, but the
+// query copes with more so a hand-edited database still resolves cleanly.
+function induction_team_owner_ids(): array {
+    return array_map( 'intval', get_users( [
+        'meta_key'   => 'induction_team_is_owner',
+        'meta_value' => '1',
+        'fields'     => 'ID',
+        'number'     => 50,
+    ] ) );
+}
+
+function induction_get_team(): WP_REST_Response {
+    $wp_role_names = wp_roles()->get_names();
+    $users = get_users( [
+        'meta_key'   => 'induction_team_visible',
+        'meta_value' => '1',
+        'number'     => INDUCTION_TEAM_MAX_ENTRIES,
+        'orderby'    => 'display_name',
+        'order'      => 'ASC',
+    ] );
+
+    $result = array_map( function ( WP_User $user ) use ( $wp_role_names ) {
+        $photo_id = (int) get_user_meta( $user->ID, 'induction_team_photo', true );
+
+        // The job title is the label; the WP role is only a fallback so profiles
+        // published before the title field existed don't lose their label.
+        $title = trim( (string) get_user_meta( $user->ID, 'induction_team_title', true ) );
+        if ( '' === $title ) {
+            $role_labels = array_map( fn( $r ) => $wp_role_names[ $r ] ?? $r, (array) $user->roles );
+            $title       = implode( ', ', $role_labels );
+        }
+
+        return [
+            'id'        => $user->ID,
+            'name'      => $user->display_name,
+            'roleLabel' => $title,
+            'region'    => (string) get_user_meta( $user->ID, 'induction_team_region', true ),
+            'photoUrl'  => $photo_id ? ( wp_get_attachment_image_url( $photo_id, 'medium' ) ?: '' ) : '',
+            'bio'       => (string) get_user_meta( $user->ID, 'induction_team_bio', true ),
+            'isOwner'   => (bool) get_user_meta( $user->ID, 'induction_team_is_owner', true ),
+        ];
+    }, $users );
+
+    return rest_ensure_response( $result );
 }
 
 function induction_format_module( WP_Post $post ): array {

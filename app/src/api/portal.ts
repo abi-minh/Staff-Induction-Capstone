@@ -1,7 +1,7 @@
 // Staff-facing portal APIs — used by both staff users and admin preview mode.
 
 import client from './client';
-import type { Module, ProgressRecord, ProgressStatus, Document, QuizResponse } from '../types';
+import type { Module, ProgressRecord, ProgressStatus, Document, QuizResponse, TeamMember } from '../types';
 
 interface WPPortalModule {
   id: number;
@@ -214,4 +214,27 @@ export async function fetchPortalDocuments(search?: string): Promise<Document[]>
       } as Document;
     })
   );
+}
+
+interface WPTeamMember {
+  id: number;
+  name: string;
+  roleLabel: string;
+  region: string;
+  photoUrl: string;
+  bio: string;
+  isOwner: boolean;
+}
+
+export async function fetchTeam(): Promise<TeamMember[]> {
+  const { data } = await client.get<WPTeamMember[]>('induction/v1/team');
+  return data.map((t) => ({
+    id: t.id,
+    name: t.name,
+    roleLabel: t.roleLabel ?? '',
+    region: t.region ?? '',
+    photoUrl: t.photoUrl ?? '',
+    bio: t.bio ?? '',
+    isOwner: t.isOwner ?? false,
+  }));
 }

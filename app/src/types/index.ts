@@ -96,11 +96,30 @@ export interface StaffMember {
   email: string;
   roles: string[];
   avatarUrl: string;
+  teamPhotoUrl: string;
+  teamTitle: string;
+  teamRegion: string;
+  teamBio: string;
+  teamVisible: boolean;
+  teamIsOwner: boolean;
 }
 
 export interface Role {
   value: string;
   label: string;
+}
+
+// A published "Meet Our Team" entry, as seen by any staff member on the portal.
+// roleLabel is the free-text job title from the team profile, not a rendering of
+// the member's WP roles — the two are deliberately unrelated.
+export interface TeamMember {
+  id: number;
+  name: string;
+  roleLabel: string;
+  region: string;
+  photoUrl: string;
+  bio: string;
+  isOwner: boolean;
 }
 
 export interface NewStaffInput {
