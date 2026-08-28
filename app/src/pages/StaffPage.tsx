@@ -16,6 +16,7 @@ import {
   Link,
   MenuItem,
   Paper,
+  Snackbar,
   Table,
   TableBody,
   TableCell,
@@ -29,6 +30,7 @@ import SearchIcon from "@mui/icons-material/Search";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
+import MailOutlinedIcon from "@mui/icons-material/MailOutlined";
 import {
   useStaff,
   useBulkAssign,
@@ -37,6 +39,7 @@ import {
   useCreateStaff,
   useRemoveStaff,
 } from "../hooks/useStaff";
+import ReminderDialog from "../components/ReminderDialog";
 import { useModules } from "../hooks/useModules";
 import { useReports } from "../hooks/useReports";
 import { useAuthStore } from "../store/authStore";
@@ -190,6 +193,14 @@ export default function StaffPage() {
     const next = base ? uniqueUsername(base, taken) : "";
     setAddForm((f) => (f.username === next ? f : { ...f, username: next }));
   }, [addForm.name, addOpen, staff]);
+
+  // The staff member whose reminder is being composed. ReminderDialog owns the
+  // draft; this page only opens it and reports the outcome.
+  const [remindTarget, setRemindTarget] = useState<StaffMember | null>(null);
+  const [reminderNotice, setReminderNotice] = useState<{
+    severity: "success" | "info" | "error";
+    message: string;
+  } | null>(null);
 
   const [search, setSearch] = useState("");
   const [assigningUserId, setAssigningUserId] = useState<number | null>(null);
@@ -603,7 +614,7 @@ export default function StaffPage() {
                   sx={{
                     py: 2.25,
                     fontWeight: 700,
-                    width: 160,
+                    width: 280,
                     borderBottom: "1px solid",
                     borderColor: "divider",
                   }}
@@ -691,6 +702,14 @@ export default function StaffPage() {
                         sx={{ color: "text.secondary" }}
                       >
                         Assign
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => setRemindTarget(s)}
+                        startIcon={<MailOutlinedIcon />}
+                        sx={{ color: "text.secondary" }}
+                      >
+                        Remind
                       </Button>
                     </Box>
                   </TableCell>
@@ -940,6 +959,33 @@ export default function StaffPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Keyed on the target so each open starts from a fresh draft. */}
+      {remindTarget && (
+        <ReminderDialog
+          key={remindTarget.id}
+          staff={remindTarget}
+          onClose={() => setRemindTarget(null)}
+          onResult={setReminderNotice}
+        />
+      )}
+
+      <Snackbar
+        open={!!reminderNotice}
+        autoHideDuration={8000}
+        onClose={() => setReminderNotice(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        {reminderNotice ? (
+          <Alert
+            severity={reminderNotice.severity}
+            onClose={() => setReminderNotice(null)}
+            sx={{ boxShadow: "0 14px 40px rgba(15, 23, 42, 0.18)" }}
+          >
+            {reminderNotice.message}
+          </Alert>
+        ) : undefined}
+      </Snackbar>
     </>
   );
 }

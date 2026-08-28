@@ -89,6 +89,72 @@ export async function updateTeamProfile(id: number, update: TeamProfileUpdate): 
   return normaliseUser(data);
 }
 
+export interface ReminderModule {
+  moduleId: number;
+  title: string;
+  dueDate: string;
+  dueLabel: string;
+  isOverdue: boolean;
+}
+
+// The facts a reminder is drafted from. The wording itself lives in
+// util/reminderEmail.ts — the server no longer composes the email.
+export interface ReminderContext {
+  name: string;
+  email: string;
+  siteName: string;
+  portalUrl: string;
+  overdueCount: number;
+  modules: ReminderModule[];
+}
+
+export async function fetchReminderContext(id: number): Promise<ReminderContext> {
+  const { data } = await client.get<{
+    name?: string;
+    email?: string;
+    site_name?: string;
+    portal_url?: string;
+    overdue_count?: number;
+    modules?: {
+      module_id: number;
+      title: string;
+      due_date: string | null;
+      due_label: string;
+      is_overdue: boolean;
+    }[];
+  }>(`induction/v1/staff/${id}/reminder`);
+  return {
+    name: data.name ?? '',
+    email: data.email ?? '',
+    siteName: data.site_name ?? '',
+    portalUrl: data.portal_url ?? '',
+    overdueCount: data.overdue_count ?? 0,
+    modules: (data.modules ?? []).map((m) => ({
+      moduleId: m.module_id,
+      title: m.title,
+      dueDate: m.due_date ?? '',
+      dueLabel: m.due_label ?? '',
+      isOverdue: m.is_overdue ?? false,
+    })),
+  };
+}
+
+export interface ReminderDraft {
+  subject: string;
+  body: string;
+}
+
+export async function sendTrainingReminder(
+  id: number,
+  draft: ReminderDraft,
+): Promise<{ sent: boolean; email: string }> {
+  const { data } = await client.post<{ sent: boolean; email?: string }>(
+    `induction/v1/staff/${id}/reminder`,
+    { subject: draft.subject, body: draft.body },
+  );
+  return { sent: data.sent, email: data.email ?? '' };
+}
+
 export async function removeStaff(userIds: number[]): Promise<{ removed: number[] }> {
   const { data } = await client.post<{ removed: number[] }>('induction/v1/staff/remove', {
     user_ids: userIds,

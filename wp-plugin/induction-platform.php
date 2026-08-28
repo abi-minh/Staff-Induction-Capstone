@@ -35,6 +35,9 @@ define( 'INDUCTION_TEAM_REGION_MAX_LENGTH', 60 );
 define( 'INDUCTION_TEAM_BIO_MAX_LENGTH',    280 );
 define( 'INDUCTION_TEAM_MAX_ENTRIES',       200 );
 
+// Reminder emails are composed in the SPA, so the subject arrives as free text.
+define( 'INDUCTION_REMINDER_SUBJECT_MAX_LENGTH', 200 );
+
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 add_action( 'init',            'induction_register_post_types' );
@@ -529,6 +532,23 @@ function induction_register_routes(): void {
         'callback'            => 'induction_update_team_profile',
         'permission_callback' => 'induction_is_admin_user',
         'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+    ] );
+
+    // GET  /staff/{id}/reminder — what the SPA needs to compose a reminder
+    // POST /staff/{id}/reminder — send the subject/body the admin composed
+    register_rest_route( $ns, '/staff/(?P<id>\d+)/reminder', [
+        [
+            'methods'             => 'GET',
+            'callback'            => 'induction_get_reminder_context',
+            'permission_callback' => 'induction_is_admin_user',
+            'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+        ],
+        [
+            'methods'             => 'POST',
+            'callback'            => 'induction_send_training_reminder',
+            'permission_callback' => 'induction_is_admin_user',
+            'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+        ],
     ] );
 
     // GET /team — published Meet Our Team entries (any signed-in staff member)
@@ -1949,6 +1969,151 @@ function induction_get_team(): WP_REST_Response {
     }, $users );
 
     return rest_ensure_response( $result );
+}
+
+// ─── Training Reminders ─────────────────────────────────────────────────────
+
+// A staff member's assigned-but-not-completed modules, soonest due date first
+// and undated ones last. Reads the assignments table rather than the reports
+// summary because reports only cover users in the `staff` role.
+function induction_outstanding_assignments( int $user_id ): array {
+    global $wpdb;
+    $assignments = $wpdb->prefix . 'induction_assignments';
+    $progress    = $wpdb->prefix . 'induction_progress';
+
+    $rows = $wpdb->get_results( $wpdb->prepare(
+        "SELECT a.module_id, a.due_date
+         FROM $assignments a
+         LEFT JOIN $progress p
+           ON p.user_id = a.user_id AND p.module_id = a.module_id
+         WHERE a.user_id = %d
+           AND ( p.status IS NULL OR p.status <> 'completed' )
+         ORDER BY a.due_date IS NULL ASC, a.due_date ASC",
+        $user_id
+    ), ARRAY_A ) ?? [];
+
+    // Compared as MySQL datetime strings, the same way induction_get_overdue()
+    // does it in SQL — strtotime() against a WP-local datetime would reintroduce
+    // the usual site-timezone-vs-PHP-timezone mismatch.
+    $now = current_time( 'mysql' );
+
+    $modules = array_map( function ( $row ) use ( $now ) {
+        $module_id = (int) $row['module_id'];
+        // An assignment row outlives the module it points at, so skip anything
+        // that has since been deleted or unpublished.
+        if ( get_post_status( $module_id ) !== 'publish' ) {
+            return null;
+        }
+        return [
+            'module_id'  => $module_id,
+            'title'      => get_the_title( $module_id ) ?: '(Untitled)',
+            'due_date'   => $row['due_date'],
+            'is_overdue' => $row['due_date'] && $row['due_date'] < $now,
+        ];
+    }, $rows );
+
+    return array_values( array_filter( $modules ) );
+}
+
+// Where the SPA actually lives: the first published post embedding the
+// [induction_portal] shortcode. There's no stored setting for it, and a
+// reminder without a link to act on is close to useless, so find it.
+function induction_portal_page_url(): string {
+    global $wpdb;
+    $like    = '%' . $wpdb->esc_like( '[induction_portal]' ) . '%';
+    $page_id = (int) $wpdb->get_var( $wpdb->prepare(
+        "SELECT ID FROM $wpdb->posts
+         WHERE post_status = 'publish' AND post_content LIKE %s
+         ORDER BY ID ASC LIMIT 1",
+        $like
+    ) );
+
+    return $page_id ? (string) get_permalink( $page_id ) : home_url( '/' );
+}
+
+// Everything the SPA needs to compose a reminder for this staff member. The
+// email itself is drafted in the browser (see util/reminderEmail.ts) so the
+// admin can edit it before sending — this endpoint supplies the facts, not
+// the wording. Due dates are pre-formatted with the site's own date_format so
+// the draft matches dates shown everywhere else.
+function induction_get_reminder_context( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id   = (int) $request['id'];
+    $user = get_user_by( 'id', $id );
+    if ( ! $user ) {
+        return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
+    }
+
+    $outstanding = induction_outstanding_assignments( $id );
+    $date_format = get_option( 'date_format' );
+
+    return rest_ensure_response( [
+        'name'          => $user->display_name,
+        'email'         => is_email( $user->user_email ) ? $user->user_email : '',
+        'site_name'     => wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ),
+        'portal_url'    => induction_portal_page_url(),
+        'overdue_count' => count( array_filter( $outstanding, fn( $m ) => $m['is_overdue'] ) ),
+        'modules'       => array_map( fn( $m ) => [
+            'module_id'  => $m['module_id'],
+            'title'      => $m['title'],
+            'due_date'   => $m['due_date'],
+            'due_label'  => $m['due_date'] ? mysql2date( $date_format, $m['due_date'] ) : '',
+            'is_overdue' => $m['is_overdue'],
+        ], $outstanding ),
+    ] );
+}
+
+// Sends the subject and body the admin composed and edited in the SPA. This
+// endpoint deliberately does not compose anything: whatever the admin approved
+// in the dialog is what goes out.
+function induction_send_training_reminder( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id   = (int) $request['id'];
+    $user = get_user_by( 'id', $id );
+    if ( ! $user ) {
+        return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
+    }
+    if ( ! is_email( $user->user_email ) ) {
+        return new WP_Error(
+            'no_email',
+            sprintf( '%s has no email address on file.', $user->display_name ),
+            [ 'status' => 400 ]
+        );
+    }
+
+    $params  = $request->get_json_params();
+    $subject = trim( sanitize_text_field( (string) ( $params['subject'] ?? '' ) ) );
+
+    // The body arrives as rich-text HTML from the compose dialog. wp_kses_post()
+    // is the gate on it: an induction_admin isn't a full administrator and has
+    // no business mailing scripts or arbitrary markup out under the site's name.
+    $body = trim( wp_kses_post( (string) ( $params['body'] ?? '' ) ) );
+
+    if ( '' === $subject || '' === trim( wp_strip_all_tags( $body ) ) ) {
+        return new WP_Error(
+            'empty_email',
+            'A subject and a message are both required.',
+            [ 'status' => 400 ]
+        );
+    }
+
+    $sent = wp_mail(
+        $user->user_email,
+        mb_substr( $subject, 0, INDUCTION_REMINDER_SUBJECT_MAX_LENGTH ),
+        $body,
+        [ 'Content-Type: text/html; charset=UTF-8' ]
+    );
+
+    if ( ! $sent ) {
+        return new WP_Error(
+            'send_failed',
+            'WordPress could not send the email. Check the site\'s mail configuration.',
+            [ 'status' => 500 ]
+        );
+    }
+
+    return rest_ensure_response( [
+        'sent'  => true,
+        'email' => $user->user_email,
+    ] );
 }
 
 function induction_format_module( WP_Post $post ): array {

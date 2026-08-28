@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, assignRole, unassignRole, fetchRoles, createStaffRole, deleteStaffRole, createStaff, removeStaff, updateStaffRole, updateTeamProfile } from '../api/staff';
-import type { TeamProfileUpdate } from '../api/staff';
+import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, assignRole, unassignRole, fetchRoles, createStaffRole, deleteStaffRole, createStaff, removeStaff, updateStaffRole, updateTeamProfile, fetchReminderContext, sendTrainingReminder } from '../api/staff';
+import type { TeamProfileUpdate, ReminderDraft } from '../api/staff';
 import type { NewStaffInput } from '../types';
 
 export function useStaff() {
@@ -87,6 +87,26 @@ export function useUpdateTeamProfile() {
       qc.invalidateQueries({ queryKey: ['staff', variables.id] });
       qc.invalidateQueries({ queryKey: ['team'] });
     },
+  });
+}
+
+// Facts the compose dialog drafts from. Not cached for long: a reminder should
+// reflect what the member owes right now, not what they owed five minutes ago.
+export function useReminderContext(userId: number) {
+  return useQuery({
+    queryKey: ['reminderContext', userId],
+    queryFn: () => fetchReminderContext(userId),
+    enabled: userId > 0,
+    staleTime: 0,
+  });
+}
+
+// Sending a reminder changes nothing the app caches, so there's no
+// invalidation here — the caller reports the outcome and moves on.
+export function useSendTrainingReminder() {
+  return useMutation({
+    mutationFn: ({ id, draft }: { id: number; draft: ReminderDraft }) =>
+      sendTrainingReminder(id, draft),
   });
 }
 
