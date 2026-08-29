@@ -5,6 +5,7 @@ import {
 import EditOutlinedIcon            from '@mui/icons-material/EditOutlined';
 import MenuBookIcon                from '@mui/icons-material/MenuBookOutlined';
 import PeopleAltOutlinedIcon       from '@mui/icons-material/PeopleAltOutlined';
+import PlaceOutlinedIcon           from '@mui/icons-material/PlaceOutlined';
 import AdminPanelSettingsOutlined  from '@mui/icons-material/AdminPanelSettingsOutlined';
 import { useAuthStore }            from '../store/authStore';
 import { useAssignedModules }      from '../hooks/usePortal';
@@ -122,6 +123,7 @@ export default function StaffLayout() {
             })}
 
             {renderNavItem('Resources', '/portal/library', MenuBookIcon)}
+            {renderNavItem('Locations', '/portal/locations', PlaceOutlinedIcon)}
             {renderNavItem('Meet Our Team', '/portal/team', PeopleAltOutlinedIcon)}
           </Box>
         </Box>

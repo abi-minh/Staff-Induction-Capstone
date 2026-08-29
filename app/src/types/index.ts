@@ -122,6 +122,60 @@ export interface TeamMember {
   isOwner: boolean;
 }
 
+// ─── Class locations ────────────────────────────────────────────────────────
+
+// Palette key, not a CSS colour — resolved to a hex value in LocationMap and
+// validated against INDUCTION_LOCATION_MARKER_COLORS in the plugin PHP.
+export type MarkerColor = 'red' | 'amber' | 'blue' | 'green';
+
+export interface LocationMarker {
+  id: string;
+  lat: number;
+  lng: number;
+  label: string;
+  color: MarkerColor;
+}
+
+// A line drawn on the map — "swim out to here", "walk around this way".
+// Rendered dashed, so it reads as a route rather than a boundary.
+export interface LocationPath {
+  id: string;
+  label: string;
+  color: MarkerColor;
+  points: [number, number][];
+}
+
+// Named ClassLocation rather than Location: the DOM already has a global of
+// that name and shadowing it in a file that also uses react-router's useLocation
+// is a trap worth avoiding.
+export interface ClassLocation {
+  id: number;
+  title: string;
+  status: 'publish' | 'draft';
+  address: string;
+  lat: number;
+  lng: number;
+  zoom: number;
+  thumbnailId: number;
+  thumbnailUrl: string;
+  notes: string;
+  markers: LocationMarker[];
+  paths: LocationPath[];
+}
+
+export interface LocationFormValues {
+  title: string;
+  status: 'publish' | 'draft';
+  address: string;
+  lat: number;
+  lng: number;
+  zoom: number;
+  thumbnailId: number;
+  notes: string;
+  markers: LocationMarker[];
+  paths: LocationPath[];
+}
+
 export interface NewStaffInput {
   name: string;
   username: string;

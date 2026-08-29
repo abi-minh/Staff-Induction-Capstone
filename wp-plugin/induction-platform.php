@@ -38,6 +38,14 @@ define( 'INDUCTION_TEAM_MAX_ENTRIES',       200 );
 // Reminder emails are composed in the SPA, so the subject arrives as free text.
 define( 'INDUCTION_REMINDER_SUBJECT_MAX_LENGTH', 200 );
 
+// Location map markers. The colour list must stay in step with MARKER_COLORS
+// in app/src/components/LocationMap.tsx — it's the palette the admin can pick.
+define( 'INDUCTION_LOCATION_MAX_MARKERS',       50 );
+define( 'INDUCTION_LOCATION_MAX_PATHS',         20 );
+define( 'INDUCTION_LOCATION_MAX_PATH_POINTS',  200 );
+define( 'INDUCTION_LOCATION_LABEL_MAX_LENGTH',  60 );
+define( 'INDUCTION_LOCATION_MARKER_COLORS', [ 'red', 'amber', 'blue', 'green' ] );
+
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 add_action( 'init',            'induction_register_post_types' );
@@ -91,6 +99,30 @@ function induction_register_post_types(): void {
     register_post_meta( 'induction_document', 'document_category',     [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',  'auth_callback' => $induction_auth ] );
     register_post_meta( 'induction_document', 'document_file_id',      [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,   'auth_callback' => $induction_auth ] );
     register_post_meta( 'induction_document', 'document_role_targets', [ 'type' => 'array',   'single' => true, 'show_in_rest' => [ 'schema' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ] ], 'default' => [],   'auth_callback' => $induction_auth ] );
+
+    // Class locations — a place staff need to get to, with a pinned map, any
+    // markers the admin drops on it (meeting point, where to fish, parking…)
+    // and free-form notes. Served through the standard posts controller like
+    // documents are, so WP's own capability checks gate read vs edit.
+    register_post_type( 'induction_location', [
+        'label'        => 'Locations',
+        'public'       => false,
+        'show_in_rest' => true,
+        'rest_base'    => 'induction_location',
+        'supports'     => [ 'title', 'custom-fields' ],
+        'show_ui'      => current_user_can( 'manage_induction' ),
+        'show_in_menu' => current_user_can( 'manage_induction' ),
+        'capability_type' => 'post',
+    ] );
+
+    register_post_meta( 'induction_location', 'location_address',      [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',   'sanitize_callback' => 'sanitize_text_field', 'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_location', 'location_lat',          [ 'type' => 'number',  'single' => true, 'show_in_rest' => true, 'default' => 0,    'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_location', 'location_lng',          [ 'type' => 'number',  'single' => true, 'show_in_rest' => true, 'default' => 0,    'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_location', 'location_zoom',         [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 17,   'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_location', 'location_thumbnail_id', [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,    'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_location', 'location_notes',        [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',   'sanitize_callback' => 'wp_kses_post', 'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_location', 'location_markers',      [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '[]', 'sanitize_callback' => 'induction_sanitize_markers_json', 'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_location', 'location_paths',        [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '[]', 'sanitize_callback' => 'induction_sanitize_paths_json',   'auth_callback' => $induction_auth ] );
 }
 
 // A staff member's "Meet Our Team" profile — an optional photo, job title,
@@ -111,6 +143,88 @@ function induction_register_user_meta(): void {
 }
 
 // ─── Sanitization ───────────────────────────────────────────────────────────
+
+// Map markers arrive as a JSON string from the admin SPA. Rebuild the array
+// field by field rather than trusting what was sent: coordinates are clamped
+// to real lat/lng ranges, colours to the palette the UI offers, and anything
+// unparseable collapses to an empty set instead of poisoning the map.
+function induction_sanitize_markers_json( string $value ): string {
+    $decoded = json_decode( $value, true );
+    if ( ! is_array( $decoded ) ) {
+        return '[]';
+    }
+
+    $markers = [];
+    foreach ( array_slice( $decoded, 0, INDUCTION_LOCATION_MAX_MARKERS ) as $marker ) {
+        if ( ! is_array( $marker ) || ! isset( $marker['lat'], $marker['lng'] ) ) {
+            continue;
+        }
+        $lat = (float) $marker['lat'];
+        $lng = (float) $marker['lng'];
+        if ( $lat < -90 || $lat > 90 || $lng < -180 || $lng > 180 ) {
+            continue;
+        }
+        $color = isset( $marker['color'] ) ? (string) $marker['color'] : '';
+        $markers[] = [
+            'id'    => isset( $marker['id'] ) ? sanitize_key( (string) $marker['id'] ) : uniqid( 'm' ),
+            'lat'   => $lat,
+            'lng'   => $lng,
+            'label' => isset( $marker['label'] )
+                ? mb_substr( sanitize_text_field( (string) $marker['label'] ), 0, INDUCTION_LOCATION_LABEL_MAX_LENGTH )
+                : '',
+            'color' => in_array( $color, INDUCTION_LOCATION_MARKER_COLORS, true ) ? $color : 'red',
+        ];
+    }
+
+    return wp_json_encode( $markers ) ?: '[]';
+}
+
+// Drawn lines — "swim out to here", "walk around this way". Same defensive
+// rebuild as the markers: every coordinate is re-derived and range-checked, and
+// a line with fewer than two surviving points is dropped rather than stored as
+// a degenerate one-point line the map can't draw.
+function induction_sanitize_paths_json( string $value ): string {
+    $decoded = json_decode( $value, true );
+    if ( ! is_array( $decoded ) ) {
+        return '[]';
+    }
+
+    $paths = [];
+    foreach ( array_slice( $decoded, 0, INDUCTION_LOCATION_MAX_PATHS ) as $path ) {
+        if ( ! is_array( $path ) || ! isset( $path['points'] ) || ! is_array( $path['points'] ) ) {
+            continue;
+        }
+
+        $points = [];
+        foreach ( array_slice( $path['points'], 0, INDUCTION_LOCATION_MAX_PATH_POINTS ) as $point ) {
+            if ( ! is_array( $point ) || count( $point ) < 2 ) {
+                continue;
+            }
+            $lat = (float) $point[0];
+            $lng = (float) $point[1];
+            if ( $lat < -90 || $lat > 90 || $lng < -180 || $lng > 180 ) {
+                continue;
+            }
+            $points[] = [ $lat, $lng ];
+        }
+
+        if ( count( $points ) < 2 ) {
+            continue;
+        }
+
+        $color = isset( $path['color'] ) ? (string) $path['color'] : '';
+        $paths[] = [
+            'id'     => isset( $path['id'] ) ? sanitize_key( (string) $path['id'] ) : uniqid( 'p' ),
+            'label'  => isset( $path['label'] )
+                ? mb_substr( sanitize_text_field( (string) $path['label'] ), 0, INDUCTION_LOCATION_LABEL_MAX_LENGTH )
+                : '',
+            'color'  => in_array( $color, INDUCTION_LOCATION_MARKER_COLORS, true ) ? $color : 'amber',
+            'points' => $points,
+        ];
+    }
+
+    return wp_json_encode( $paths ) ?: '[]';
+}
 
 function induction_sanitize_blocks_json( string $value ): string {
     $decoded = json_decode( $value, true );
@@ -532,6 +646,45 @@ function induction_register_routes(): void {
         'callback'            => 'induction_update_team_profile',
         'permission_callback' => 'induction_is_admin_user',
         'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+    ] );
+
+    // Locations. These deliberately do NOT go through wp/v2/induction_location:
+    // writing post meta through the posts controller runs WP's per-key meta
+    // capability chain, which rejected location_lat on the live site even with
+    // a permissive auth_callback. Every other write in this plugin uses this
+    // namespace with induction_is_admin_user, so locations do too.
+    register_rest_route( $ns, '/locations', [
+        [
+            'methods'             => 'GET',
+            'callback'            => 'induction_get_locations',
+            'permission_callback' => 'is_user_logged_in',
+        ],
+        [
+            'methods'             => 'POST',
+            'callback'            => 'induction_create_location',
+            'permission_callback' => 'induction_is_admin_user',
+        ],
+    ] );
+
+    register_rest_route( $ns, '/locations/(?P<id>\d+)', [
+        [
+            'methods'             => 'GET',
+            'callback'            => 'induction_get_location',
+            'permission_callback' => 'is_user_logged_in',
+            'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+        ],
+        [
+            'methods'             => 'POST',
+            'callback'            => 'induction_update_location',
+            'permission_callback' => 'induction_is_admin_user',
+            'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+        ],
+        [
+            'methods'             => 'DELETE',
+            'callback'            => 'induction_delete_location',
+            'permission_callback' => 'induction_is_admin_user',
+            'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+        ],
     ] );
 
     // GET  /staff/{id}/reminder — what the SPA needs to compose a reminder
@@ -1969,6 +2122,138 @@ function induction_get_team(): WP_REST_Response {
     }, $users );
 
     return rest_ensure_response( $result );
+}
+
+// ─── Locations ──────────────────────────────────────────────────────────────
+
+function induction_format_location( WP_Post $post ): array {
+    $thumbnail_id = (int) get_post_meta( $post->ID, 'location_thumbnail_id', true );
+    return [
+        'id'            => $post->ID,
+        'title'         => $post->post_title,
+        'status'        => $post->post_status,
+        'address'       => (string) get_post_meta( $post->ID, 'location_address', true ),
+        'lat'           => (float) get_post_meta( $post->ID, 'location_lat', true ),
+        'lng'           => (float) get_post_meta( $post->ID, 'location_lng', true ),
+        'zoom'          => (int) get_post_meta( $post->ID, 'location_zoom', true ) ?: 17,
+        'thumbnail_id'  => $thumbnail_id,
+        // Resolved here so the SPA doesn't need a second round trip per image.
+        'thumbnail_url' => $thumbnail_id ? ( wp_get_attachment_image_url( $thumbnail_id, 'medium' ) ?: '' ) : '',
+        'notes'         => (string) get_post_meta( $post->ID, 'location_notes', true ),
+        'markers'       => (string) ( get_post_meta( $post->ID, 'location_markers', true ) ?: '[]' ),
+        'paths'         => (string) ( get_post_meta( $post->ID, 'location_paths', true ) ?: '[]' ),
+    ];
+}
+
+// Writes only the fields actually present in the request, each through the same
+// sanitizer its meta registration uses.
+function induction_save_location_meta( int $id, array $params ): void {
+    if ( isset( $params['address'] ) ) {
+        update_post_meta( $id, 'location_address', sanitize_text_field( (string) $params['address'] ) );
+    }
+    if ( isset( $params['lat'] ) ) {
+        update_post_meta( $id, 'location_lat', max( -90, min( 90, (float) $params['lat'] ) ) );
+    }
+    if ( isset( $params['lng'] ) ) {
+        update_post_meta( $id, 'location_lng', max( -180, min( 180, (float) $params['lng'] ) ) );
+    }
+    if ( isset( $params['zoom'] ) ) {
+        update_post_meta( $id, 'location_zoom', max( 1, min( 22, (int) $params['zoom'] ) ) );
+    }
+    if ( isset( $params['thumbnail_id'] ) ) {
+        update_post_meta( $id, 'location_thumbnail_id', (int) $params['thumbnail_id'] );
+    }
+    if ( isset( $params['notes'] ) ) {
+        update_post_meta( $id, 'location_notes', wp_kses_post( (string) $params['notes'] ) );
+    }
+    if ( isset( $params['markers'] ) ) {
+        update_post_meta( $id, 'location_markers', induction_sanitize_markers_json( (string) $params['markers'] ) );
+    }
+    if ( isset( $params['paths'] ) ) {
+        update_post_meta( $id, 'location_paths', induction_sanitize_paths_json( (string) $params['paths'] ) );
+    }
+}
+
+function induction_get_locations( WP_REST_Request $request ): WP_REST_Response {
+    // Only an admin sees drafts; staff get the published set regardless of what
+    // they ask for.
+    $wants_all = 'any' === $request->get_param( 'status' ) && induction_is_admin_user();
+
+    $posts = get_posts( [
+        'post_type'      => 'induction_location',
+        'post_status'    => $wants_all ? [ 'publish', 'draft' ] : 'publish',
+        'posts_per_page' => 200,
+        'orderby'        => 'title',
+        'order'          => 'ASC',
+    ] );
+
+    return rest_ensure_response( array_map( 'induction_format_location', $posts ) );
+}
+
+function induction_get_location( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $post = get_post( (int) $request['id'] );
+    if ( ! $post || 'induction_location' !== $post->post_type ) {
+        return new WP_Error( 'not_found', 'Location not found.', [ 'status' => 404 ] );
+    }
+    if ( 'publish' !== $post->post_status && ! induction_is_admin_user() ) {
+        return new WP_Error( 'not_found', 'Location not found.', [ 'status' => 404 ] );
+    }
+    return rest_ensure_response( induction_format_location( $post ) );
+}
+
+function induction_create_location( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $params = $request->get_json_params() ?: [];
+
+    $id = wp_insert_post( [
+        'post_type'   => 'induction_location',
+        'post_title'  => sanitize_text_field( (string) ( $params['title'] ?? '' ) ),
+        'post_status' => 'publish' === ( $params['status'] ?? 'draft' ) ? 'publish' : 'draft',
+    ], true );
+
+    if ( is_wp_error( $id ) ) {
+        return $id;
+    }
+
+    induction_save_location_meta( (int) $id, $params );
+    return rest_ensure_response( induction_format_location( get_post( $id ) ) );
+}
+
+function induction_update_location( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id   = (int) $request['id'];
+    $post = get_post( $id );
+    if ( ! $post || 'induction_location' !== $post->post_type ) {
+        return new WP_Error( 'not_found', 'Location not found.', [ 'status' => 404 ] );
+    }
+
+    $params  = $request->get_json_params() ?: [];
+    $updates = [ 'ID' => $id ];
+    if ( isset( $params['title'] ) ) {
+        $updates['post_title'] = sanitize_text_field( (string) $params['title'] );
+    }
+    if ( isset( $params['status'] ) ) {
+        $updates['post_status'] = 'publish' === $params['status'] ? 'publish' : 'draft';
+    }
+    if ( count( $updates ) > 1 ) {
+        $result = wp_update_post( $updates, true );
+        if ( is_wp_error( $result ) ) {
+            return $result;
+        }
+    }
+
+    induction_save_location_meta( $id, $params );
+    return rest_ensure_response( induction_format_location( get_post( $id ) ) );
+}
+
+function induction_delete_location( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id   = (int) $request['id'];
+    $post = get_post( $id );
+    if ( ! $post || 'induction_location' !== $post->post_type ) {
+        return new WP_Error( 'not_found', 'Location not found.', [ 'status' => 404 ] );
+    }
+    if ( ! wp_delete_post( $id, true ) ) {
+        return new WP_Error( 'delete_failed', 'Could not delete the location.', [ 'status' => 500 ] );
+    }
+    return rest_ensure_response( [ 'deleted' => true, 'id' => $id ] );
 }
 
 // ─── Training Reminders ─────────────────────────────────────────────────────

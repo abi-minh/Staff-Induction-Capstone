@@ -11,6 +11,8 @@ import DocumentsPage from "./pages/DocumentsPage";
 import StaffPage from "./pages/StaffPage";
 import StaffDetailPage from "./pages/StaffDetailPage";
 import StaffRolesPage from "./pages/StaffRolesPage";
+import LocationsPage from "./pages/LocationsPage";
+import LocationEditPage from "./pages/LocationEditPage";
 import ReportsPage from "./pages/ReportsPage";
 import OverduePage from "./pages/OverduePage";
 import QuizReviewsPage from "./pages/QuizReviewsPage";
@@ -20,6 +22,7 @@ import StaffDashboardPage from "./pages/staff/StaffDashboardPage";
 import StaffModuleViewPage from "./pages/staff/StaffModuleViewPage";
 import StaffLibraryPage from "./pages/staff/StaffLibraryPage";
 import MeetTheTeamPage from "./pages/staff/MeetTheTeamPage";
+import StaffLocationsPage from "./pages/staff/StaffLocationsPage";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -61,6 +64,7 @@ export default function App() {
             <Route path="training/:id" element={<StaffModuleViewPage />} />
             <Route path="library" element={<StaffLibraryPage />} />
             <Route path="team" element={<MeetTheTeamPage />} />
+            <Route path="locations" element={<StaffLocationsPage />} />
           </Route>
 
           <Route
@@ -81,6 +85,8 @@ export default function App() {
             <Route path="staff" element={<StaffPage />} />
             <Route path="staff/:id" element={<StaffDetailPage />} />
             <Route path="staff-roles" element={<StaffRolesPage />} />
+            <Route path="locations" element={<LocationsPage />} />
+            <Route path="locations/:id" element={<LocationEditPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="overdue" element={<OverduePage />} />
             <Route path="quiz-reviews" element={<QuizReviewsPage />} />
