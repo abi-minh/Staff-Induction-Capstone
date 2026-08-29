@@ -1086,8 +1086,8 @@ function induction_get_reports_summary(): WP_REST_Response {
         'order'          => 'ASC',
     ] );
 
-    // All staff users.
-    $staff = get_users( [ 'role' => 'staff', 'fields' => [ 'ID', 'display_name' ] ] );
+    // Staff members that can be assigned modules
+    $staff = get_users( [ 'role__in' => array_keys( induction_assignable_roles() ), 'number' => 500 ] );
 
     // All progress records in one query (avoids N+1).
     $all_progress = $wpdb->get_results(
@@ -1101,27 +1101,28 @@ function induction_get_reports_summary(): WP_REST_Response {
         $progress_index[ (int) $row['module_id'] ][ (int) $row['user_id'] ] = $row;
     }
 
-    $staff_map = [];
-    foreach ( $staff as $u ) {
-        $staff_map[ (int) $u->ID ] = $u->display_name;
-    }
-
-    $total_staff   = count( $staff );
-    $total_modules = count( $modules );
+    $total_staff       = count( $staff );
+    $total_modules     = count( $modules );
     $total_completions = 0;
-    $total_possible    = $total_modules * $total_staff;
+    $total_assignments = 0;
 
     $module_reports = [];
 
     foreach ( $modules as $module ) {
         $mid       = $module->ID;
+        $targets   = get_post_meta( $mid, 'module_role_targets', true ) ?: [];
         $mod_prog  = $progress_index[ $mid ] ?? [];
         $completed = 0;
         $breakdown = [];
 
         foreach ( $staff as $user ) {
-            $uid  = (int) $user->ID;
-            $prog = $mod_prog[ $uid ] ?? null;
+            $uid = (int) $user->ID;
+            $is_assigned = in_array( 'user:' . $uid, $targets, true )
+                || (bool) array_intersect( (array) $user->roles, $targets );
+            if ( ! $is_assigned ) {
+                continue;
+            }
+            $prog   = $mod_prog[ $uid ] ?? null;
             $status = $prog ? $prog['status'] : 'not_started';
             if ( $status === 'completed' ) {
                 $completed++;
@@ -1130,17 +1131,21 @@ function induction_get_reports_summary(): WP_REST_Response {
             $breakdown[] = [
                 'user_id'      => $uid,
                 'name'         => $user->display_name,
+                'roles'        => array_values( (array) $user->roles ),
                 'status'       => $status,
                 'completed_at' => $prog ? ( $prog['completed_at'] ?: null ) : null,
             ];
         }
 
+        $assigned_count     = count( $breakdown );
+        $total_assignments += $assigned_count;
+
         $module_reports[] = [
             'module_id'       => $mid,
             'module_title'    => get_the_title( $mid ),
-            'total_assigned'  => $total_staff,
+            'total_assigned'  => $assigned_count,
             'total_completed' => $completed,
-            'completion_pct'  => $total_staff > 0 ? (int) round( ( $completed / $total_staff ) * 100 ) : 0,
+            'completion_pct'  => $assigned_count > 0 ? (int) round( ( $completed / $assigned_count ) * 100 ) : 0,
             'staff_breakdown' => $breakdown,
         ];
     }
@@ -1158,7 +1163,7 @@ function induction_get_reports_summary(): WP_REST_Response {
     return new WP_REST_Response( [
         'total_modules'          => $total_modules,
         'total_staff'            => $total_staff,
-        'overall_completion_pct' => $total_possible > 0 ? (int) round( ( $total_completions / $total_possible ) * 100 ) : 0,
+        'overall_completion_pct' => $total_assignments > 0 ? (int) round( ( $total_completions / $total_assignments ) * 100 ) : 0,
         'module_reports'         => $module_reports,
         'completion_over_time'   => array_map( fn( $r ) => [
             'date'      => $r['date'],

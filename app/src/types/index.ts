@@ -255,6 +255,7 @@ export interface ModuleCompletionReport {
   staffBreakdown: {
     userId: number;
     name: string;
+    roles: string[];
     status: ProgressStatus;
     completedAt: string | null;
   }[];
