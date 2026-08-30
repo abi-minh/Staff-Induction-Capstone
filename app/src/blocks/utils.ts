@@ -76,26 +76,8 @@ export function parseSections(raw: string | undefined): Section[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return [];
 
-    let sections: Section[];
-    if ('blocks' in parsed[0]) {
-      sections = parsed as Section[];
-    } else {
-      // Old flat Block[] — migrate to a single section
-      const allBlocks = parsed as Block[];
-      sections = [{
-        id: `section-${Date.now()}-migrated`,
-        heroImage: '',
-        title: '',
-        description: '',
-        blocks: allBlocks.filter((b) => !isQuizBlock(b)),
-        quizTitle: '',
-        passingPercentage: 80,
-        quizBlocks: allBlocks.filter(isQuizBlock) as QuizBlock[],
-        isModuleQuiz: true,
-      }];
-    }
-
-    return sections.map((s) => ({ ...s, blocks: sanitizeBlocks(s.blocks) }));
+    const sections = parsed as Section[];
+    return sections.map((s) => ({ ...s, blocks: sanitizeBlocks(s.blocks ?? []) }));
   } catch {
     return [];
   }

@@ -176,6 +176,7 @@ export default function StaffRolesPage() {
 
       <Paper
         sx={{
+          display: { xs: "none", md: "block" },
           overflow: "hidden",
           boxShadow: "0 14px 40px rgba(15, 23, 42, 0.06)",
           border: "1px solid",
@@ -273,6 +274,86 @@ export default function StaffRolesPage() {
           </TableBody>
         </Table>
       </Paper>
+
+      <Box sx={{ display: { xs: "flex", md: "none" }, flexDirection: "column", gap: 1.5 }}>
+        {roles.map((role) => {
+          const isBuiltIn = BUILT_IN_ROLES.includes(role.value);
+          const staffCount = staff.filter((s) => s.roles.includes(role.value)).length;
+          const moduleCount = modules.filter((m) =>
+            (m.meta.module_role_targets ?? []).includes(role.value)
+          ).length;
+          return (
+            <Paper key={role.value} variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>
+                  {role.label}
+                </Typography>
+                {isBuiltIn && (
+                  <Chip label="Built-in" size="small" variant="outlined" sx={{ height: 20, fontSize: "0.7rem", flexShrink: 0 }} />
+                )}
+              </Box>
+              <Box sx={{ mt: 1, display: "grid", gap: 0.5 }}>
+                <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 1 }}>
+                  <Typography variant="body2" color="text.secondary">Staff assigned</Typography>
+                  <Button
+                    size="small"
+                    onClick={() => navigate(`/staff?role=${role.value}`)}
+                    sx={{ color: "text.secondary", minWidth: 0, px: 0.5 }}
+                  >
+                    {staffCount} staff
+                  </Button>
+                </Box>
+                <Box sx={{ display: "flex", justifyContent: "space-between", gap: 1 }}>
+                  <Typography variant="body2" color="text.secondary">Modules required</Typography>
+                  <Typography variant="body2">{moduleCount} module{moduleCount !== 1 ? "s" : ""}</Typography>
+                </Box>
+              </Box>
+              <Box sx={{ mt: 1, display: "flex", gap: 1 }}>
+                <Button
+                  size="small"
+                  variant="outlined"
+                  onClick={() => openAssign(role.value)}
+                  sx={{ borderRadius: 999 }}
+                >
+                  Assign
+                </Button>
+                {isBuiltIn ? (
+                  <Tooltip title="Built-in roles can't be deleted">
+                    <span>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        disabled
+                        startIcon={<DeleteOutlineIcon fontSize="small" />}
+                        sx={{ borderRadius: 999 }}
+                      >
+                        Delete
+                      </Button>
+                    </span>
+                  </Tooltip>
+                ) : (
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="error"
+                    startIcon={<DeleteOutlineIcon fontSize="small" />}
+                    onClick={() => { setDeleteError(""); setDeleteTarget(role.value); }}
+                    sx={{ borderRadius: 999 }}
+                  >
+                    Delete
+                  </Button>
+                )}
+              </Box>
+            </Paper>
+          );
+        })}
+
+        {!rolesLoading && roles.length === 0 && (
+          <Typography color="text.secondary" sx={{ py: 4, textAlign: "center" }}>
+            No staff roles yet.
+          </Typography>
+        )}
+      </Box>
 
       {/* Create dialog */}
       <Dialog open={addOpen} onClose={() => setAddOpen(false)} maxWidth="xs" fullWidth>

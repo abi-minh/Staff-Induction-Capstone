@@ -365,6 +365,7 @@ export default function StaffDetailPage() {
       {/* Module table: Minh's quiz-review table + PB-017 assigned/due columns */}
       <Paper
         sx={{
+          display: { xs: 'none', md: 'block' },
           overflow: 'auto',
           boxShadow: '0 14px 40px rgba(15, 23, 42, 0.06)',
           border: '1px solid',
@@ -429,6 +430,60 @@ export default function StaffDetailPage() {
           </TableBody>
         </Table>
       </Paper>
+
+      <Box sx={{ display: { xs: 'flex', md: 'none' }, flexDirection: 'column', gap: 1.5 }}>
+        {(modules ?? []).map((m) => {
+          const p = progressMap.get(m.id);
+          const a = assignmentMap.get(m.id);
+          const hasModuleQuiz = moduleQuizFlags.get(m.id) ?? false;
+          const status = p?.status ?? 'not_started';
+          const qs = quizStatus(p);
+          return (
+            <Paper key={m.id} variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
+                {hasModuleQuiz ? (
+                  <Link component={RouterLink} to={`/quiz-reviews/${userId}/${m.id}`} sx={{ fontWeight: 600, minWidth: 0 }} noWrap>
+                    {m.title || '(Untitled)'}
+                  </Link>
+                ) : (
+                  <Typography sx={{ fontWeight: 600, minWidth: 0 }} noWrap>{m.title || '(Untitled)'}</Typography>
+                )}
+                <Chip label={STATUS_LABELS[status]} color={STATUS_COLORS[status]} size="small" variant="outlined" sx={{ borderRadius: 999, fontWeight: 500, flexShrink: 0 }} />
+              </Box>
+              <Box sx={{ mt: 1.5, display: 'grid', gap: 0.75 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                  <Typography variant="body2" color="text.secondary">Assigned</Typography>
+                  <Typography variant="body2">{a ? formatDate(a.assignedAt) : '—'}</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                  <Typography variant="body2" color="text.secondary">Due</Typography>
+                  <Typography variant="body2">{a?.dueDate ? formatDate(a.dueDate) : '—'}</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                  <Typography variant="body2" color="text.secondary">Completed</Typography>
+                  <Typography variant="body2">{p?.completedAt ? new Date(p.completedAt).toLocaleDateString() : '—'}</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                  <Typography variant="body2" color="text.secondary">Time spent</Typography>
+                  <Typography variant="body2">{p?.timeSpent ? `${Math.round(p.timeSpent / 60)} min` : '—'}</Typography>
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="body2" color="text.secondary">Quiz status</Typography>
+                  {hasModuleQuiz ? (
+                    <Chip label={qs.label} color={qs.color} size="small" variant="outlined" sx={{ borderRadius: 999 }} />
+                  ) : (
+                    <Typography variant="body2">—</Typography>
+                  )}
+                </Box>
+              </Box>
+            </Paper>
+          );
+        })}
+
+        {!(modules ?? []).length && (
+          <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>No modules found.</Typography>
+        )}
+      </Box>
     </Box>
   );
 }

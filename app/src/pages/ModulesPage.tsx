@@ -4,6 +4,7 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -140,7 +141,7 @@ export default function ModulesPage() {
                   )
                 }
                 size="small"
-                sx={{ minWidth: 180, bgcolor: "background.paper" }}
+                sx={{ minWidth: 180, "& .MuiOutlinedInput-root": { bgcolor: "background.paper" } }}
               >
                 <MenuItem value="all">All statuses</MenuItem>
                 <MenuItem value="publish">Published</MenuItem>
@@ -187,6 +188,7 @@ export default function ModulesPage() {
 
         <Paper
           sx={{
+            display: { xs: "none", md: "block" },
             overflow: "hidden",
             boxShadow: "0 14px 40px rgba(15, 23, 42, 0.06)",
             border: "1px solid",
@@ -321,6 +323,71 @@ export default function ModulesPage() {
             </TableBody>
           </Table>
         </Paper>
+
+        <Box sx={{ display: { xs: "flex", md: "none" }, flexDirection: "column", gap: 1.5 }}>
+          {filteredModules.map((module) => {
+            const ModuleIcon = getIconByKey(module.meta.module_icon);
+            const published = module.status === "publish";
+            return (
+              <Paper
+                key={module.id}
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  borderRadius: 2,
+                  borderLeft: "5px solid",
+                  borderLeftColor: published ? "success.main" : "grey.400",
+                }}
+              >
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
+                  <ModuleIcon sx={{ color: "primary.main", fontSize: 28 }} />
+                  <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>
+                    {module.title || "(Untitled)"}
+                  </Typography>
+                  <Chip
+                    label={published ? "Published" : "Draft"}
+                    color={published ? "success" : "default"}
+                    size="small"
+                    variant="outlined"
+                    sx={{ borderRadius: 999, fontWeight: 500, flexShrink: 0 }}
+                  />
+                </Box>
+
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  Last updated {formatDate(module.modified)}
+                </Typography>
+
+                <Box sx={{ mt: 1.5, display: "flex", gap: 1 }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    startIcon={<EditOutlinedIcon />}
+                    onClick={() => navigate(`/modules/${module.id}`)}
+                    sx={{ borderRadius: 999 }}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    color="error"
+                    startIcon={<DeleteIcon />}
+                    onClick={() => setConfirmDelete(module.id)}
+                    sx={{ borderRadius: 999 }}
+                  >
+                    Delete
+                  </Button>
+                </Box>
+              </Paper>
+            );
+          })}
+
+          {!filteredModules.length && (
+            <Typography color="text.secondary" sx={{ py: 4, textAlign: "center" }}>
+              No modules match your search.
+            </Typography>
+          )}
+        </Box>
       </Box>
 
       <Dialog

@@ -44,17 +44,19 @@ export default function StaffDashboardPage() {
         exclusive
         onChange={(_, next) => next && setView(next)}
         sx={{
-          gap: 1.5,
+          gap: { xs: 1, sm: 1.5 },
+          flexWrap: 'wrap',
           '&& .MuiToggleButtonGroup-grouped': {
             border: '1px solid',
             borderColor: 'divider',
             borderRadius: 999,
             marginLeft: 0,
-            px: 2.5,
+            px: { xs: 1.5, sm: 2.5 },
             py: 0.75,
             textTransform: 'none',
             fontWeight: 500,
-            fontSize: 14,
+            fontSize: { xs: 13, sm: 14 },
+            whiteSpace: 'nowrap',
             color: 'text.secondary',
             '&:hover': { bgcolor: 'action.hover' },
           },
@@ -120,7 +122,7 @@ export default function StaffDashboardPage() {
           sx={{
             display: 'grid',
             gap: 4,
-            gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(min(360px, 100%), 1fr))',
             maxWidth: 1400,
             mx: 'auto',
             width: '100%',

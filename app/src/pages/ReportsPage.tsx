@@ -185,7 +185,7 @@ export default function ReportsPage() {
           />
         </Box>
 
-        <Box sx={{ overflowX: 'auto' }}>
+        <Box sx={{ overflowX: 'auto', display: { xs: 'none', md: 'block' } }}>
           <Table>
             <TableHead>
               <TableRow>
@@ -281,6 +281,70 @@ export default function ReportsPage() {
               )}
             </TableBody>
           </Table>
+        </Box>
+
+        <Box sx={{ display: { xs: 'flex', md: 'none' }, flexDirection: 'column', gap: 1.5, p: 2 }}>
+          {filtered.map((r) => {
+            const st = moduleStatus(r);
+            const open = expanded.has(r.moduleId);
+            return (
+              <Paper key={r.moduleId} variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>
+                    {r.moduleTitle || '(Untitled)'}
+                  </Typography>
+                  <Chip label={st.label} color={st.color} size="small" variant="outlined" sx={{ borderRadius: 999, fontWeight: 500 }} />
+                </Box>
+
+                <Box sx={{ mt: 1.5, display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                  <LinearProgress
+                    variant="determinate"
+                    value={r.completionPct}
+                    sx={{ flex: 1, height: 8, borderRadius: 999, bgcolor: 'divider', '& .MuiLinearProgress-bar': { bgcolor: 'success.main', borderRadius: 999 } }}
+                  />
+                  <Typography variant="body2" sx={{ minWidth: 74, textAlign: 'right' }}>
+                    {r.totalCompleted}/{r.totalAssigned} · {r.completionPct}%
+                  </Typography>
+                </Box>
+
+                <Button
+                  size="small"
+                  onClick={() => toggle(r.moduleId)}
+                  endIcon={open ? <KeyboardArrowDownIcon /> : <KeyboardArrowRightIcon />}
+                  sx={{ mt: 1 }}
+                >
+                  {open ? 'Hide staff' : 'View staff'}
+                </Button>
+
+                <Collapse in={open} timeout="auto" unmountOnExit>
+                  <Box sx={{ mt: 0.5, display: 'flex', flexDirection: 'column' }}>
+                    {r.staffBreakdown.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary">No staff assigned to this module.</Typography>
+                    ) : (
+                      r.staffBreakdown.map((s) => (
+                        <Box key={s.userId} sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1, borderTop: '1px solid', borderColor: 'divider' }}>
+                          <Box sx={{ minWidth: 0, flex: 1 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 500 }} noWrap>{s.name}</Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }} noWrap>{formatRoles(s.roles)}</Typography>
+                          </Box>
+                          <Chip label={STATUS_LABELS[s.status]} color={STATUS_COLORS[s.status]} size="small" variant="outlined" sx={{ borderRadius: 999 }} />
+                          <Link component={RouterLink} to={`/staff/${s.userId}`} sx={{ display: 'inline-flex', alignItems: 'center' }} aria-label={`View ${s.name}`}>
+                            <VisibilityOutlinedIcon sx={{ fontSize: 18 }} />
+                          </Link>
+                        </Box>
+                      ))
+                    )}
+                  </Box>
+                </Collapse>
+              </Paper>
+            );
+          })}
+
+          {filtered.length === 0 && (
+            <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+              No modules match your search.
+            </Typography>
+          )}
         </Box>
 
         <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider' }}>

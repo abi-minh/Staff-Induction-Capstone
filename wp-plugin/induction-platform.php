@@ -50,6 +50,7 @@ define( 'INDUCTION_LOCATION_MARKER_COLORS', [ 'red', 'amber', 'blue', 'green' ] 
 
 add_action( 'init',            'induction_register_post_types' );
 add_action( 'init',            'induction_register_roles' );
+add_action( 'init',            'induction_migrate_legacy_modules', 20 );
 add_action( 'init',            'induction_register_user_meta' );
 add_action( 'rest_api_init',   'induction_register_routes' );
 add_action( 'wp_enqueue_scripts', 'induction_maybe_enqueue_portal' );
@@ -622,6 +623,19 @@ function induction_register_routes(): void {
         'methods'             => 'POST',
         'callback'            => 'induction_delete_staff',
         'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    register_rest_route( $ns, '/media', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_get_media',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    register_rest_route( $ns, '/media/(?P<id>\d+)', [
+        'methods'             => 'DELETE',
+        'callback'            => 'induction_delete_media',
+        'permission_callback' => 'induction_is_admin_user',
+        'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
     ] );
 
     // GET /staff/{id} — single staff user
@@ -1720,6 +1734,27 @@ function induction_strip_unpublished_sections_json( string $blocks_json ): strin
     return wp_json_encode( $visible );
 }
 
+add_filter( 'rest_induction_document_query', 'induction_filter_portal_documents', 10, 2 );
+
+function induction_filter_portal_documents( array $args, WP_REST_Request $request ): array {
+    if ( current_user_can( 'manage_induction' ) ) {
+        return $args;
+    }
+    $clauses = [
+        'relation' => 'OR',
+        [ 'key' => 'document_role_targets', 'compare' => 'NOT EXISTS' ],
+        [ 'key' => 'document_role_targets', 'value' => 'a:0:{}', 'compare' => '=' ],
+        [ 'key' => 'document_role_targets', 'value' => '"all"', 'compare' => 'LIKE' ],
+    ];
+    foreach ( (array) wp_get_current_user()->roles as $role ) {
+        $clauses[] = [ 'key' => 'document_role_targets', 'value' => '"' . $role . '"', 'compare' => 'LIKE' ];
+    }
+    $args['meta_query'] = empty( $args['meta_query'] )
+        ? $clauses
+        : [ 'relation' => 'AND', $args['meta_query'], $clauses ];
+    return $args;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function induction_format_progress_row( array $row ): array {
@@ -1997,6 +2032,234 @@ function induction_delete_staff( WP_REST_Request $request ): WP_REST_Response|WP
     }
 
     return rest_ensure_response( [ 'removed' => $removed ] );
+}
+
+function induction_media_type( string $mime ): string {
+    if ( str_starts_with( $mime, 'image/' ) ) return 'image';
+    if ( str_starts_with( $mime, 'video/' ) ) return 'video';
+    if ( $mime === 'application/pdf' )         return 'pdf';
+    return 'other';
+}
+
+function induction_collect_block_media( array $block, array $entry, callable $add ): void {
+    $type = $block['type'] ?? '';
+    if ( $type === 'image' || $type === 'video' ) {
+        $add( $block['data']['mediaId'] ?? 0, $entry );
+    } elseif ( $type === 'row' ) {
+        foreach ( (array) ( $block['data']['children'] ?? [] ) as $child ) {
+            if ( isset( $child['block'] ) && is_array( $child['block'] ) ) {
+                induction_collect_block_media( $child['block'], $entry, $add );
+            }
+        }
+    }
+}
+
+function induction_normalize_sections( $decoded ): array {
+    if ( ! is_array( $decoded ) || empty( $decoded ) ) return [];
+    if ( isset( $decoded[0]['blocks'] ) ) return $decoded;
+    $quiz_types = [ 'multiple_choice', 'true_false', 'short_answer' ];
+    $blocks = [];
+    $quiz   = [];
+    foreach ( $decoded as $b ) {
+        if ( ! is_array( $b ) ) continue;
+        if ( in_array( $b['type'] ?? '', $quiz_types, true ) ) $quiz[] = $b;
+        else $blocks[] = $b;
+    }
+    return [ [ 'blocks' => $blocks, 'quizBlocks' => $quiz ] ];
+}
+
+function induction_media_ids_in_sections( array $sections ): array {
+    $sections = induction_normalize_sections( $sections );
+    $ids = [];
+    $collect = function ( $block ) use ( &$ids, &$collect ): void {
+        $type = $block['type'] ?? '';
+        if ( $type === 'image' || $type === 'video' ) {
+            $ids[] = (int) ( $block['data']['mediaId'] ?? 0 );
+        } elseif ( $type === 'row' ) {
+            foreach ( (array) ( $block['data']['children'] ?? [] ) as $child ) {
+                if ( isset( $child['block'] ) && is_array( $child['block'] ) ) $collect( $child['block'] );
+            }
+        }
+    };
+    foreach ( $sections as $section ) {
+        foreach ( (array) ( $section['blocks'] ?? [] ) as $b ) {
+            if ( is_array( $b ) ) $collect( $b );
+        }
+        foreach ( (array) ( $section['quizBlocks'] ?? [] ) as $qb ) {
+            if ( ( $qb['type'] ?? '' ) === 'multiple_choice' ) $ids[] = (int) ( $qb['data']['imageMediaId'] ?? 0 );
+        }
+    }
+    return array_values( array_unique( array_filter( $ids, fn( $v ) => $v > 0 ) ) );
+}
+
+function induction_tag_media( array $ids ): void {
+    foreach ( $ids as $id ) {
+        $id = (int) $id;
+        if ( $id > 0 && get_post_type( $id ) === 'attachment' ) {
+            update_post_meta( $id, '_induction_media', 1 );
+        }
+    }
+}
+
+function induction_media_ids_in_html( string $html ): array {
+    if ( '' === trim( $html ) ) return [];
+    $ids = [];
+    if ( preg_match_all( '/(?:src|href)=["\']([^"\']+)["\']/i', $html, $m ) ) {
+        foreach ( $m[1] as $url ) {
+            if ( strpos( $url, '/wp-content/uploads/' ) === false ) continue;
+            $id = attachment_url_to_postid( $url );
+            if ( $id ) $ids[] = (int) $id;
+        }
+    }
+    return array_values( array_unique( $ids ) );
+}
+
+function induction_migrate_legacy_modules(): void {
+    if ( get_option( 'induction_legacy_modules_migrated' ) ) {
+        return;
+    }
+    $modules = get_posts( [ 'post_type' => 'induction_module', 'post_status' => 'any', 'posts_per_page' => -1 ] );
+    foreach ( $modules as $m ) {
+        $raw = get_post_meta( $m->ID, 'module_blocks', true );
+        if ( ! $raw ) continue;
+        $decoded = json_decode( $raw, true );
+        if ( ! is_array( $decoded ) || empty( $decoded ) ) continue;
+
+        $changed = false;
+
+        if ( ! isset( $decoded[0]['blocks'] ) ) {
+            $quiz_types = [ 'multiple_choice', 'true_false', 'short_answer' ];
+            $blocks = [];
+            $quiz   = [];
+            foreach ( $decoded as $b ) {
+                if ( ! is_array( $b ) ) continue;
+                if ( in_array( $b['type'] ?? '', $quiz_types, true ) ) $quiz[] = $b;
+                else $blocks[] = $b;
+            }
+            $decoded = [ [
+                'id'                => 'section-' . wp_generate_uuid4(),
+                'heroImage'         => '',
+                'title'             => '',
+                'description'       => '',
+                'blocks'            => $blocks,
+                'quizTitle'         => '',
+                'passingPercentage' => 80,
+                'quizBlocks'        => $quiz,
+                'isModuleQuiz'      => true,
+            ] ];
+            $changed = true;
+        }
+
+        foreach ( $decoded as &$section ) {
+            if ( ( $section['id'] ?? '' ) === 'section-legacy-migrated' ) {
+                $section['id'] = 'section-' . wp_generate_uuid4();
+                $changed = true;
+            }
+        }
+        unset( $section );
+
+        if ( $changed ) {
+            update_post_meta( $m->ID, 'module_blocks', wp_json_encode( $decoded ) );
+        }
+    }
+    update_option( 'induction_legacy_modules_migrated', 1 );
+}
+
+function induction_get_media(): WP_REST_Response {
+    $usage = [];
+    $add = function ( $mid, array $entry ) use ( &$usage ): void {
+        $mid = (int) $mid;
+        if ( $mid <= 0 ) return;
+        foreach ( $usage[ $mid ] ?? [] as $e ) {
+            if ( $e['kind'] === $entry['kind']
+                && $e['id'] === $entry['id']
+                && ( $e['where'] ?? '' ) === ( $entry['where'] ?? '' ) ) {
+                return;
+            }
+        }
+        $usage[ $mid ][] = $entry;
+    };
+
+    $modules = get_posts( [ 'post_type' => 'induction_module', 'post_status' => 'any', 'posts_per_page' => -1 ] );
+    foreach ( $modules as $m ) {
+        $entry = [ 'kind' => 'module', 'id' => $m->ID, 'title' => get_the_title( $m->ID ) ?: '(Untitled module)' ];
+        $hero  = (int) get_post_meta( $m->ID, 'module_hero_image', true );
+        if ( $hero ) $add( $hero, array_merge( $entry, [ 'where' => 'hero image' ] ) );
+        $blocks_json = get_post_meta( $m->ID, 'module_blocks', true );
+        $sections    = induction_normalize_sections( $blocks_json ? json_decode( $blocks_json, true ) : null );
+        if ( $sections ) {
+            foreach ( $sections as $section ) {
+                foreach ( (array) ( $section['blocks'] ?? [] ) as $block ) {
+                    if ( is_array( $block ) ) induction_collect_block_media( $block, array_merge( $entry, [ 'where' => 'section content' ] ), $add );
+                }
+                foreach ( (array) ( $section['quizBlocks'] ?? [] ) as $qb ) {
+                    if ( ( $qb['type'] ?? '' ) === 'multiple_choice' ) {
+                        $add( $qb['data']['imageMediaId'] ?? 0, array_merge( $entry, [ 'where' => 'quiz' ] ) );
+                    }
+                }
+                if ( ! empty( $section['heroImage'] ) ) {
+                    $add( attachment_url_to_postid( (string) $section['heroImage'] ), array_merge( $entry, [ 'where' => 'section image' ] ) );
+                }
+            }
+        }
+        foreach ( induction_media_ids_in_html( $m->post_content ) as $mid ) {
+            $add( $mid, array_merge( $entry, [ 'where' => 'overview' ] ) );
+        }
+    }
+
+    $docs = get_posts( [ 'post_type' => 'induction_document', 'post_status' => 'any', 'posts_per_page' => -1 ] );
+    foreach ( $docs as $d ) {
+        $fid = (int) get_post_meta( $d->ID, 'document_file_id', true );
+        if ( $fid ) $add( $fid, [ 'kind' => 'document', 'id' => $d->ID, 'title' => get_the_title( $d->ID ) ?: '(Untitled document)', 'where' => 'attached file' ] );
+    }
+
+    $referenced = array_map( 'intval', array_keys( $usage ) );
+    induction_tag_media( $referenced );
+    $tagged     = get_posts( [
+        'post_type'      => 'attachment',
+        'post_status'    => 'inherit',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+        'meta_key'       => '_induction_media',
+    ] );
+    $allowed = array_values( array_unique( array_merge( $referenced, array_map( 'intval', $tagged ) ) ) );
+
+    $out = [];
+    foreach ( $allowed as $att_id ) {
+        $att = get_post( $att_id );
+        if ( ! $att || $att->post_type !== 'attachment' ) continue;
+        $mime = get_post_mime_type( $att_id ) ?: '';
+        $file = get_attached_file( $att_id );
+        $out[] = [
+            'id'         => $att_id,
+            'filename'   => $file ? wp_basename( $file ) : ( get_the_title( $att_id ) ?: 'file' ),
+            'url'        => wp_get_attachment_url( $att_id ),
+            'mime'       => $mime,
+            'type'       => induction_media_type( $mime ),
+            'size'       => ( $file && file_exists( $file ) ) ? (int) filesize( $file ) : 0,
+            'uploadedAt' => get_the_date( 'c', $att_id ),
+            'usage'      => $usage[ $att_id ] ?? [],
+        ];
+    }
+
+    usort( $out, fn( $a, $b ) => strcmp( $b['uploadedAt'], $a['uploadedAt'] ) );
+
+    return rest_ensure_response( $out );
+}
+
+function induction_delete_media( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id  = (int) $request['id'];
+    $att = get_post( $id );
+    if ( ! $att || $att->post_type !== 'attachment' ) {
+        return new WP_Error( 'not_found', 'File not found.', [ 'status' => 404 ] );
+    }
+    if ( ! get_post_meta( $id, '_induction_media', true ) ) {
+        return new WP_Error( 'not_induction_media', 'That file is not an induction file and cannot be deleted here.', [ 'status' => 403 ] );
+    }
+    if ( ! wp_delete_attachment( $id, true ) ) {
+        return new WP_Error( 'delete_failed', 'Could not delete the file.', [ 'status' => 500 ] );
+    }
+    return rest_ensure_response( [ 'deleted' => $id ] );
 }
 
 function induction_get_staff_member( WP_REST_Request $request ): WP_REST_Response|WP_Error {
@@ -2489,6 +2752,16 @@ function induction_save_module_meta( int $id, array $meta ): true|WP_Error {
     if ( isset( $meta['module_hero_image'] ) ) {
         update_post_meta( $id, 'module_hero_image', (int) $meta['module_hero_image'] );
     }
+
+    $media_ids = [];
+    if ( isset( $meta['module_hero_image'] ) ) {
+        $media_ids[] = (int) $meta['module_hero_image'];
+    }
+    if ( is_array( $decoded_blocks ) ) {
+        $media_ids = array_merge( $media_ids, induction_media_ids_in_sections( $decoded_blocks ) );
+    }
+    induction_tag_media( $media_ids );
+
     return true;
 }
 

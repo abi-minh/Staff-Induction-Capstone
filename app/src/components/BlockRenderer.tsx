@@ -53,7 +53,7 @@ function renderBlock(
     case 'text':
       return (
         <Box
-          sx={{ color: 'text.primary', lineHeight: 1.7, '& p': { margin: 0 }, '& p + p': { mt: 1.5 } }}
+          sx={{ color: 'text.primary', lineHeight: 1.7, '& p': { margin: 0 }, '& p + p': { mt: 1.5 }, '& img': { maxWidth: '100%', height: 'auto' } }}
           dangerouslySetInnerHTML={{ __html: block.data.html }}
         />
       );
@@ -64,7 +64,7 @@ function renderBlock(
             component="img"
             src={block.data.url}
             alt={block.data.alt}
-            sx={{ display: 'block', maxWidth: '100%', height: 'auto', borderRadius: 1.5 }}
+            sx={{ display: 'block', height: 'auto', borderRadius: 1.5, ...(block.data.width ? { width: `${block.data.width}%`, maxWidth: '100%' } : { maxWidth: '100%' }) }}
           />
           {block.data.caption && (
             <Typography component="figcaption" variant="caption" color="text.secondary" sx={{ mt: 0.75, display: 'block' }}>
@@ -135,14 +135,14 @@ function renderBlock(
         <Box
           sx={{
             display: 'grid',
-            gridTemplateColumns: `repeat(${block.data.columns}, 1fr)`,
+            gridTemplateColumns: { xs: '1fr', sm: `repeat(${block.data.columns}, 1fr)` },
             gap: 2,
           }}
         >
           {block.data.children.map((placed) => (
             <Box
               key={placed.block.id}
-              sx={{ gridColumn: `${placed.colStart} / span ${placed.colSpan}` }}
+              sx={{ gridColumn: { xs: 'auto', sm: `${placed.colStart} / span ${placed.colSpan}` }, minWidth: 0 }}
             >
               {renderBlock(placed.block, answers, onAnswer, showResults, disabled)}
             </Box>

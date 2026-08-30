@@ -148,7 +148,7 @@ export default function MeetTheTeamPage() {
                 sx={{
                   display: 'grid',
                   gap: 3,
-                  gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
                 }}
               >
                 {others.map((member) => (
