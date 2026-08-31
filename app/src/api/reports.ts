@@ -14,6 +14,7 @@ interface WPReportSummary {
     staff_breakdown: {
       user_id: number;
       name: string;
+      roles: string[];
       status: 'not_started' | 'in_progress' | 'completed';
       completed_at: string | null;
     }[];
@@ -37,6 +38,7 @@ export async function fetchReportSummary(): Promise<ReportSummary> {
       staffBreakdown: r.staff_breakdown.map((s) => ({
         userId: s.user_id,
         name: s.name,
+        roles: s.roles ?? [],
         status: s.status,
         completedAt: s.completed_at,
       })),

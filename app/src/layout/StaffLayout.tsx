@@ -1,17 +1,19 @@
+import { useState } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import {
-  AppBar, Box, Toolbar, Typography, Avatar, ButtonBase, Alert, Button,
+  AppBar, Box, Toolbar, Typography, Avatar, ButtonBase, Alert, Button, Drawer, IconButton,
 } from '@mui/material';
+import MenuIcon                   from '@mui/icons-material/Menu';
 import EditOutlinedIcon            from '@mui/icons-material/EditOutlined';
 import MenuBookIcon                from '@mui/icons-material/MenuBookOutlined';
 import PeopleAltOutlinedIcon       from '@mui/icons-material/PeopleAltOutlined';
 import PlaceOutlinedIcon           from '@mui/icons-material/PlaceOutlined';
 import AdminPanelSettingsOutlined  from '@mui/icons-material/AdminPanelSettingsOutlined';
+import LogoutOutlinedIcon          from '@mui/icons-material/LogoutOutlined';
 import { useAuthStore }            from '../store/authStore';
 import { useAssignedModules }      from '../hooks/usePortal';
 import { getModuleIcon }           from '../components/moduleVisuals';
 import { stripHtml }               from '../util/strings';
-import LogoutOutlinedIcon      from '@mui/icons-material/LogoutOutlined';
 
 const DRAWER_WIDTH = 200;
 
@@ -25,6 +27,7 @@ export default function StaffLayout() {
   const location  = useLocation();
   const { data: modules } = useAssignedModules();
   const isAdmin = isAdminUser(user?.roles ?? []);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const initials = (user?.name ?? 'U')
     .split(' ')
@@ -43,7 +46,7 @@ export default function StaffLayout() {
     return (
       <ButtonBase
         key={key ?? path}
-        onClick={() => navigate(path)}
+        onClick={() => { navigate(path); setMobileOpen(false); }}
         sx={{
           display: 'flex',
           alignItems: 'center',
@@ -77,8 +80,25 @@ export default function StaffLayout() {
     );
   }
 
+  const navContent = (
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, px: 1.5 }}>
+      {renderNavItem('Dashboard', '/portal', EditOutlinedIcon)}
+
+      {modules?.map((m) => {
+        const path = `/portal/training/${m.id}`;
+        const Icon = getModuleIcon(m);
+        const label = stripHtml(m.title);
+        return renderNavItem(label, path, Icon, String(m.id));
+      })}
+
+      {renderNavItem('Resources', '/portal/library', MenuBookIcon)}
+      {renderNavItem('Locations', '/portal/locations', PlaceOutlinedIcon)}
+      {renderNavItem('Meet Our Team', '/portal/team', PeopleAltOutlinedIcon)}
+    </Box>
+  );
+
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', bgcolor: 'background.default' }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', bgcolor: 'background.default' }}>
       {isAdmin && (
         <Alert
           severity="info"
@@ -98,7 +118,7 @@ export default function StaffLayout() {
         </Alert>
       )}
 
-      <Box sx={{ display: 'flex', flexGrow: 1, overflow: 'hidden' }}>
+      <Box sx={{ display: 'flex', flexGrow: 1, minHeight: 0, overflow: 'hidden' }}>
         <Box
           sx={{
             width: DRAWER_WIDTH,
@@ -106,37 +126,45 @@ export default function StaffLayout() {
             bgcolor: 'background.paper',
             borderRight: '1px solid',
             borderColor: 'divider',
-            display: 'flex',
+            display: { xs: 'none', md: 'flex' },
             flexDirection: 'column',
             py: 2,
             overflowY: 'auto',
           }}
         >
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, px: 1.5 }}>
-            {renderNavItem('Dashboard', '/portal', EditOutlinedIcon)}
-
-            {modules?.map((m) => {
-              const path = `/portal/training/${m.id}`;
-              const Icon = getModuleIcon(m);
-              const label = stripHtml(m.title);
-              return renderNavItem(label, path, Icon, String(m.id));
-            })}
-
-            {renderNavItem('Resources', '/portal/library', MenuBookIcon)}
-            {renderNavItem('Locations', '/portal/locations', PlaceOutlinedIcon)}
-            {renderNavItem('Meet Our Team', '/portal/team', PeopleAltOutlinedIcon)}
-          </Box>
+          {navContent}
         </Box>
 
+        <Drawer
+          variant="temporary"
+          open={mobileOpen}
+          onClose={() => setMobileOpen(false)}
+          ModalProps={{ keepMounted: true }}
+          sx={{
+            display: { xs: 'block', md: 'none' },
+            '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box', py: 2, pt: 'calc(16px + env(safe-area-inset-top, 0px))' },
+          }}
+        >
+          {navContent}
+        </Drawer>
+
         <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-          <AppBar position="sticky">
+          <AppBar position="static" sx={{ flexShrink: 0, pt: 'env(safe-area-inset-top, 0px)' }}>
             <Toolbar>
+              <IconButton
+                onClick={() => setMobileOpen(true)}
+                aria-label="Open navigation"
+                edge="start"
+                sx={{ display: { xs: 'inline-flex', md: 'none' }, mr: 1, color: 'text.primary' }}
+              >
+                <MenuIcon />
+              </IconButton>
               <Box sx={{ flexGrow: 1 }} />
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                 <Avatar sx={{ width: 34, height: 34, bgcolor: 'primary.main', fontSize: 13 }}>
                   {initials}
                 </Avatar>
-                <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                <Typography variant="body2" sx={{ fontWeight: 500, display: { xs: 'none', sm: 'block' } }}>
                   {user?.name}
                 </Typography>
                 <Button
@@ -152,7 +180,7 @@ export default function StaffLayout() {
             </Toolbar>
           </AppBar>
 
-          <Box component="main" sx={{ flexGrow: 1, p: { xs: 2, md: 4 } }}>
+          <Box component="main" sx={{ flexGrow: 1, minHeight: 0, overflowY: 'auto', p: { xs: 2, md: 4 } }}>
             <Outlet />
           </Box>
         </Box>

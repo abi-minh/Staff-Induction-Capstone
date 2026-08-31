@@ -21,6 +21,7 @@ export default function QuizReviewsPage() {
 
       <Paper
         sx={{
+          display: { xs: 'none', md: 'block' },
           overflow: 'hidden',
           boxShadow: '0 14px 40px rgba(15, 23, 42, 0.06)',
           border: '1px solid',
@@ -76,6 +77,38 @@ export default function QuizReviewsPage() {
           </TableBody>
         </Table>
       </Paper>
+
+      <Box sx={{ display: { xs: 'flex', md: 'none' }, flexDirection: 'column', gap: 1.5 }}>
+        {reviews.map((r) => (
+          <Paper key={`${r.userId}-${r.moduleId}`} variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
+            <Link component={RouterLink} to={`/staff/${r.userId}`} sx={{ fontWeight: 600, display: 'block' }} noWrap>
+              {r.userName}
+            </Link>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }} noWrap>
+              {r.moduleTitle || '(Untitled)'}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+              Submitted {new Date(r.quizSubmittedAt).toLocaleString()}
+            </Typography>
+            <Button
+              component={RouterLink}
+              to={`/quiz-reviews/${r.userId}/${r.moduleId}`}
+              size="small"
+              variant="contained"
+              startIcon={<RateReviewOutlinedIcon />}
+              sx={{ borderRadius: '10px', mt: 1.5 }}
+            >
+              Review
+            </Button>
+          </Paper>
+        ))}
+
+        {!reviews.length && (
+          <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
+            Nothing awaiting review.
+          </Typography>
+        )}
+      </Box>
     </Box>
   );
 }

@@ -493,19 +493,19 @@ export default function StaffModuleViewPage() {
 
         {/* Prev | Progress bar | Next */}
         <Paper sx={{ p: { xs: 2, md: 3 } }}>
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
             <Button
               variant="outlined"
               onClick={() =>
                 prevSection && setSelectedSectionId(prevSection.id)
               }
               disabled={!prevSection}
-              sx={{ borderRadius: 999, flexShrink: 0 }}
+              sx={{ borderRadius: 999, order: { xs: 2, sm: 0 } }}
             >
               ← Previous
             </Button>
 
-            <Box sx={{ flex: 1 }}>
+            <Box sx={{ flexGrow: 1, flexBasis: { xs: "100%", sm: "auto" }, minWidth: 0, order: { xs: 1, sm: 0 } }}>
               <Box
                 sx={{
                   display: "flex",
@@ -539,7 +539,7 @@ export default function StaffModuleViewPage() {
                   ? setSelectedSectionId(nextSection.id)
                   : setSelectedSectionId(null)
               }
-              sx={{ borderRadius: 999, flexShrink: 0 }}
+              sx={{ borderRadius: 999, order: { xs: 3, sm: 0 }, ml: { xs: "auto", sm: 0 } }}
             >
               {nextSection ? "Next →" : "Back to Overview"}
             </Button>
@@ -582,6 +582,7 @@ export default function StaffModuleViewPage() {
               lineHeight: 1.7,
               "& p": { margin: 0 },
               "& p + p": { mt: 1.5 },
+              "& img": { maxWidth: "100%", height: "auto" },
             }}
             dangerouslySetInnerHTML={{ __html: module.content }}
           />
@@ -611,16 +612,18 @@ export default function StaffModuleViewPage() {
             onChange={(_, next) => next && setSectionView(next)}
             sx={{
               gap: 1,
+              flexWrap: "wrap",
               "&& .MuiToggleButtonGroup-grouped": {
                 border: "1px solid",
                 borderColor: "divider",
                 borderRadius: "999px !important",
                 marginLeft: 0,
-                px: 2,
+                px: { xs: 1.5, sm: 2 },
                 py: 0.5,
                 textTransform: "none",
                 fontWeight: 500,
-                fontSize: 13,
+                fontSize: { xs: 12, sm: 13 },
+                whiteSpace: "nowrap",
                 color: "text.secondary",
                 "&:hover": { bgcolor: "action.hover" },
               },
@@ -699,6 +702,7 @@ export default function StaffModuleViewPage() {
                     sx={{
                       display: "flex",
                       alignItems: "center",
+                      flexWrap: "wrap",
                       gap: 2,
                       "&:last-child": { pb: 2 },
                     }}
@@ -800,7 +804,15 @@ export default function StaffModuleViewPage() {
 
                     {/* Action buttons */}
                     {done ? (
-                      <Box sx={{ display: "flex", gap: 1, flexShrink: 0 }}>
+                      <Box
+                        sx={{
+                          display: "flex",
+                          gap: 1,
+                          flexShrink: 0,
+                          width: { xs: "100%", sm: "auto" },
+                          justifyContent: "flex-end",
+                        }}
+                      >
                         <Button
                           variant="outlined"
                           endIcon={<VisibilityOutlined />}
@@ -819,14 +831,23 @@ export default function StaffModuleViewPage() {
                         </Button>
                       </Box>
                     ) : (
-                      <Button
-                        variant="contained"
-                        endIcon={<ChevronRightIcon />}
-                        onClick={() => setSelectedSectionId(section.id)}
-                        sx={{ flexShrink: 0, borderRadius: 999 }}
+                      <Box
+                        sx={{
+                          display: "flex",
+                          flexShrink: 0,
+                          width: { xs: "100%", sm: "auto" },
+                          justifyContent: "flex-end",
+                        }}
                       >
-                        Attempt Now
-                      </Button>
+                        <Button
+                          variant="contained"
+                          endIcon={<ChevronRightIcon />}
+                          onClick={() => setSelectedSectionId(section.id)}
+                          sx={{ borderRadius: 999 }}
+                        >
+                          Attempt Now
+                        </Button>
+                      </Box>
                     )}
                   </CardContent>
                 </Card>
@@ -835,7 +856,10 @@ export default function StaffModuleViewPage() {
         </Box>
       ) : (
         <Paper sx={{ p: { xs: 3, md: 4 } }}>
-          <Box dangerouslySetInnerHTML={{ __html: module.content }} />
+          <Box
+            sx={{ "& img": { maxWidth: "100%", height: "auto" } }}
+            dangerouslySetInnerHTML={{ __html: module.content }}
+          />
         </Paper>
       )}
 

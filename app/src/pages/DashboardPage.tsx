@@ -22,7 +22,7 @@ const cardSx = {
   bgcolor: "background.paper",
 } as const;
 
-const bigNumberSx = { fontSize: "2.6rem", fontWeight: 800, mt: 1 } as const;
+const bigNumberSx = { fontSize: { xs: "2rem", md: "2.6rem" }, fontWeight: 800, mt: 1 } as const;
 
 function StatHeader({ icon, label }: { icon: ReactNode; label: string }) {
   return (
@@ -87,8 +87,8 @@ export default function DashboardPage() {
       <Box
         sx={{
           display: "grid",
-          gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
-          gap: 3,
+          gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr" },
+          gap: { xs: 2, md: 3 },
           maxWidth: 900,
         }}
       >
@@ -105,12 +105,12 @@ export default function DashboardPage() {
         <Paper sx={cardSx}>
           <StatHeader
             icon={<AssignmentTurnedInOutlinedIcon sx={{ fontSize: 26 }} />}
-            label="Modules Assigned"
+            label="Assignments"
           />
           <Typography sx={bigNumberSx}>{modulesAssigned}</Typography>
         </Paper>
 
-        <Paper sx={cardSx}>
+        <Paper sx={{ ...cardSx, gridColumn: { xs: "span 2", md: "auto" } }}>
           <StatHeader
             icon={<WatchLaterOutlinedIcon sx={{ fontSize: 26 }} />}
             label="Overdue trainings"
@@ -128,7 +128,7 @@ export default function DashboardPage() {
         </Paper>
 
         {/* Completion Rate */}
-        <Paper sx={cardSx}>
+        <Paper sx={{ ...cardSx, gridColumn: { xs: "span 2", md: "auto" } }}>
           <StatHeader
             icon={<InsightsOutlinedIcon sx={{ fontSize: 26 }} />}
             label="Completion Rate"

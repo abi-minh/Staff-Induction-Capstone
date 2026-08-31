@@ -24,7 +24,7 @@ export interface AdminUser {
 
 // ─── Modules ──────────────────────────────────────────────────────────────────
 
-export type PostStatus = 'publish' | 'draft';
+export type PostStatus = "publish" | "draft";
 
 export interface Module {
   id: number;
@@ -200,7 +200,7 @@ export interface AssignmentRecord {
 
 // ─── Progress ─────────────────────────────────────────────────────────────────
 
-export type ProgressStatus = 'not_started' | 'in_progress' | 'completed';
+export type ProgressStatus = "not_started" | "in_progress" | "completed";
 
 export interface ProgressRecord {
   id: number;
@@ -227,7 +227,7 @@ export interface PendingQuizReview {
 
 export interface QuizReviewQuestion {
   blockId: string;
-  type: 'multiple_choice' | 'true_false' | 'short_answer';
+  type: "multiple_choice" | "true_false" | "short_answer";
   question: string;
   options: string[] | null;
   correctIndex: number | null;
@@ -255,6 +255,7 @@ export interface ModuleCompletionReport {
   staffBreakdown: {
     userId: number;
     name: string;
+    roles: string[];
     status: ProgressStatus;
     completedAt: string | null;
   }[];
@@ -286,44 +287,70 @@ export interface WPMedia {
   title: string;
 }
 
+export type MediaType = "image" | "video" | "pdf" | "other";
+
+export interface MediaUsage {
+  kind: "module" | "document";
+  id: number;
+  title: string;
+  where?: string;
+}
+
+export interface MediaItem {
+  id: number;
+  filename: string;
+  url: string;
+  mime: string;
+  type: MediaType;
+  size: number;
+  uploadedAt: string;
+  usage: MediaUsage[];
+}
+
 // ─── Blocks (Page Builder) ───────────────────────────────────────────────────
 
 export type HeadingLevel = 1 | 2 | 3 | 4;
-export type ListStyle = 'ordered' | 'unordered';
+export type ListStyle = "ordered" | "unordered";
 
 export interface HeadingBlock {
   id: string;
-  type: 'heading';
+  type: "heading";
   data: { level: HeadingLevel; text: string };
 }
 
 export interface TextBlock {
   id: string;
-  type: 'text';
+  type: "text";
   data: { html: string };
 }
 
 export interface ImageBlock {
   id: string;
-  type: 'image';
-  data: { mediaId: number; url: string; alt: string; caption: string };
+  type: "image";
+  data: {
+    mediaId: number;
+    url: string;
+    alt: string;
+    caption: string;
+    width?: number;
+  };
 }
 
 export interface VideoBlock {
   id: string;
-  type: 'video';
+  type: "video";
   data: { mediaId: number; url: string; caption: string };
 }
 
 export interface ListBlock {
   id: string;
-  type: 'list';
+  type: "list";
   data: { style: ListStyle; items: string[] };
 }
 
 export interface MultipleChoiceBlock {
   id: string;
-  type: 'multiple_choice';
+  type: "multiple_choice";
   data: {
     question: string;
     options: string[];
@@ -336,7 +363,7 @@ export interface MultipleChoiceBlock {
 
 export interface TrueFalseBlock {
   id: string;
-  type: 'true_false';
+  type: "true_false";
   data: {
     question: string;
     correctAnswer: boolean;
@@ -346,7 +373,7 @@ export interface TrueFalseBlock {
 
 export interface ShortAnswerBlock {
   id: string;
-  type: 'short_answer';
+  type: "short_answer";
   data: {
     question: string;
     correctAnswer: string;
@@ -354,11 +381,11 @@ export interface ShortAnswerBlock {
   };
 }
 
-export type CalloutVariant = 'info' | 'warning' | 'success' | 'note';
+export type CalloutVariant = "info" | "warning" | "success" | "note";
 
 export interface CalloutBlock {
   id: string;
-  type: 'callout';
+  type: "callout";
   data: {
     variant: CalloutVariant;
     title?: string;
@@ -367,20 +394,26 @@ export interface CalloutBlock {
 }
 
 // A non-row, non-quiz content block placed inside a row at a specific column.
-export type RowChildBlock = HeadingBlock | TextBlock | ImageBlock | VideoBlock | ListBlock | CalloutBlock;
+export type RowChildBlock =
+  | HeadingBlock
+  | TextBlock
+  | ImageBlock
+  | VideoBlock
+  | ListBlock
+  | CalloutBlock;
 
 export interface PlacedBlock {
-  block:    RowChildBlock;
-  colStart: number;  // 1-indexed
-  colSpan:  number;  // ≥ 1, ≤ columns - colStart + 1
+  block: RowChildBlock;
+  colStart: number; // 1-indexed
+  colSpan: number; // ≥ 1, ≤ columns - colStart + 1
 }
 
 export interface RowBlock {
   id: string;
-  type: 'row';
+  type: "row";
   data: {
-    columns:  number;          // MIN_ROW_COLUMNS..MAX_ROW_COLUMNS
-    children: PlacedBlock[];   // ordered left-to-right by colStart
+    columns: number; // MIN_ROW_COLUMNS..MAX_ROW_COLUMNS
+    children: PlacedBlock[]; // ordered left-to-right by colStart
   };
 }
 
@@ -389,17 +422,24 @@ export const MAX_ROW_COLUMNS = 6;
 export const DEFAULT_ROW_COLUMNS = 3;
 
 export const ROW_COLUMN_PRESETS: { label: string; columns: number }[] = [
-  { label: 'Halves',   columns: 2 },
-  { label: 'Thirds',   columns: 3 },
-  { label: 'Quarters', columns: 4 },
+  { label: "Halves", columns: 2 },
+  { label: "Thirds", columns: 3 },
+  { label: "Quarters", columns: 4 },
 ];
 
 export type Block =
-  | HeadingBlock | TextBlock | ImageBlock | VideoBlock | ListBlock
-  | MultipleChoiceBlock | TrueFalseBlock | ShortAnswerBlock
-  | CalloutBlock | RowBlock;
+  | HeadingBlock
+  | TextBlock
+  | ImageBlock
+  | VideoBlock
+  | ListBlock
+  | MultipleChoiceBlock
+  | TrueFalseBlock
+  | ShortAnswerBlock
+  | CalloutBlock
+  | RowBlock;
 
-export type BlockType = Block['type'];
+export type BlockType = Block["type"];
 
 export type QuizBlock = MultipleChoiceBlock | TrueFalseBlock | ShortAnswerBlock;
 

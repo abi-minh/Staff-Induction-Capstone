@@ -133,6 +133,13 @@ const STATUS_COLORS: Record<CompletionStatus, string> = {
   none: "text.secondary",
 };
 
+const STATUS_CHIP_COLOR: Record<CompletionStatus, "success" | "warning" | "error" | "default"> = {
+  completed: "success",
+  in_progress: "warning",
+  not_started: "error",
+  none: "default",
+};
+
 type SortKey = "name" | "role" | "email" | "completion";
 
 const SORT_COLUMNS: { key: SortKey; label: string }[] = [
@@ -498,7 +505,7 @@ export default function StaffPage() {
             value={roleFilter}
             onChange={(event) => setRoleFilter(event.target.value)}
             size="small"
-            sx={{ minWidth: 180, bgcolor: "background.paper" }}
+            sx={{ minWidth: 180, "& .MuiOutlinedInput-root": { bgcolor: "background.paper" } }}
           >
             <MenuItem value="">All roles</MenuItem>
             {roleOptions.map((r) => (
@@ -516,7 +523,7 @@ export default function StaffPage() {
               setStatusFilter(event.target.value as CompletionStatus | "")
             }
             size="small"
-            sx={{ minWidth: 180, bgcolor: "background.paper" }}
+            sx={{ minWidth: 180, "& .MuiOutlinedInput-root": { bgcolor: "background.paper" } }}
           >
             <MenuItem value="">All statuses</MenuItem>
             {STATUS_FILTERS.map((st) => (
@@ -539,6 +546,26 @@ export default function StaffPage() {
 
         {removeMode && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
+            <FormControlLabel
+              sx={{ display: { xs: "flex", md: "none" }, m: 0 }}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={
+                    selectableIds.length > 0 &&
+                    selectedIds.length === selectableIds.length
+                  }
+                  indeterminate={
+                    selectedIds.length > 0 &&
+                    selectedIds.length < selectableIds.length
+                  }
+                  onChange={(e) =>
+                    setSelectedIds(e.target.checked ? selectableIds : [])
+                  }
+                />
+              }
+              label="Select all"
+            />
             <Typography color="text.secondary">
               {selectedIds.length} selected
             </Typography>
@@ -556,6 +583,7 @@ export default function StaffPage() {
 
         <Paper
           sx={{
+            display: { xs: "none", md: "block" },
             overflow: "hidden",
             boxShadow: "0 14px 40px rgba(15, 23, 42, 0.06)",
             border: "1px solid",
@@ -728,6 +756,97 @@ export default function StaffPage() {
             </TableBody>
           </Table>
         </Paper>
+
+        <Box sx={{ display: { xs: "flex", md: "none" }, flexDirection: "column", gap: 1.5 }}>
+          {rows.map(({ staff: s, completion }) => {
+            const selected = removeMode && selectedIds.includes(s.id);
+            return (
+              <Paper
+                key={s.id}
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  borderRadius: 2,
+                  borderLeft: "5px solid",
+                  borderLeftColor: STATUS_COLORS[completion.status],
+                  borderColor: selected ? "primary.main" : "divider",
+                  bgcolor: selected ? "action.selected" : "background.paper",
+                }}
+              >
+                <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.25 }}>
+                  {removeMode && (
+                    <Checkbox
+                      checked={selectedIds.includes(s.id)}
+                      onChange={() => toggleSelect(s.id)}
+                      disabled={s.id === currentUserId}
+                      sx={{ p: 0.5 }}
+                    />
+                  )}
+                  <Avatar src={s.avatarUrl} sx={{ width: 40, height: 40 }}>
+                    {s.name.charAt(0).toUpperCase()}
+                  </Avatar>
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Link
+                      component={RouterLink}
+                      to={`/staff/${s.id}`}
+                      sx={{ fontWeight: 600, display: "block" }}
+                      noWrap
+                    >
+                      {s.name}
+                    </Link>
+                    <Typography variant="body2" sx={{ color: "primary.main", fontWeight: 500 }} noWrap>
+                      {formatRoles(s.roles)}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ wordBreak: "break-all" }}>
+                      {s.email || "-"}
+                    </Typography>
+                  </Box>
+                  {completion.status !== "none" && (
+                    <Chip
+                      label={STATUS_LABELS[completion.status]}
+                      color={STATUS_CHIP_COLOR[completion.status]}
+                      size="small"
+                      variant="outlined"
+                      sx={{ borderRadius: 999, fontWeight: 500, flexShrink: 0 }}
+                    />
+                  )}
+                </Box>
+
+                {completion.total > 0 && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
+                    {completion.completed}/{completion.total} modules complete
+                  </Typography>
+                )}
+
+                <Box sx={{ mt: 1.5, display: "flex", gap: 1, flexWrap: "wrap" }}>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => openAssign(s.id)}
+                    sx={{ borderRadius: 999, color: "text.secondary", borderColor: "divider" }}
+                  >
+                    Assign
+                  </Button>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() => setRemindTarget(s)}
+                    startIcon={<MailOutlinedIcon />}
+                    sx={{ borderRadius: 999, color: "text.secondary", borderColor: "divider" }}
+                  >
+                    Remind
+                  </Button>
+                </Box>
+              </Paper>
+            );
+          })}
+
+          {!rows.length && (
+            <Typography color="text.secondary" sx={{ py: 4, textAlign: "center" }}>
+              No staff match your search.
+            </Typography>
+          )}
+        </Box>
       </Box>
 
       <Dialog open={assigningUserId !== null} onClose={closeAssign} maxWidth="sm" fullWidth>
