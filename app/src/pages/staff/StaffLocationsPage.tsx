@@ -1,13 +1,29 @@
 import { useMemo, useState } from 'react';
 import {
-  Alert, Avatar, Box, ButtonBase, CircularProgress, InputAdornment, Paper, TextField, Typography,
+  Alert, Avatar, Box, Button, ButtonBase, CircularProgress, InputAdornment, Paper, TextField,
+  Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import PlaceIcon from '@mui/icons-material/Place';
+import DirectionsIcon from '@mui/icons-material/Directions';
 import EditNoteOutlinedIcon from '@mui/icons-material/EditNoteOutlined';
 import LocationMap from '../../components/LocationMap';
 import { useLocations } from '../../hooks/useLocations';
 import type { ClassLocation } from '../../types';
+
+// Google's cross-platform Maps URL: on a phone this hands off to the Maps app
+// with navigation ready to start, on a desktop it opens directions in the
+// browser. Coordinates are preferred over the address because the pin is the
+// exact spot staff need — an address can resolve to the far side of a car park.
+function directionsUrl(location: ClassLocation): string | null {
+  if (location.lat || location.lng) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${location.lat},${location.lng}`;
+  }
+  if (location.address) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(location.address)}`;
+  }
+  return null;
+}
 
 function LocationListItem({
   location,
@@ -135,9 +151,9 @@ export default function StaffLocationsPage() {
           {/* Detail */}
           {selected && (
             <Box sx={{ flex: 1, minWidth: 320, display: 'flex', flexDirection: 'column', gap: 2.5 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
                 <PlaceIcon sx={{ color: 'error.main', fontSize: 34 }} />
-                <Box>
+                <Box sx={{ flex: 1, minWidth: 200 }}>
                   <Typography variant="h2">{selected.title}</Typography>
                   {selected.address && (
                     <Typography variant="body2" color="text.secondary">
@@ -145,6 +161,18 @@ export default function StaffLocationsPage() {
                     </Typography>
                   )}
                 </Box>
+                {directionsUrl(selected) && (
+                  <Button
+                    component="a"
+                    href={directionsUrl(selected) as string}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    variant="contained"
+                    startIcon={<DirectionsIcon />}
+                  >
+                    Get directions
+                  </Button>
+                )}
               </Box>
 
               <LocationMap

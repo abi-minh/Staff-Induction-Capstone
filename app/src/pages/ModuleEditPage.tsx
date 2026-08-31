@@ -86,6 +86,10 @@ export default function ModuleEditPage() {
   );
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const heroFileRef = useRef<HTMLInputElement>(null);
+  // `sections` starts empty and is only filled once the module has loaded, so
+  // saving before that would post an empty array over real content. This flag
+  // is what makes module_blocks safe to include in the payload.
+  const sectionsHydrated = useRef(false);
 
   useEffect(() => {
     if (isNew) {
@@ -107,6 +111,7 @@ export default function ModuleEditPage() {
       module_hero_image: existing.meta.module_hero_image,
     };
     const nextSections = parseSections(existing.meta.module_blocks);
+    sectionsHydrated.current = true;
     const nextAssignedUserIds = extractAssignedUserIds(existing.meta.module_role_targets ?? []);
     const nextAssignedRoles = extractAssignedRoles(
       existing.meta.module_role_targets ?? [],
@@ -163,6 +168,13 @@ export default function ModuleEditPage() {
       return;
     }
 
+    // Only send section data we actually loaded. Without this, hitting Save
+    // before the module finished loading — or after parseSections() failed to
+    // read stored JSON — posts [] and wipes every section.
+    const blocksPayload = sectionsHydrated.current
+      ? { module_blocks: JSON.stringify(sections) }
+      : {};
+
     // Staff/role assignment changes go through bulkAssign/unassign/assignRole
     // (not the plain module meta update below) so the induction_assignments
     // table — due dates, assigned-at timestamps, the Overdue report — stays
@@ -198,7 +210,7 @@ export default function ModuleEditPage() {
       module_duration_days: form.module_duration_days,
       module_icon: form.module_icon,
       module_hero_image: form.module_hero_image,
-      module_blocks: JSON.stringify(sections),
+      ...blocksPayload,
     });
     setInitialSnapshot(createEditorSnapshot(form, sections, assignedUserIds, assignedRoles));
     setInitialAssignedUserIds(assignedUserIds);

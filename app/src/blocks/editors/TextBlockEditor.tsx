@@ -16,23 +16,17 @@ import FormatListNumberedIcon from '@mui/icons-material/FormatListNumbered';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import type { TextBlock } from '../../types';
 
-// Content pasted from Word/OneNote/Outlook arrives saturated with inline
-// style/class/lang/dir attributes (mso-* CSS, MsoListParagraph classes, etc.)
-// that we have no use for — our editor styling is entirely our own, none of
-// that formatting would render as intended anyway. Strip every attribute
-// down to an allowlist (just `href` on links, so pasted URLs still work)
-// rather than blocking specific known attribute names, since Office's
-// markup is a moving target we can't fully enumerate.
-function stripPastedFormatting(html: string): string {
-  const doc = new DOMParser().parseFromString(html, 'text/html');
-  doc.querySelectorAll('style, meta, link, xml').forEach((el) => el.remove());
-  doc.body.querySelectorAll('*').forEach((el) => {
-    const href = el.tagName === 'A' ? el.getAttribute('href') : null;
-    [...el.attributes].forEach((attr) => el.removeAttribute(attr.name));
-    if (href) el.setAttribute('href', href);
-  });
-  return doc.body.innerHTML;
-}
+// Paste is left to ProseMirror.
+//
+// There used to be a transformPastedHTML hook here that stripped attributes off
+// pasted markup — and, for a while, reduced pastes to plain text — on the theory
+// that Word/OneNote's style="..." cruft was what made module saves fail. It
+// wasn't. The real cause was update_post_meta() unslashing the JSON payload and
+// breaking it on any escaped quote (see induction_slash_meta() in the plugin).
+// With that fixed there's nothing to defend against here, and ProseMirror
+// already drops anything its schema can't represent — inline styles included —
+// so a plain paste keeps the formatting that survives (bold, italic, lists,
+// links) and discards the rest on its own.
 
 interface Props {
   block: TextBlock;
@@ -52,9 +46,6 @@ export default function TextBlockEditor({ block, onChange }: Props) {
     content: block.data.html,
     onUpdate: ({ editor }) => {
       onChange({ html: editor.getHTML() });
-    },
-    editorProps: {
-      transformPastedHTML: stripPastedFormatting,
     },
   });
 

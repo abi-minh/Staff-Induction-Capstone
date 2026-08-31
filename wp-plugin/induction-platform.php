@@ -144,6 +144,44 @@ function induction_register_user_meta(): void {
 
 // ─── Sanitization ───────────────────────────────────────────────────────────
 
+// Meta values must be handed to update_*_meta() SLASHED.
+//
+// update_metadata() runs wp_unslash() on the value before the sanitize
+// callback sees it. For a JSON string that is destructive: a quote inside JSON
+// is written \" and unslashing strips the backslash, so
+//     {"html":"after \"Nice Catch\"."}
+// arrives at the sanitizer as
+//     {"html":"after "Nice Catch"."}
+// which is no longer valid JSON. induction_sanitize_blocks_json() then can't
+// decode it, returns '[]', and the module is stored empty — a 200 response with
+// module_blocks:"[]" and no error anywhere. Content with no quote in it has no
+// backslash to lose, which is exactly why removing the quote "fixed" the save.
+//
+// wp_slash() pre-compensates so WP's unslash returns the string we meant. Every
+// meta write of user-supplied text goes through this.
+function induction_slash_meta( string $value ): string {
+    return wp_slash( $value );
+}
+
+// The one way JSON should be encoded before it goes into post meta.
+//
+// wp_json_encode() returns FALSE when the data contains malformed UTF-8 — which
+// rich text pasted out of OneNote/Word demonstrably can. That FALSE used to be
+// handed straight to update_post_meta(), and because this file has no
+// declare(strict_types=1), PHP quietly coerced it to '' on the way into a
+// string-typed parameter. An empty meta value then reads back through
+// `get_post_meta( … ) ?: '[]'` as an empty array, so a save that looked like a
+// clean 200 silently emptied the module. JSON_INVALID_UTF8_SUBSTITUTE (PHP 7.2+)
+// replaces a bad byte sequence with U+FFFD instead of failing the whole encode,
+// so the content survives with one replacement character rather than vanishing.
+// Returns null — never '' or false — if encoding is genuinely impossible, so
+// callers must decide what to do rather than storing a silent wipe.
+function induction_encode_meta_json( $value ): ?string {
+    $flags   = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE;
+    $encoded = wp_json_encode( $value, $flags );
+    return is_string( $encoded ) && '' !== $encoded ? $encoded : null;
+}
+
 // Map markers arrive as a JSON string from the admin SPA. Rebuild the array
 // field by field rather than trusting what was sent: coordinates are clamped
 // to real lat/lng ranges, colours to the palette the UI offers, and anything
@@ -176,7 +214,7 @@ function induction_sanitize_markers_json( string $value ): string {
         ];
     }
 
-    return wp_json_encode( $markers ) ?: '[]';
+    return induction_encode_meta_json( $markers ) ?? '[]';
 }
 
 // Drawn lines — "swim out to here", "walk around this way". Same defensive
@@ -223,7 +261,7 @@ function induction_sanitize_paths_json( string $value ): string {
         ];
     }
 
-    return wp_json_encode( $paths ) ?: '[]';
+    return induction_encode_meta_json( $paths ) ?? '[]';
 }
 
 function induction_sanitize_blocks_json( string $value ): string {
@@ -232,8 +270,10 @@ function induction_sanitize_blocks_json( string $value ): string {
     if ( ! is_array( $decoded ) || json_last_error() !== JSON_ERROR_NONE ) {
         return '[]';
     }
-    // Re-encode to ensure clean JSON (no trailing commas, etc.).
-    return wp_json_encode( $decoded );
+    // Re-encode to ensure clean JSON (no trailing commas, etc.). If that somehow
+    // fails, keep the value that already parsed rather than returning '[]' —
+    // returning the empty array here is what a content wipe looks like.
+    return induction_encode_meta_json( $decoded ) ?? $value;
 }
 
 // ─── Roles ───────────────────────────────────────────────────────────────────
@@ -1625,7 +1665,9 @@ function induction_strip_answers_from_blocks_json( string $blocks_json ): string
         unset( $block );
     }
 
-    return wp_json_encode( $parsed );
+    // '[]' rather than the original on failure: showing staff nothing is a
+    // display bug, handing them the un-stripped answers is a real one.
+    return induction_encode_meta_json( $parsed ) ?? '[]';
 }
 
 // $module_quiz_only = true restricts collection to the section flagged as the
@@ -1712,7 +1754,9 @@ function induction_strip_unpublished_sections_json( string $blocks_json ): strin
         $visible[] = $section;
     }
 
-    return wp_json_encode( $visible );
+    // Same trade-off as above: on failure, show nothing rather than risk
+    // leaking the draft sections this function exists to hide.
+    return induction_encode_meta_json( $visible ) ?? '[]';
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -2047,15 +2091,15 @@ function induction_update_team_profile( WP_REST_Request $request ): WP_REST_Resp
     }
     if ( isset( $params['title'] ) ) {
         $title = sanitize_text_field( (string) $params['title'] );
-        update_user_meta( $id, 'induction_team_title', mb_substr( $title, 0, INDUCTION_TEAM_TITLE_MAX_LENGTH ) );
+        update_user_meta( $id, 'induction_team_title', induction_slash_meta( mb_substr( $title, 0, INDUCTION_TEAM_TITLE_MAX_LENGTH ) ) );
     }
     if ( isset( $params['region'] ) ) {
         $region = sanitize_text_field( (string) $params['region'] );
-        update_user_meta( $id, 'induction_team_region', mb_substr( $region, 0, INDUCTION_TEAM_REGION_MAX_LENGTH ) );
+        update_user_meta( $id, 'induction_team_region', induction_slash_meta( mb_substr( $region, 0, INDUCTION_TEAM_REGION_MAX_LENGTH ) ) );
     }
     if ( isset( $params['bio'] ) ) {
         $bio = sanitize_textarea_field( (string) $params['bio'] );
-        update_user_meta( $id, 'induction_team_bio', mb_substr( $bio, 0, INDUCTION_TEAM_BIO_MAX_LENGTH ) );
+        update_user_meta( $id, 'induction_team_bio', induction_slash_meta( mb_substr( $bio, 0, INDUCTION_TEAM_BIO_MAX_LENGTH ) ) );
     }
     if ( isset( $params['visible'] ) ) {
         update_user_meta( $id, 'induction_team_visible', $params['visible'] ? '1' : '' );
@@ -2149,7 +2193,7 @@ function induction_format_location( WP_Post $post ): array {
 // sanitizer its meta registration uses.
 function induction_save_location_meta( int $id, array $params ): void {
     if ( isset( $params['address'] ) ) {
-        update_post_meta( $id, 'location_address', sanitize_text_field( (string) $params['address'] ) );
+        update_post_meta( $id, 'location_address', induction_slash_meta( sanitize_text_field( (string) $params['address'] ) ) );
     }
     if ( isset( $params['lat'] ) ) {
         update_post_meta( $id, 'location_lat', max( -90, min( 90, (float) $params['lat'] ) ) );
@@ -2164,13 +2208,13 @@ function induction_save_location_meta( int $id, array $params ): void {
         update_post_meta( $id, 'location_thumbnail_id', (int) $params['thumbnail_id'] );
     }
     if ( isset( $params['notes'] ) ) {
-        update_post_meta( $id, 'location_notes', wp_kses_post( (string) $params['notes'] ) );
+        update_post_meta( $id, 'location_notes', induction_slash_meta( wp_kses_post( (string) $params['notes'] ) ) );
     }
     if ( isset( $params['markers'] ) ) {
-        update_post_meta( $id, 'location_markers', induction_sanitize_markers_json( (string) $params['markers'] ) );
+        update_post_meta( $id, 'location_markers', induction_slash_meta( induction_sanitize_markers_json( (string) $params['markers'] ) ) );
     }
     if ( isset( $params['paths'] ) ) {
-        update_post_meta( $id, 'location_paths', induction_sanitize_paths_json( (string) $params['paths'] ) );
+        update_post_meta( $id, 'location_paths', induction_slash_meta( induction_sanitize_paths_json( (string) $params['paths'] ) ) );
     }
 }
 
@@ -2476,10 +2520,21 @@ function induction_save_module_meta( int $id, array $meta ): true|WP_Error {
                 [ 'status' => 409 ]
             );
         }
-        update_post_meta( $id, 'module_blocks', wp_json_encode( $decoded_blocks ) );
+        // Encode BEFORE writing, and refuse the save if it can't be encoded at
+        // all: storing the result unchecked is what turned a failed encode into
+        // an emptied module.
+        $encoded_blocks = induction_encode_meta_json( $decoded_blocks );
+        if ( null === $encoded_blocks ) {
+            return new WP_Error(
+                'induction_blocks_encode_failed',
+                'Module content was not saved: the submitted section data could not be encoded for storage. Nothing was changed.',
+                [ 'status' => 500 ]
+            );
+        }
+        update_post_meta( $id, 'module_blocks', induction_slash_meta( $encoded_blocks ) );
     }
     if ( isset( $meta['module_icon'] ) ) {
-        update_post_meta( $id, 'module_icon', sanitize_text_field( (string) $meta['module_icon'] ) );
+        update_post_meta( $id, 'module_icon', induction_slash_meta( sanitize_text_field( (string) $meta['module_icon'] ) ) );
     }
     if ( isset( $meta['module_hero_image'] ) ) {
         update_post_meta( $id, 'module_hero_image', (int) $meta['module_hero_image'] );
