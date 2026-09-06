@@ -15,10 +15,6 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: resolve(__dirname, '../wp-plugin/assets/app'),
       emptyOutDir: true,
-      // Diagnostic: lets a runtime error in the deployed bundle report a real
-      // file and line instead of 'app.js:341'. Costs a ~5MB app.js.map in the
-      // plugin assets; safe to turn off once the dnd-kit crash is pinned down.
-      sourcemap: true,
       rollupOptions: {
         output: {
           entryFileNames: 'app.js',

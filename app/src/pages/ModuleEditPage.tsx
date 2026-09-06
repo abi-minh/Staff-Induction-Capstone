@@ -9,11 +9,13 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import PublishIcon from '@mui/icons-material/SendOutlined';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
+import HistoryIcon from '@mui/icons-material/History';
 import { useCreateModule, useModule, useUpdateModule } from '../hooks/useModules';
 import { useUploadMedia } from '../hooks/useDocuments';
 import { useStaff, useBulkAssign, useUnassign, useRoles, useAssignRole, useUnassignRole } from '../hooks/useStaff';
 import { createSection, parseSections } from '../blocks/utils';
 import { ICON_OPTIONS, getIconByKey } from '../components/iconLibrary';
+import ModuleHistoryDialog from '../components/ModuleHistoryDialog';
 import type { ModuleFormValues, Section } from '../types';
 
 const empty: ModuleFormValues = {
@@ -84,6 +86,7 @@ export default function ModuleEditPage() {
   const [initialSnapshot, setInitialSnapshot] = useState(() =>
     createEditorSnapshot(empty, [], [], [])
   );
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const heroFileRef = useRef<HTMLInputElement>(null);
   // `sections` starts empty and is only filled once the module has loaded, so
@@ -253,6 +256,16 @@ export default function ModuleEditPage() {
           ← Back to Modules
         </Button>
         <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+          {!isNew && (
+            <Button
+              variant="text"
+              startIcon={<HistoryIcon />}
+              onClick={() => setHistoryOpen(true)}
+              sx={{ ...roundedButtonSx, color: 'text.secondary' }}
+            >
+              History
+            </Button>
+          )}
           <Button variant="outlined" startIcon={<SaveOutlinedIcon />} onClick={() => handleSave()} disabled={saving} sx={roundedButtonSx}>
             Save
           </Button>
@@ -261,6 +274,17 @@ export default function ModuleEditPage() {
           </Button>
         </Box>
       </Box>
+
+      {!isNew && (
+        <ModuleHistoryDialog
+          moduleId={moduleId}
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
+          // The restore already invalidated ['module', id]; refetching hydrates
+          // this page's section state from the restored content.
+          onRestored={() => setHistoryOpen(false)}
+        />
+      )}
 
       <Dialog open={leaveDialogOpen} onClose={() => setLeaveDialogOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle>Leave this page?</DialogTitle>

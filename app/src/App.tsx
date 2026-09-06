@@ -12,6 +12,7 @@ import StaffPage from "./pages/StaffPage";
 import StaffDetailPage from "./pages/StaffDetailPage";
 import StaffRolesPage from "./pages/StaffRolesPage";
 import LocationsPage from "./pages/LocationsPage";
+import BackupPage from "./pages/BackupPage";
 import LocationEditPage from "./pages/LocationEditPage";
 import ReportsPage from "./pages/ReportsPage";
 import OverduePage from "./pages/OverduePage";
@@ -86,6 +87,7 @@ export default function App() {
             <Route path="staff/:id" element={<StaffDetailPage />} />
             <Route path="staff-roles" element={<StaffRolesPage />} />
             <Route path="locations" element={<LocationsPage />} />
+            <Route path="backup" element={<BackupPage />} />
             <Route path="locations/:id" element={<LocationEditPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="overdue" element={<OverduePage />} />
