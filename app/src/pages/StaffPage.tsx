@@ -40,6 +40,7 @@ import {
   useRemoveStaff,
 } from "../hooks/useStaff";
 import ReminderDialog from "../components/ReminderDialog";
+import BulkReminderDialog from "../components/BulkReminderDialog";
 import { useModules } from "../hooks/useModules";
 import { useReports } from "../hooks/useReports";
 import { useAuthStore } from "../store/authStore";
@@ -172,6 +173,10 @@ export default function StaffPage() {
   const currentUserId = useAuthStore((s) => s.user?.id);
 
   const [removeMode, setRemoveMode] = useState(false);
+  // Reminders reuse the remove flow's checkbox column and selectedIds rather
+  // than growing a second selection mechanism; only one mode is active at once.
+  const [remindMode, setRemindMode] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removeNotice, setRemoveNotice] = useState<{
@@ -274,6 +279,7 @@ export default function StaffPage() {
     });
   }, [filteredStaff, reports, statusFilter, sortBy, sortDir]);
 
+  const selectionMode = removeMode || remindMode;
   const selectableIds = rows
     .filter((r) => r.staff.id !== currentUserId)
     .map((r) => r.staff.id);
@@ -334,6 +340,14 @@ export default function StaffPage() {
 
   function toggleRemoveMode() {
     setRemoveMode((m) => !m);
+    setRemindMode(false);
+    setSelectedIds([]);
+    setRemoveNotice(null);
+  }
+
+  function toggleRemindMode() {
+    setRemindMode((m) => !m);
+    setRemoveMode(false);
     setSelectedIds([]);
     setRemoveNotice(null);
   }
@@ -474,6 +488,14 @@ export default function StaffPage() {
             >
               {removeMode ? "Cancel" : "Remove staff"}
             </Button>
+            <Button
+              variant="outlined"
+              startIcon={<MailOutlinedIcon />}
+              onClick={toggleRemindMode}
+              sx={{ borderRadius: 999 }}
+            >
+              {remindMode ? "Cancel" : "Remind staff"}
+            </Button>
           </Box>
         </Box>
 
@@ -544,6 +566,43 @@ export default function StaffPage() {
           </Alert>
         )}
 
+        {remindMode && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2, flexWrap: "wrap" }}>
+            <FormControlLabel
+              sx={{ m: 0 }}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={
+                    selectableIds.length > 0 &&
+                    selectedIds.length === selectableIds.length
+                  }
+                  indeterminate={
+                    selectedIds.length > 0 &&
+                    selectedIds.length < selectableIds.length
+                  }
+                  onChange={(e) =>
+                    setSelectedIds(e.target.checked ? selectableIds : [])
+                  }
+                />
+              }
+              label="Select all"
+            />
+            <Typography color="text.secondary">
+              {selectedIds.length} selected
+            </Typography>
+            <Button
+              variant="contained"
+              startIcon={<MailOutlinedIcon />}
+              disabled={!selectedIds.length}
+              onClick={() => setBulkOpen(true)}
+              sx={{ borderRadius: 999 }}
+            >
+              Compose reminder
+            </Button>
+          </Box>
+        )}
+
         {removeMode && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 2, mb: 2 }}>
             <FormControlLabel
@@ -593,7 +652,7 @@ export default function StaffPage() {
           <Table>
             <TableHead>
               <TableRow>
-                {removeMode && (
+                {selectionMode && (
                   <TableCell
                     padding="checkbox"
                     sx={{ borderBottom: "1px solid", borderColor: "divider" }}
@@ -657,7 +716,7 @@ export default function StaffPage() {
                 <TableRow
                   key={s.id}
                   hover
-                  selected={removeMode && selectedIds.includes(s.id)}
+                  selected={selectionMode && selectedIds.includes(s.id)}
                   sx={{
                     "& td": {
                       py: 1.5,
@@ -667,7 +726,7 @@ export default function StaffPage() {
                     },
                   }}
                 >
-                  {removeMode && (
+                  {selectionMode && (
                     <TableCell padding="checkbox">
                       <Checkbox
                         checked={selectedIds.includes(s.id)}
@@ -746,7 +805,7 @@ export default function StaffPage() {
 
               {!rows.length && (
                 <TableRow>
-                  <TableCell colSpan={removeMode ? 6 : 5} sx={{ py: 6 }}>
+                  <TableCell colSpan={selectionMode ? 6 : 5} sx={{ py: 6 }}>
                     <Typography color="text.secondary">
                       No staff match your search.
                     </Typography>
@@ -759,7 +818,7 @@ export default function StaffPage() {
 
         <Box sx={{ display: { xs: "flex", md: "none" }, flexDirection: "column", gap: 1.5 }}>
           {rows.map(({ staff: s, completion }) => {
-            const selected = removeMode && selectedIds.includes(s.id);
+            const selected = selectionMode && selectedIds.includes(s.id);
             return (
               <Paper
                 key={s.id}
@@ -774,7 +833,7 @@ export default function StaffPage() {
                 }}
               >
                 <Box sx={{ display: "flex", alignItems: "flex-start", gap: 1.25 }}>
-                  {removeMode && (
+                  {selectionMode && (
                     <Checkbox
                       checked={selectedIds.includes(s.id)}
                       onChange={() => toggleSelect(s.id)}
@@ -1078,6 +1137,19 @@ export default function StaffPage() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {bulkOpen && (
+        <BulkReminderDialog
+          staffIds={selectedIds}
+          onClose={() => setBulkOpen(false)}
+          onResult={(notice) => {
+            setReminderNotice(notice);
+            setBulkOpen(false);
+            setRemindMode(false);
+            setSelectedIds([]);
+          }}
+        />
+      )}
 
       {/* Keyed on the target so each open starts from a fresh draft. */}
       {remindTarget && (

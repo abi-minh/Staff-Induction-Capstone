@@ -38,6 +38,11 @@ define( 'INDUCTION_TEAM_MAX_ENTRIES',       200 );
 // Reminder emails are composed in the SPA, so the subject arrives as free text.
 define( 'INDUCTION_REMINDER_SUBJECT_MAX_LENGTH', 200 );
 
+// Ceiling on one bulk reminder send. High enough for a whole roster, low
+// enough that a single request can't sit there firing wp_mail() indefinitely
+// and time out halfway through with no record of who was reached.
+define( 'INDUCTION_REMINDER_BULK_MAX', 200 );
+
 // How many content snapshots to keep per module. Deep enough to undo a bad
 // session's work, shallow enough that a large module's history stays bounded.
 define( 'INDUCTION_MODULE_VERSION_LIMIT', 30 );
@@ -812,6 +817,20 @@ function induction_register_routes(): void {
             'permission_callback' => 'induction_is_admin_user',
             'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
         ],
+    ] );
+
+    // GET  /staff/reminders/context — contexts for several staff at once
+    register_rest_route( $ns, '/staff/reminders/context', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_get_reminder_contexts',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    // POST /staff/reminders — send a batch of composed reminders
+    register_rest_route( $ns, '/staff/reminders', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_send_bulk_reminders',
+        'permission_callback' => 'induction_is_admin_user',
     ] );
 
     // GET  /staff/{id}/reminder — what the SPA needs to compose a reminder
@@ -2068,7 +2087,16 @@ function induction_create_staff( WP_REST_Request $request ): WP_REST_Response|WP
 
     induction_sync_user_into_role( $user_id, $role );
 
-    return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $user_id ) ) );
+    // Notifying is the default; an admin creating a placeholder account can
+    // opt out. A failed send must not fail the request — the account exists,
+    // and the response says whether the email went so the UI can say so too.
+    $notify   = null === $request->get_param( 'notify' ) ? true : (bool) $request->get_param( 'notify' );
+    $notified = $notify && induction_send_account_setup_email( get_user_by( 'id', $user_id ) );
+
+    $response             = induction_format_staff_user( get_user_by( 'id', $user_id ) );
+    $response['notified'] = $notified;
+
+    return rest_ensure_response( $response );
 }
 
 // Picks up any modules already targeted at $role for a single user — used
@@ -3391,17 +3419,19 @@ function induction_portal_page_url(): string {
 // admin can edit it before sending — this endpoint supplies the facts, not
 // the wording. Due dates are pre-formatted with the site's own date_format so
 // the draft matches dates shown everywhere else.
-function induction_get_reminder_context( WP_REST_Request $request ): WP_REST_Response|WP_Error {
-    $id   = (int) $request['id'];
-    $user = get_user_by( 'id', $id );
+// Shared by the single and bulk endpoints so one staff member's reminder and
+// fifty of them are drafted from identically shaped facts.
+function induction_reminder_context_for_user( int $user_id ): ?array {
+    $user = get_user_by( 'id', $user_id );
     if ( ! $user ) {
-        return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
+        return null;
     }
 
-    $outstanding = induction_outstanding_assignments( $id );
+    $outstanding = induction_outstanding_assignments( $user_id );
     $date_format = get_option( 'date_format' );
 
-    return rest_ensure_response( [
+    return [
+        'user_id'       => $user_id,
         'name'          => $user->display_name,
         'email'         => is_email( $user->user_email ) ? $user->user_email : '',
         'site_name'     => wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ),
@@ -3414,7 +3444,152 @@ function induction_get_reminder_context( WP_REST_Request $request ): WP_REST_Res
             'due_label'  => $m['due_date'] ? mysql2date( $date_format, $m['due_date'] ) : '',
             'is_overdue' => $m['is_overdue'],
         ], $outstanding ),
+    ];
+}
+
+function induction_get_reminder_context( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $context = induction_reminder_context_for_user( (int) $request['id'] );
+    if ( null === $context ) {
+        return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
+    }
+    return rest_ensure_response( $context );
+}
+
+// Contexts for many staff at once, so the compose dialog can render a per
+// person preview without one request per recipient.
+function induction_get_reminder_contexts( WP_REST_Request $request ): WP_REST_Response {
+    $raw = (string) $request->get_param( 'user_ids' );
+    $ids = array_slice(
+        array_unique( array_filter( array_map( 'intval', explode( ',', $raw ) ) ) ),
+        0,
+        INDUCTION_REMINDER_BULK_MAX
+    );
+
+    $contexts = [];
+    foreach ( $ids as $id ) {
+        $context = induction_reminder_context_for_user( $id );
+        if ( null !== $context ) {
+            $contexts[] = $context;
+        }
+    }
+
+    return rest_ensure_response( $contexts );
+}
+
+// Sends a batch of already-composed messages. Same contract as the single
+// send: the SPA decides the wording, this decides nothing. Every recipient
+// gets an individual result so a partial failure is visible rather than being
+// flattened into one success or one error.
+function induction_send_bulk_reminders( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $params   = $request->get_json_params();
+    $messages = is_array( $params['messages'] ?? null ) ? $params['messages'] : [];
+
+    if ( ! $messages ) {
+        return new WP_Error( 'no_messages', 'No reminders to send.', [ 'status' => 400 ] );
+    }
+    if ( count( $messages ) > INDUCTION_REMINDER_BULK_MAX ) {
+        return new WP_Error(
+            'too_many_messages',
+            sprintf( 'Send to at most %d staff at a time.', INDUCTION_REMINDER_BULK_MAX ),
+            [ 'status' => 400 ]
+        );
+    }
+
+    $results = [];
+    foreach ( $messages as $message ) {
+        if ( ! is_array( $message ) ) {
+            continue;
+        }
+        $user_id = (int) ( $message['user_id'] ?? 0 );
+        $user    = $user_id ? get_user_by( 'id', $user_id ) : null;
+
+        if ( ! $user ) {
+            $results[] = [ 'user_id' => $user_id, 'name' => '', 'sent' => false, 'reason' => 'Staff member not found.' ];
+            continue;
+        }
+        if ( ! is_email( $user->user_email ) ) {
+            $results[] = [ 'user_id' => $user_id, 'name' => $user->display_name, 'sent' => false, 'reason' => 'No email address on file.' ];
+            continue;
+        }
+
+        $subject = trim( sanitize_text_field( (string) ( $message['subject'] ?? '' ) ) );
+        $body    = trim( wp_kses_post( (string) ( $message['body'] ?? '' ) ) );
+
+        if ( '' === $subject || '' === trim( wp_strip_all_tags( $body ) ) ) {
+            $results[] = [ 'user_id' => $user_id, 'name' => $user->display_name, 'sent' => false, 'reason' => 'Empty subject or message.' ];
+            continue;
+        }
+
+        $sent = wp_mail(
+            $user->user_email,
+            mb_substr( $subject, 0, INDUCTION_REMINDER_SUBJECT_MAX_LENGTH ),
+            $body,
+            [ 'Content-Type: text/html; charset=UTF-8' ]
+        );
+
+        $results[] = [
+            'user_id' => $user_id,
+            'name'    => $user->display_name,
+            'email'   => $user->user_email,
+            'sent'    => (bool) $sent,
+            'reason'  => $sent ? '' : 'WordPress could not send the email.',
+        ];
+    }
+
+    $sent_count = count( array_filter( $results, fn( $r ) => $r['sent'] ) );
+
+    return rest_ensure_response( [
+        'sent'    => $sent_count,
+        'failed'  => count( $results ) - $sent_count,
+        'results' => $results,
     ] );
+}
+
+// ─── Account setup email ────────────────────────────────────────────────────
+
+// Sent when an admin creates a staff account. Deliberately does NOT contain the
+// password the admin typed: mailing a plaintext credential is the thing this
+// replaces. It carries a WordPress password-reset link instead, so the staff
+// member sets their own and the admin never has to relay one out of band.
+function induction_send_account_setup_email( WP_User $user ): bool {
+    if ( ! is_email( $user->user_email ) ) {
+        return false;
+    }
+
+    $site       = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
+    $portal_url = induction_portal_page_url();
+
+    $key = get_password_reset_key( $user );
+    if ( is_wp_error( $key ) ) {
+        return false;
+    }
+    $set_password_url = network_site_url(
+        'wp-login.php?action=rp&key=' . rawurlencode( $key ) . '&login=' . rawurlencode( $user->user_login ),
+        'login'
+    );
+
+    $subject = sprintf( '[%s] Your induction account', $site );
+    $body    = sprintf(
+        '<p>Hi %1$s,</p>' .
+        '<p>An induction account has been created for you at %2$s.</p>' .
+        '<p><strong>Username:</strong> %3$s</p>' .
+        '<p><a href="%4$s">Choose your password</a> to get started, then sign in to the ' .
+        '<a href="%5$s">staff portal</a> to see the training assigned to you.</p>' .
+        '<p>If that link has expired, use the "Lost your password?" option on the sign-in page.</p>' .
+        '<p>— %2$s</p>',
+        esc_html( $user->display_name ),
+        esc_html( $site ),
+        esc_html( $user->user_login ),
+        esc_url( $set_password_url ),
+        esc_url( $portal_url )
+    );
+
+    return (bool) wp_mail(
+        $user->user_email,
+        $subject,
+        $body,
+        [ 'Content-Type: text/html; charset=UTF-8' ]
+    );
 }
 
 // Sends the subject and body the admin composed and edited in the SPA. This
