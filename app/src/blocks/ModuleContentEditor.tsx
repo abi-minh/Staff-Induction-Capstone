@@ -48,22 +48,20 @@ import SubjectIcon from "@mui/icons-material/Subject";
 import ViewColumnOutlinedIcon from "@mui/icons-material/ViewColumnOutlined";
 import type {
   Block,
-  CalloutBlock,
-  HeadingBlock,
-  ImageBlock,
-  ListBlock,
+  BlockAlign,
+  BlockLayout,
   PlacedBlock,
-  RowBlock,
   RowChildBlock,
-  TextBlock,
-  VideoBlock,
 } from "../types";
-import { BLOCK_LABELS, createBlock, isRowChildType } from "./utils";
+import { BLOCK_LABELS, createBlock, isRowChildType, layoutOf } from "./utils";
+import { renderBlockContent } from "./renderContent";
+import LayoutControls from "./LayoutControls";
 import CalloutBlockEditor from "./editors/CalloutBlockEditor";
 import HeadingBlockEditor from "./editors/HeadingBlockEditor";
 import ImageBlockEditor from "./editors/ImageBlockEditor";
 import ListBlockEditor from "./editors/ListBlockEditor";
 import RowBlockEditor from "./editors/RowBlockEditor";
+import ChildPreview from "./editors/RowBlockEditor/ChildPreview";
 import TextBlockEditor from "./editors/TextBlockEditor";
 import VideoBlockEditor from "./editors/VideoBlockEditor";
 import { closestCenter } from "@dnd-kit/collision";
@@ -98,206 +96,124 @@ const HEADING_VARIANT = { 1: "h1", 2: "h2", 3: "h3", 4: "h4" } as const;
 
 function BlockPreview({ block }: { block: Block }) {
   switch (block.type) {
-    case "heading": {
-      const b = block as HeadingBlock;
-      return (
-        <Typography
-          variant={HEADING_VARIANT[b.data.level]}
-          sx={{
-            my: 0.5,
-            color: b.data.text ? "text.primary" : "text.disabled",
-          }}
-        >
-          {b.data.text || "Heading…"}
-        </Typography>
-      );
-    }
-
-    case "text": {
-      const b = block as TextBlock;
-      if (!b.data.html) {
-        return (
-          <Typography color="text.disabled" sx={{ py: 0.5 }}>
-            Start writing…
+    case "heading":
+      return block.data.text
+        ? renderBlockContent(block)
+        : (
+          <Typography variant={HEADING_VARIANT[block.data.level]} sx={{ my: 0.5, color: "text.disabled" }}>
+            Heading…
           </Typography>
         );
-      }
-      return (
-        <Box
-          sx={{
-            "& p": { my: 0.5 },
-            "& a": { color: "primary.main" },
-            "& img": { maxWidth: "100%", height: "auto" },
-          }}
-          dangerouslySetInnerHTML={{ __html: b.data.html }}
-        />
-      );
-    }
 
-    case "image": {
-      const b = block as ImageBlock;
-      if (!b.data.url) {
-        return (
-          <Box
-            sx={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 1,
-              py: 4,
-              bgcolor: "grey.50",
-              border: "2px dashed",
-              borderColor: "divider",
-              borderRadius: 1,
-              color: "text.disabled",
-            }}
-          >
-            <ImageOutlinedIcon sx={{ fontSize: 36 }} />
-            <Typography variant="body2">No image selected</Typography>
-          </Box>
-        );
-      }
-      return (
-        <Box>
-          <Box
-            component="img"
-            src={b.data.url}
-            alt={b.data.alt}
-            sx={{
-              display: "block",
-              height: "auto",
-              borderRadius: 1,
-              ...(b.data.width
-                ? { width: `${b.data.width}%`, maxWidth: "100%" }
-                : { maxWidth: "100%" }),
-            }}
-          />
-          {b.data.caption && (
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ mt: 0.5, display: "block" }}
-            >
-              {b.data.caption}
-            </Typography>
-          )}
-        </Box>
-      );
-    }
+    case "text":
+      return block.data.html
+        ? renderBlockContent(block)
+        : <Typography color="text.disabled" sx={{ py: 0.5 }}>Start writing…</Typography>;
 
-    case "video": {
-      const b = block as VideoBlock;
-      if (!b.data.url) {
-        return (
-          <Box
-            sx={{
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 1,
-              py: 4,
-              bgcolor: "grey.50",
-              border: "2px dashed",
-              borderColor: "divider",
-              borderRadius: 1,
-              color: "text.disabled",
-            }}
-          >
-            <OndemandVideoOutlinedIcon sx={{ fontSize: 36 }} />
-            <Typography variant="body2">No video selected</Typography>
-          </Box>
-        );
-      }
-      return (
-        <Box
-          component="video"
-          src={b.data.url}
-          controls
-          sx={{ maxWidth: "100%", display: "block", borderRadius: 1 }}
-        />
-      );
-    }
+    case "image":
+      return block.data.url
+        ? renderBlockContent(block)
+        : <MediaPlaceholder Icon={ImageOutlinedIcon} label="No image selected" />;
 
-    case "list": {
-      const b = block as ListBlock;
-      const filled = b.data.items.filter(Boolean);
-      if (!filled.length) {
-        return (
-          <Typography color="text.disabled" sx={{ py: 0.5 }}>
-            Add list items…
+    case "video":
+      return block.data.url
+        ? renderBlockContent(block)
+        : <MediaPlaceholder Icon={OndemandVideoOutlinedIcon} label="No video selected" />;
+
+    case "list":
+      return block.data.items.some(Boolean)
+        ? renderBlockContent(block)
+        : <Typography color="text.disabled" sx={{ py: 0.5 }}>Add list items…</Typography>;
+
+    case "callout":
+      return block.data.body || block.data.title
+        ? renderBlockContent(block)
+        : <Typography color="text.disabled" sx={{ py: 0.5 }}>Empty callout…</Typography>;
+
+    case "row":
+      return block.data.children.length
+        ? renderBlockContent(block, (child) => <ChildPreview block={child} />)
+        : (
+          <Typography color="text.disabled" sx={{ py: 0.5, fontSize: "0.85rem" }}>
+            Empty row · {block.data.columns} columns
           </Typography>
         );
-      }
-      return (
-        <Box
-          component={b.data.style === "ordered" ? "ol" : "ul"}
-          sx={{ pl: 3, my: 0.5, "& li": { mb: 0.25 } }}
-        >
-          {filled.map((item, i) => (
-            <li key={i}>{item}</li>
-          ))}
-        </Box>
-      );
-    }
-
-    case "callout": {
-      const b = block as CalloutBlock;
-      if (!b.data.body && !b.data.title) {
-        return (
-          <Typography color="text.disabled" sx={{ py: 0.5 }}>
-            Empty callout…
-          </Typography>
-        );
-      }
-      const palette: Record<
-        CalloutBlock["data"]["variant"],
-        { bg: string; border: string }
-      > = {
-        info: { bg: "#EFF6FF", border: "#BFDBFE" },
-        warning: { bg: "#FFFBEB", border: "#FDE68A" },
-        success: { bg: "#F0FDF4", border: "#BBF7D0" },
-        note: { bg: "#F8FAFC", border: "#E2E8F0" },
-      };
-      const colors = palette[b.data.variant];
-      return (
-        <Box
-          sx={{
-            bgcolor: colors.bg,
-            border: `1px solid ${colors.border}`,
-            borderRadius: 1,
-            p: 1.25,
-          }}
-        >
-          {b.data.title && (
-            <Typography sx={{ fontWeight: 600, mb: 0.25 }}>
-              {b.data.title}
-            </Typography>
-          )}
-          {b.data.body && (
-            <Typography variant="body2">{b.data.body}</Typography>
-          )}
-        </Box>
-      );
-    }
-
-    case "row": {
-      const b = block as RowBlock;
-      return (
-        <Typography
-          color="text.secondary"
-          sx={{ py: 0.5, fontSize: "0.85rem" }}
-        >
-          Row · {b.data.columns} columns · {b.data.children.length} item
-          {b.data.children.length === 1 ? "" : "s"}
-        </Typography>
-      );
-    }
 
     default:
       return null;
   }
+}
+
+function MediaPlaceholder({ Icon, label }: { Icon: typeof SvgIcon; label: string }) {
+  return (
+    <Box
+      sx={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 1,
+        py: 4,
+        bgcolor: "grey.50",
+        border: "2px dashed",
+        borderColor: "divider",
+        borderRadius: 1,
+        color: "text.disabled",
+      }}
+    >
+      <Icon sx={{ fontSize: 36 }} />
+      <Typography variant="body2">{label}</Typography>
+    </Box>
+  );
+}
+
+function LivePreview({ block }: { block: Block }) {
+  const lo = layoutOf(block);
+  const isMedia = block.type === "image" || block.type === "video";
+  const narrowed = !!lo?.width && lo.width < 100;
+  const widthLabel = narrowed ? `${lo?.width}% width` : "Full width";
+  const alignLabel =
+    narrowed && lo?.align && lo.align !== "left" ? ` · ${lo.align}` : "";
+
+  const boundsSx = isMedia
+    ? {
+        "& img, & video": {
+          outline: "1px dashed",
+          outlineColor: "primary.light",
+          outlineOffset: 2,
+        },
+      }
+    : {
+        "& > *": {
+          outline: "1px dashed",
+          outlineColor: "primary.light",
+          outlineOffset: 2,
+          bgcolor: "background.paper",
+        },
+      };
+
+  return (
+    <Box
+      sx={{ mt: 1.5, pt: 1.5, borderTop: "1px dashed", borderColor: "divider" }}
+    >
+      <Typography
+        variant="overline"
+        sx={{
+          display: "block",
+          fontSize: "0.62rem",
+          color: "text.secondary",
+          mb: 0.75,
+          letterSpacing: "0.1em",
+        }}
+      >
+        Live preview · {widthLabel}
+        {alignLabel}
+      </Typography>
+      <Box sx={{ bgcolor: "grey.100", borderRadius: 1, p: 1.5, ...boundsSx }}>
+        <BlockPreview block={block} />
+      </Box>
+    </Box>
+  );
 }
 
 function PaletteItem({
@@ -440,6 +356,8 @@ interface CanvasBlockProps {
   onMoveUp: () => void;
   onMoveDown: () => void;
   onChange: (data: Block["data"]) => void;
+  onLayoutChange: (layout: BlockLayout) => void;
+  onTextAlignChange: (align: BlockAlign) => void;
 }
 
 function CanvasBlock({
@@ -453,6 +371,8 @@ function CanvasBlock({
   onMoveUp,
   onMoveDown,
   onChange,
+  onLayoutChange,
+  onTextAlignChange,
 }: CanvasBlockProps) {
   const sortable = useSortable({
     id: block.id,
@@ -464,13 +384,39 @@ function CanvasBlock({
   function renderEditor() {
     switch (block.type) {
       case "heading":
-        return <HeadingBlockEditor block={block} onChange={onChange} />;
+        return (
+          <HeadingBlockEditor
+            block={block}
+            onChange={onChange}
+            onTextAlignChange={onTextAlignChange}
+          />
+        );
       case "text":
-        return <TextBlockEditor block={block} onChange={onChange} />;
+        return (
+          <TextBlockEditor
+            block={block}
+            onChange={onChange}
+            onTextAlignChange={onTextAlignChange}
+          />
+        );
       case "image":
-        return <ImageBlockEditor block={block} onChange={onChange} />;
+        return (
+          <ImageBlockEditor
+            block={block}
+            onChange={onChange}
+            layout={block.layout}
+            onLayoutChange={onLayoutChange}
+          />
+        );
       case "video":
-        return <VideoBlockEditor block={block} onChange={onChange} />;
+        return (
+          <VideoBlockEditor
+            block={block}
+            onChange={onChange}
+            layout={block.layout}
+            onLayoutChange={onLayoutChange}
+          />
+        );
       case "list":
         return <ListBlockEditor block={block} onChange={onChange} />;
       case "callout":
@@ -534,7 +480,8 @@ function CanvasBlock({
             sx={{
               display: "flex",
               alignItems: "center",
-              gap: 0.25,
+              gap: 0.5,
+              flexWrap: "wrap",
               px: 1,
               py: 0.5,
               borderBottom: "1px solid",
@@ -550,12 +497,16 @@ function CanvasBlock({
               sx={{
                 fontSize: "0.65rem",
                 color: "text.secondary",
-                flex: 1,
                 letterSpacing: "0.1em",
               }}
             >
               {BLOCK_LABELS[block.type]}
             </Typography>
+            <LayoutControls
+              layout={layoutOf(block)}
+              onChange={onLayoutChange}
+            />
+            <Box sx={{ flex: 1 }} />
             <Tooltip title="Move up">
               <span>
                 <IconButton
@@ -595,7 +546,14 @@ function CanvasBlock({
 
         {/* Block content area */}
         <Box sx={{ p: 1.5 }}>
-          {isSelected ? renderEditor() : <BlockPreview block={block} />}
+          {isSelected ? (
+            <>
+              {renderEditor()}
+              <LivePreview block={block} />
+            </>
+          ) : (
+            <BlockPreview block={block} />
+          )}
         </Box>
       </Box>
     </Box>
@@ -620,6 +578,18 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
   function updateBlock(index: number, data: Block["data"]) {
     const updated = [...blocks];
     updated[index] = { ...updated[index], data } as Block;
+    onChange(updated);
+  }
+
+  function updateBlockLayout(index: number, layout: BlockLayout) {
+    const updated = [...blocks];
+    updated[index] = { ...updated[index], layout } as Block;
+    onChange(updated);
+  }
+
+  function updateBlockTextAlign(index: number, textAlign: BlockAlign) {
+    const updated = [...blocks];
+    updated[index] = { ...updated[index], textAlign } as Block;
     onChange(updated);
   }
 
@@ -805,6 +775,10 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
                 onMoveUp={() => moveBlock(index, -1)}
                 onMoveDown={() => moveBlock(index, 1)}
                 onChange={(data) => updateBlock(index, data)}
+                onLayoutChange={(layout) => updateBlockLayout(index, layout)}
+                onTextAlignChange={(align) =>
+                  updateBlockTextAlign(index, align)
+                }
               />
               <DropZone index={index + 1} isActive={isDraggingFromPalette} />
             </React.Fragment>

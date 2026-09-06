@@ -4,9 +4,27 @@ import {
   MIN_ROW_COLUMNS,
 } from '../types';
 import type {
-  Block, BlockType, PlacedBlock, QuizBlock, RowBlock, RowChildBlock, Section,
+  Block, BlockLayout, BlockType, PlacedBlock, QuizBlock, RowBlock, RowChildBlock, Section,
 } from '../types';
 import { stripHtml } from '../util/strings';
+
+export function layoutOf(block: Block): BlockLayout | undefined {
+  const layout = 'layout' in block ? block.layout : undefined;
+  if (block.type === 'image' && block.data.width && layout?.width === undefined) {
+    return { ...layout, width: block.data.width };
+  }
+  return layout;
+}
+
+export function blockLayoutSx(layout?: BlockLayout) {
+  const width = layout?.width;
+  const align = layout?.align ?? 'left';
+  return {
+    ...(width && width < 100 ? { maxWidth: { xs: '100%', sm: `${width}%` } } : null),
+    marginLeft: align === 'left' ? 0 : ('auto' as const),
+    marginRight: align === 'right' ? 0 : ('auto' as const),
+  };
+}
 
 let blockCounter = 0;
 let sectionCounter = 0;

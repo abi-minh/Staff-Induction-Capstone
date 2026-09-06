@@ -1,3 +1,6 @@
+import { Box, Button, IconButton, MenuItem, TextField, Typography } from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import type { ListBlock, ListStyle } from '../../types';
 
 interface Props {
@@ -22,33 +25,53 @@ export default function ListBlockEditor({ block, onChange }: Props) {
   }
 
   return (
-    <div>
-      <select
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+      <TextField
+        select
+        size="small"
+        label="List type"
         value={block.data.style}
         onChange={(e) => onChange({ ...block.data, style: e.target.value as ListStyle })}
+        sx={{ maxWidth: 200 }}
       >
-        <option value="unordered">Bullet list</option>
-        <option value="ordered">Numbered list</option>
-      </select>
+        <MenuItem value="unordered">Bullet list</MenuItem>
+        <MenuItem value="ordered">Numbered list</MenuItem>
+      </TextField>
 
-      <div>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
         {block.data.items.map((item, index) => (
-          <div key={index} style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.25rem' }}>
-            <span>{block.data.style === 'ordered' ? `${index + 1}.` : '•'}</span>
-            <input
-              type="text"
+          <Box key={index} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ minWidth: 20, textAlign: 'right', flexShrink: 0 }}>
+              {block.data.style === 'ordered' ? `${index + 1}.` : '•'}
+            </Typography>
+            <TextField
               value={item}
               onChange={(e) => updateItem(index, e.target.value)}
               placeholder="List item…"
-              style={{ flex: 1 }}
+              size="small"
+              fullWidth
             />
-            <button type="button" onClick={() => removeItem(index)} disabled={block.data.items.length <= 1}>
-              ✕
-            </button>
-          </div>
+            <IconButton
+              size="small"
+              color="error"
+              onClick={() => removeItem(index)}
+              disabled={block.data.items.length <= 1}
+            >
+              <DeleteOutlineIcon sx={{ fontSize: 18 }} />
+            </IconButton>
+          </Box>
         ))}
-        <button type="button" onClick={addItem}>+ Add item</button>
-      </div>
-    </div>
+      </Box>
+
+      <Button
+        size="small"
+        variant="outlined"
+        startIcon={<AddIcon />}
+        onClick={addItem}
+        sx={{ alignSelf: 'flex-start', borderRadius: '10px' }}
+      >
+        Add item
+      </Button>
+    </Box>
   );
 }

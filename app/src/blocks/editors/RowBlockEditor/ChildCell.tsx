@@ -4,9 +4,10 @@ import KeyboardArrowLeftIcon from '@mui/icons-material/KeyboardArrowLeft';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import KeyboardDoubleArrowLeftIcon from '@mui/icons-material/KeyboardDoubleArrowLeft';
 import KeyboardDoubleArrowRightIcon from '@mui/icons-material/KeyboardDoubleArrowRight';
-import { BLOCK_LABELS } from '../../utils';
+import { BLOCK_LABELS, layoutOf } from '../../utils';
 import type { PlacedBlock } from '../../../types';
 import ToolbarButton from '../../ToolbarButton';
+import LayoutControls from '../../LayoutControls';
 import ChildPreview from './ChildPreview';
 import { renderChildEditor } from './renderChildEditor';
 import { useRowContext } from './rowContext';
@@ -72,9 +73,22 @@ export default function ChildCell({ placed }: Props) {
           </ToolbarButton>
         </Box>
       )}
+      {isSelected && (
+        <Box
+          sx={{ px: 1, py: 0.5, borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'background.default' }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <LayoutControls layout={layoutOf(child)} onChange={(layout) => ctx.onUpdateChildLayout(child.id, layout)} />
+        </Box>
+      )}
       <Box sx={{ p: 1.25 }}>
         {isSelected
-          ? renderChildEditor(child, (data) => ctx.onUpdateChildData(child.id, data))
+          ? renderChildEditor(
+              child,
+              (data) => ctx.onUpdateChildData(child.id, data),
+              (layout) => ctx.onUpdateChildLayout(child.id, layout),
+              (align) => ctx.onUpdateChildTextAlign(child.id, align),
+            )
           : <ChildPreview block={child} />
         }
       </Box>

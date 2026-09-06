@@ -14,7 +14,8 @@ import FormatItalicIcon from '@mui/icons-material/FormatItalic';
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted';
 import FormatListNumberedIcon from '@mui/icons-material/FormatListNumbered';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
-import type { TextBlock } from '../../types';
+import type { BlockAlign, TextBlock } from '../../types';
+import TextAlignControls from '../TextAlignControls';
 
 // Paste is left to ProseMirror.
 //
@@ -31,9 +32,10 @@ import type { TextBlock } from '../../types';
 interface Props {
   block: TextBlock;
   onChange: (data: TextBlock['data']) => void;
+  onTextAlignChange?: (align: BlockAlign) => void;
 }
 
-export default function TextBlockEditor({ block, onChange }: Props) {
+export default function TextBlockEditor({ block, onChange, onTextAlignChange }: Props) {
   const [linkAnchor, setLinkAnchor] = useState<HTMLElement | null>(null);
   const [linkUrl, setLinkUrl] = useState('');
 
@@ -144,6 +146,13 @@ export default function TextBlockEditor({ block, onChange }: Props) {
               : <AddLinkIcon sx={{ fontSize: 16 }} />}
           </IconButton>
         </Tooltip>
+
+        {onTextAlignChange && (
+          <>
+            <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
+            <TextAlignControls value={block.textAlign} onChange={onTextAlignChange} />
+          </>
+        )}
       </Box>
 
       {/* Editor area */}
@@ -151,6 +160,7 @@ export default function TextBlockEditor({ block, onChange }: Props) {
         sx={{
           px: 1.5,
           py: 1,
+          textAlign: block.textAlign ?? 'left',
           '& .ProseMirror': {
             outline: 'none',
             minHeight: 80,

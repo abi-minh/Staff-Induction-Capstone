@@ -2,27 +2,31 @@ import { useEffect, useRef, useState } from 'react';
 import { Box, Button, TextField, Typography } from '@mui/material';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import { useUploadMedia } from '../../hooks/useDocuments';
-import type { ImageBlock } from '../../types';
+import { MIN_BLOCK_WIDTH } from '../../types';
+import type { BlockLayout, ImageBlock } from '../../types';
 
 interface Props {
   block: ImageBlock;
   onChange: (data: ImageBlock['data']) => void;
+  layout?: BlockLayout;
+  onLayoutChange: (layout: BlockLayout) => void;
 }
 
-const MIN_WIDTH = 15;
-
-export default function ImageBlockEditor({ block, onChange }: Props) {
+export default function ImageBlockEditor({ block, onChange, layout, onLayoutChange }: Props) {
   const uploadMedia = useUploadMedia();
   const containerRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [handleLeft, setHandleLeft] = useState(0);
 
-  const width = block.data.width;
+  const width = layout?.width ?? block.data.width;
 
-  // Keep the drag handle glued to the image's right edge, whatever the image's
-  // rendered size (natural, or a set width %, and as the container reflows).
+  function setWidth(pct: number) {
+    onLayoutChange({ ...layout, width: Math.min(100, Math.max(MIN_BLOCK_WIDTH, pct)) });
+  }
+
   useEffect(() => {
     const img = imgRef.current;
     if (!img) return;
@@ -46,9 +50,9 @@ export default function ImageBlockEditor({ block, onChange }: Props) {
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
+    if (!rect.width) return;
     const onMove = (ev: PointerEvent) => {
-      const pct = Math.round(((ev.clientX - rect.left) / rect.width) * 100);
-      onChange({ ...block.data, width: Math.min(100, Math.max(MIN_WIDTH, pct)) });
+      setWidth(Math.round(((ev.clientX - rect.left) / rect.width) * 100));
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
@@ -72,7 +76,8 @@ export default function ImageBlockEditor({ block, onChange }: Props) {
                 display: 'block',
                 height: 'auto',
                 borderRadius: 1,
-                ...(width ? { width: `${width}%` } : { maxWidth: '100%' }),
+                maxWidth: '100%',
+                ...(width ? { width: `${width}%` } : null),
               }}
             />
             <Box
@@ -81,9 +86,9 @@ export default function ImageBlockEditor({ block, onChange }: Props) {
               sx={{
                 position: 'absolute',
                 top: 0,
-                left: `${Math.max(0, handleLeft - 7)}px`,
+                left: `${Math.max(0, handleLeft - 12)}px`,
                 height: '100%',
-                width: 16,
+                width: 24,
                 cursor: 'ew-resize',
                 display: 'flex',
                 alignItems: 'center',
@@ -93,22 +98,28 @@ export default function ImageBlockEditor({ block, onChange }: Props) {
             >
               <Box
                 sx={{
-                  width: 6,
-                  height: '55%',
-                  minHeight: 24,
-                  maxHeight: 64,
-                  borderRadius: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: 22,
+                  height: 44,
+                  borderRadius: 999,
                   bgcolor: 'primary.main',
+                  color: '#fff',
                   border: '2px solid #fff',
-                  boxShadow: 2,
+                  boxShadow: 3,
+                  transition: 'transform 0.1s',
+                  '&:hover': { transform: 'scale(1.12)' },
                 }}
-              />
+              >
+                <SwapHorizIcon sx={{ fontSize: 16 }} />
+              </Box>
             </Box>
           </Box>
 
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1, mt: 1 }}>
             <Typography variant="caption" color="text.secondary">
-              {width ?? 100}% width · drag the blue handle to resize
+              {width ?? 100}% width · drag the handle, or use the width buttons in the toolbar above
             </Typography>
             <Button
               size="small"

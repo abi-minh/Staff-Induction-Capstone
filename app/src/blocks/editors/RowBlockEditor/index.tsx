@@ -8,8 +8,8 @@ import {
   MIN_ROW_COLUMNS,
   ROW_COLUMN_PRESETS,
 } from '../../../types';
-import type { PlacedBlock, RowBlock, RowChildBlock } from '../../../types';
-import { BLOCK_LABELS, clampRowColumns, createBlock } from '../../utils';
+import type { BlockAlign, PlacedBlock, RowBlock, RowChildBlock } from '../../../types';
+import { BLOCK_LABELS, blockLayoutSx, clampRowColumns, createBlock } from '../../utils';
 import EmptyCell from '../../EmptyCell';
 import ChildCell from './ChildCell';
 import { RowContext, type RowContextValue } from './rowContext';
@@ -56,6 +56,24 @@ export default function RowBlockEditor({ block, onChange }: Props) {
     onChange(withChildren(block.data, next));
   }
 
+  function updateChildLayout(childId: string, layout: RowChildBlock['layout']) {
+    const next = children.map((c) =>
+      c.block.id === childId
+        ? { ...c, block: { ...c.block, layout } as RowChildBlock }
+        : c,
+    );
+    onChange(withChildren(block.data, next));
+  }
+
+  function updateChildTextAlign(childId: string, textAlign: BlockAlign) {
+    const next = children.map((c) =>
+      c.block.id === childId
+        ? { ...c, block: { ...c.block, textAlign } as RowChildBlock }
+        : c,
+    );
+    onChange(withChildren(block.data, next));
+  }
+
   function removeChild(childId: string) {
     onChange(withChildren(block.data, children.filter((c) => c.block.id !== childId)));
     if (selectedChildId === childId) setSelectedChildId(null);
@@ -70,6 +88,8 @@ export default function RowBlockEditor({ block, onChange }: Props) {
     selectedChildId,
     onSelectChild:     setSelectedChildId,
     onUpdateChildData: updateChildData,
+    onUpdateChildLayout: updateChildLayout,
+    onUpdateChildTextAlign: updateChildTextAlign,
     onRemoveChild:     removeChild,
     onGrowChild:       (id) => applyMutation(tryGrow(children, columns, id)),
     onShrinkChild:     (id) => applyMutation(tryShrink(children, id)),
@@ -111,11 +131,14 @@ export default function RowBlockEditor({ block, onChange }: Props) {
         </Box>
 
         <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${columns}, 1fr)`,
-            gap: 1.5,
-          }}
+          sx={[
+            {
+              display: 'grid',
+              gridTemplateColumns: `repeat(${columns}, 1fr)`,
+              gap: 1.5,
+            },
+            blockLayoutSx(block.layout),
+          ]}
         >
           {renderCells(block.id, children, columns, (anchor, colStart) => setPicker({ anchorEl: anchor, colStart }))}
         </Box>
