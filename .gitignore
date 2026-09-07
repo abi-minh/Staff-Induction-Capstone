@@ -1,2 +1,8 @@
 node_modules/
 CREDENTIALS.md
+
+# Test output
+app/test-results/
+app/cypress/screenshots/
+app/cypress/videos/
+app/cypress.env.json
