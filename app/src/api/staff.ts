@@ -8,12 +8,20 @@ interface InductionUser {
   email: string;
   roles: string[];
   avatar_urls: Record<string, string>;
+  first_name?: string;
+  last_name?: string;
+  dob?: string;
+  suburb?: string;
+  address?: string;
+  profile_photo_url?: string;
   team_photo_url?: string;
   team_title?: string;
   team_region?: string;
   team_bio?: string;
   team_visible?: boolean;
   team_is_owner?: boolean;
+  team_contact_email?: string;
+  team_contact_phone?: string;
 }
 
 function normaliseUser(u: InductionUser): StaffMember {
@@ -24,12 +32,20 @@ function normaliseUser(u: InductionUser): StaffMember {
     email: u.email ?? '',
     roles: u.roles ?? [],
     avatarUrl: u.avatar_urls?.['48'] ?? u.avatar_urls?.['96'] ?? '',
+    firstName: u.first_name ?? '',
+    lastName: u.last_name ?? '',
+    dob: u.dob ?? '',
+    suburb: u.suburb ?? '',
+    address: u.address ?? '',
+    profilePhotoUrl: u.profile_photo_url ?? '',
     teamPhotoUrl: u.team_photo_url ?? '',
     teamTitle: u.team_title ?? '',
     teamRegion: u.team_region ?? '',
     teamBio: u.team_bio ?? '',
     teamVisible: u.team_visible ?? false,
     teamIsOwner: u.team_is_owner ?? false,
+    teamContactEmail: u.team_contact_email ?? '',
+    teamContactPhone: u.team_contact_phone ?? '',
   };
 }
 
@@ -77,22 +93,38 @@ export async function updateStaffRole(id: number, role: string): Promise<StaffMe
 }
 
 export interface TeamProfileUpdate {
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  dob?: string;
+  suburb?: string;
+  address?: string;
   photoMediaId?: number;
   title?: string;
   region?: string;
   bio?: string;
   visible?: boolean;
   isOwner?: boolean;
+  contactEmail?: string;
+  contactPhone?: string;
 }
 
 export async function updateTeamProfile(id: number, update: TeamProfileUpdate): Promise<StaffMember> {
   const { data } = await client.post<InductionUser>(`induction/v1/staff/${id}/team-profile`, {
-    ...(update.photoMediaId !== undefined && { photo_media_id: update.photoMediaId }),
+    ...(update.firstName !== undefined && { first_name: update.firstName }),
+    ...(update.lastName !== undefined && { last_name: update.lastName }),
+    ...(update.email !== undefined && { email: update.email }),
+    ...(update.dob !== undefined && { dob: update.dob }),
+    ...(update.suburb !== undefined && { suburb: update.suburb }),
+    ...(update.address !== undefined && { address: update.address }),
+    ...(update.photoMediaId !== undefined && { profile_photo_media_id: update.photoMediaId }),
     ...(update.title !== undefined && { title: update.title }),
     ...(update.region !== undefined && { region: update.region }),
     ...(update.bio !== undefined && { bio: update.bio }),
     ...(update.visible !== undefined && { visible: update.visible }),
     ...(update.isOwner !== undefined && { is_owner: update.isOwner }),
+    ...(update.contactEmail !== undefined && { contact_email: update.contactEmail }),
+    ...(update.contactPhone !== undefined && { contact_phone: update.contactPhone }),
   });
   return normaliseUser(data);
 }

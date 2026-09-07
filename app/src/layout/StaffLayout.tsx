@@ -8,6 +8,7 @@ import EditOutlinedIcon            from '@mui/icons-material/EditOutlined';
 import MenuBookIcon                from '@mui/icons-material/MenuBookOutlined';
 import PeopleAltOutlinedIcon       from '@mui/icons-material/PeopleAltOutlined';
 import PlaceOutlinedIcon           from '@mui/icons-material/PlaceOutlined';
+import ManageAccountsOutlinedIcon  from '@mui/icons-material/ManageAccountsOutlined';
 import AdminPanelSettingsOutlined  from '@mui/icons-material/AdminPanelSettingsOutlined';
 import LogoutOutlinedIcon          from '@mui/icons-material/LogoutOutlined';
 import { useAuthStore }            from '../store/authStore';
@@ -94,6 +95,7 @@ export default function StaffLayout() {
       {renderNavItem('Resources', '/portal/library', MenuBookIcon)}
       {renderNavItem('Locations', '/portal/locations', PlaceOutlinedIcon)}
       {renderNavItem('Meet Our Team', '/portal/team', PeopleAltOutlinedIcon)}
+      {renderNavItem('Account Settings', '/portal/account', ManageAccountsOutlinedIcon)}
     </Box>
   );
 

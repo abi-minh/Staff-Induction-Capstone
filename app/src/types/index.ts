@@ -96,12 +96,22 @@ export interface StaffMember {
   email: string;
   roles: string[];
   avatarUrl: string;
+  firstName: string;
+  lastName: string;
+  dob: string;
+  suburb: string;
+  address: string;
+  // One photo per person: the account page, the staff list avatar and the
+  // Meet Our Team card all read this.
+  profilePhotoUrl: string;
   teamPhotoUrl: string;
   teamTitle: string;
   teamRegion: string;
   teamBio: string;
   teamVisible: boolean;
   teamIsOwner: boolean;
+  teamContactEmail: string;
+  teamContactPhone: string;
 }
 
 export interface Role {
@@ -120,6 +130,10 @@ export interface TeamMember {
   photoUrl: string;
   bio: string;
   isOwner: boolean;
+  // Public business contact details, admin-maintained and only ever populated
+  // for the featured owner.
+  contactEmail: string;
+  contactPhone: string;
 }
 
 // ─── Class locations ────────────────────────────────────────────────────────

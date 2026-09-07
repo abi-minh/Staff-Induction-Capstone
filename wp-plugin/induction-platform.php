@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.1.6
+ * Version:     1.2.0
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.0.0' );
+define( 'INDUCTION_VERSION', '1.2.0' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -42,6 +42,15 @@ define( 'INDUCTION_REMINDER_SUBJECT_MAX_LENGTH', 200 );
 // enough that a single request can't sit there firing wp_mail() indefinitely
 // and time out halfway through with no record of who was reached.
 define( 'INDUCTION_REMINDER_BULK_MAX', 200 );
+
+// Staff profiles. The photo is uploaded through our own endpoint rather than
+// wp/v2/media because the staff role deliberately has no upload_files
+// capability — see induction_upload_profile_photo().
+define( 'INDUCTION_PROFILE_PHOTO_MAX_BYTES',   4 * 1024 * 1024 );
+define( 'INDUCTION_PROFILE_NAME_MAX_LENGTH',   60 );
+define( 'INDUCTION_PROFILE_SUBURB_MAX_LENGTH', 80 );
+define( 'INDUCTION_PROFILE_ADDRESS_MAX_LENGTH', 200 );
+define( 'INDUCTION_CONTACT_PHONE_MAX_LENGTH',    40 );
 
 // How many content snapshots to keep per module. Deep enough to undo a bad
 // session's work, shallow enough that a large module's history stays bounded.
@@ -69,6 +78,8 @@ add_action( 'init',            'induction_register_post_types' );
 add_action( 'init',            'induction_register_roles' );
 add_action( 'init',            'induction_migrate_legacy_modules', 20 );
 add_action( 'init',            'induction_register_user_meta' );
+add_action( 'admin_init',      'induction_migrate_profile_photos' );
+add_action( 'rest_api_init',   'induction_migrate_profile_photos' );
 add_action( 'rest_api_init',   'induction_register_routes' );
 add_action( 'wp_enqueue_scripts', 'induction_maybe_enqueue_portal' );
 add_action( 'plugins_loaded',  'induction_create_tables' );
@@ -158,6 +169,42 @@ function induction_register_user_meta(): void {
     register_meta( 'user', 'induction_team_bio',      [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',    'auth_callback' => $induction_auth ] );
     register_meta( 'user', 'induction_team_visible',  [ 'type' => 'boolean', 'single' => true, 'show_in_rest' => true, 'default' => false, 'auth_callback' => $induction_auth ] );
     register_meta( 'user', 'induction_team_is_owner', [ 'type' => 'boolean', 'single' => true, 'show_in_rest' => true, 'default' => false, 'auth_callback' => $induction_auth ] );
+
+    // One photo per person, used by the account settings page, the staff list
+    // avatar and the Meet Our Team card alike. Replaces induction_team_photo,
+    // whose values are migrated across once by
+    // induction_migrate_profile_photos() — a separate "team photo" was two
+    // sources of truth for the same face.
+    register_meta( 'user', 'induction_profile_photo', [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,  'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_dob',           [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '', 'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_suburb',        [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '', 'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_address',       [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '', 'auth_callback' => $induction_auth ] );
+
+    // Public contact details for the featured owner's team card. Deliberately
+    // separate from the account email: that one is a login credential, and the
+    // address customers should use is usually a different, business one.
+    // Admin-maintained, and only ever rendered on the owner's card.
+    register_meta( 'user', 'induction_team_contact_email', [ 'type' => 'string', 'single' => true, 'show_in_rest' => true, 'default' => '', 'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_team_contact_phone', [ 'type' => 'string', 'single' => true, 'show_in_rest' => true, 'default' => '', 'auth_callback' => $induction_auth ] );
+}
+
+// Moves any existing Meet Our Team photo to the unified profile photo field.
+// Runs once; guarded by an option so a plugin update doesn't redo it and
+// clobber a photo someone has since changed.
+function induction_migrate_profile_photos(): void {
+    if ( get_option( 'induction_profile_photos_migrated' ) ) {
+        return;
+    }
+
+    foreach ( get_users( [ 'meta_key' => 'induction_team_photo', 'fields' => 'ID', 'number' => 500 ] ) as $user_id ) {
+        $existing = (int) get_user_meta( (int) $user_id, 'induction_profile_photo', true );
+        $legacy   = (int) get_user_meta( (int) $user_id, 'induction_team_photo', true );
+        if ( ! $existing && $legacy ) {
+            update_user_meta( (int) $user_id, 'induction_profile_photo', $legacy );
+        }
+    }
+
+    update_option( 'induction_profile_photos_migrated', 1 );
 }
 
 // ─── Sanitization ───────────────────────────────────────────────────────────
@@ -817,6 +864,26 @@ function induction_register_routes(): void {
             'permission_callback' => 'induction_is_admin_user',
             'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
         ],
+    ] );
+
+    // A staff member's own profile — the account settings page.
+    register_rest_route( $ns, '/me/profile', [
+        [
+            'methods'             => 'GET',
+            'callback'            => 'induction_get_my_profile',
+            'permission_callback' => 'is_user_logged_in',
+        ],
+        [
+            'methods'             => 'POST',
+            'callback'            => 'induction_update_my_profile',
+            'permission_callback' => 'is_user_logged_in',
+        ],
+    ] );
+
+    register_rest_route( $ns, '/me/profile/photo', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_upload_profile_photo',
+        'permission_callback' => 'is_user_logged_in',
     ] );
 
     // GET  /staff/reminders/context — contexts for several staff at once
@@ -1936,24 +2003,47 @@ function induction_hide_admin_bar_for_portal_users( bool $show ): bool {
     return $show;
 }
 
+// The user's own photo, or 0. Reads the unified field and falls back to the
+// legacy team photo so a site that hasn't run the migration yet still shows a
+// face rather than a placeholder.
+function induction_profile_photo_id( int $user_id ): int {
+    $id = (int) get_user_meta( $user_id, 'induction_profile_photo', true );
+    return $id ?: (int) get_user_meta( $user_id, 'induction_team_photo', true );
+}
+
+function induction_profile_photo_url( int $user_id, string $size = 'medium' ): string {
+    $id = induction_profile_photo_id( $user_id );
+    return $id ? ( wp_get_attachment_image_url( $id, $size ) ?: '' ) : '';
+}
+
 function induction_format_staff_user( WP_User $user ): array {
-    $team_photo_id = (int) get_user_meta( $user->ID, 'induction_team_photo', true );
+    $photo_url = induction_profile_photo_url( $user->ID );
     return [
         'id'             => $user->ID,
         'name'           => $user->display_name,
         'slug'           => $user->user_login,
         'email'          => $user->user_email,
         'roles'          => $user->roles,
+        // An uploaded photo wins over the Gravatar fallback everywhere the
+        // staff list, detail page and portal show a face.
         'avatar_urls'    => [
-            '48' => get_avatar_url( $user->ID, [ 'size' => 48 ] ),
-            '96' => get_avatar_url( $user->ID, [ 'size' => 96 ] ),
+            '48' => $photo_url ?: get_avatar_url( $user->ID, [ 'size' => 48 ] ),
+            '96' => $photo_url ?: get_avatar_url( $user->ID, [ 'size' => 96 ] ),
         ],
-        'team_photo_url' => $team_photo_id ? ( wp_get_attachment_image_url( $team_photo_id, 'medium' ) ?: '' ) : '',
+        'first_name'     => (string) get_user_meta( $user->ID, 'first_name', true ),
+        'last_name'      => (string) get_user_meta( $user->ID, 'last_name', true ),
+        'dob'            => (string) get_user_meta( $user->ID, 'induction_dob', true ),
+        'suburb'         => (string) get_user_meta( $user->ID, 'induction_suburb', true ),
+        'address'        => (string) get_user_meta( $user->ID, 'induction_address', true ),
+        'profile_photo_url' => $photo_url,
+        'team_photo_url' => $photo_url,
         'team_title'     => (string) get_user_meta( $user->ID, 'induction_team_title', true ),
         'team_region'    => (string) get_user_meta( $user->ID, 'induction_team_region', true ),
         'team_bio'       => (string) get_user_meta( $user->ID, 'induction_team_bio', true ),
         'team_visible'   => (bool) get_user_meta( $user->ID, 'induction_team_visible', true ),
         'team_is_owner'  => (bool) get_user_meta( $user->ID, 'induction_team_is_owner', true ),
+        'team_contact_email' => (string) get_user_meta( $user->ID, 'induction_team_contact_email', true ),
+        'team_contact_phone' => (string) get_user_meta( $user->ID, 'induction_team_contact_phone', true ),
     ];
 }
 
@@ -2443,6 +2533,228 @@ function induction_update_staff_role( WP_REST_Request $request ): WP_REST_Respon
     return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $id ) ) );
 }
 
+// Writes whatever profile fields are present in $params. Shared by the admin
+// staff editor and a staff member's own account settings page, so the two can
+// never drift apart on validation or on what a field means.
+//
+// $allow_admin_fields gates the two decisions that are not the staff member's
+// to make: whether they appear on Meet Our Team at all, and who is the owner.
+// Everything else — their name, contact details and the wording of their own
+// card — they own.
+function induction_save_profile_fields( int $user_id, array $params, bool $allow_admin_fields ): ?WP_Error {
+    $user_update = [ 'ID' => $user_id ];
+
+    if ( isset( $params['first_name'] ) || isset( $params['last_name'] ) ) {
+        $first = isset( $params['first_name'] )
+            ? mb_substr( sanitize_text_field( (string) $params['first_name'] ), 0, INDUCTION_PROFILE_NAME_MAX_LENGTH )
+            : (string) get_user_meta( $user_id, 'first_name', true );
+        $last = isset( $params['last_name'] )
+            ? mb_substr( sanitize_text_field( (string) $params['last_name'] ), 0, INDUCTION_PROFILE_NAME_MAX_LENGTH )
+            : (string) get_user_meta( $user_id, 'last_name', true );
+
+        $user_update['first_name'] = $first;
+        $user_update['last_name']  = $last;
+
+        // display_name is what the portal, staff list and team card all show,
+        // so it follows the name rather than being edited separately.
+        $full = trim( $first . ' ' . $last );
+        if ( '' !== $full ) {
+            $user_update['display_name'] = $full;
+        }
+    }
+
+    if ( isset( $params['email'] ) ) {
+        $email = sanitize_email( (string) $params['email'] );
+        if ( ! is_email( $email ) ) {
+            return new WP_Error( 'invalid_email', 'That email address is not valid.', [ 'status' => 400 ] );
+        }
+        $owner = email_exists( $email );
+        if ( $owner && (int) $owner !== $user_id ) {
+            return new WP_Error( 'email_taken', 'Another account already uses that email address.', [ 'status' => 409 ] );
+        }
+        $user_update['user_email'] = $email;
+    }
+
+    if ( count( $user_update ) > 1 ) {
+        $result = wp_update_user( $user_update );
+        if ( is_wp_error( $result ) ) {
+            return $result;
+        }
+    }
+
+    if ( isset( $params['dob'] ) ) {
+        $dob = trim( (string) $params['dob'] );
+        // Empty clears it; otherwise it must be a real calendar date, so a
+        // typo can't be stored as a date nothing can render.
+        if ( '' !== $dob ) {
+            [ $y, $m, $d ] = array_pad( array_map( 'intval', explode( '-', $dob ) ), 3, 0 );
+            if ( ! checkdate( $m, $d, $y ) ) {
+                return new WP_Error( 'invalid_dob', 'Enter the date of birth as YYYY-MM-DD.', [ 'status' => 400 ] );
+            }
+            $dob = sprintf( '%04d-%02d-%02d', $y, $m, $d );
+        }
+        update_user_meta( $user_id, 'induction_dob', $dob );
+    }
+
+    if ( isset( $params['suburb'] ) ) {
+        $suburb = sanitize_text_field( (string) $params['suburb'] );
+        update_user_meta( $user_id, 'induction_suburb', mb_substr( $suburb, 0, INDUCTION_PROFILE_SUBURB_MAX_LENGTH ) );
+    }
+
+    if ( isset( $params['address'] ) ) {
+        $address = sanitize_text_field( (string) $params['address'] );
+        update_user_meta( $user_id, 'induction_address', mb_substr( $address, 0, INDUCTION_PROFILE_ADDRESS_MAX_LENGTH ) );
+    }
+
+    // Staff-card wording: the person's own to edit.
+    if ( isset( $params['title'] ) ) {
+        $title = sanitize_text_field( (string) $params['title'] );
+        update_user_meta( $user_id, 'induction_team_title', mb_substr( $title, 0, INDUCTION_TEAM_TITLE_MAX_LENGTH ) );
+    }
+    if ( isset( $params['region'] ) ) {
+        $region = sanitize_text_field( (string) $params['region'] );
+        update_user_meta( $user_id, 'induction_team_region', mb_substr( $region, 0, INDUCTION_TEAM_REGION_MAX_LENGTH ) );
+    }
+    if ( isset( $params['bio'] ) ) {
+        $bio = sanitize_textarea_field( (string) $params['bio'] );
+        update_user_meta( $user_id, 'induction_team_bio', mb_substr( $bio, 0, INDUCTION_TEAM_BIO_MAX_LENGTH ) );
+    }
+
+    // 0 clears the photo; omitting the key leaves it alone.
+    if ( isset( $params['profile_photo_media_id'] ) ) {
+        update_user_meta( $user_id, 'induction_profile_photo', (int) $params['profile_photo_media_id'] );
+    }
+
+    if ( ! $allow_admin_fields ) {
+        return null;
+    }
+
+    // Contact details sit here rather than with the other card fields: they are
+    // the business's public details, not the individual's, so they stay
+    // admin-maintained even though they render on one person's card.
+    if ( isset( $params['contact_email'] ) ) {
+        $contact = trim( (string) $params['contact_email'] );
+        if ( '' !== $contact ) {
+            $contact = sanitize_email( $contact );
+            if ( ! is_email( $contact ) ) {
+                return new WP_Error( 'invalid_contact_email', 'That contact email address is not valid.', [ 'status' => 400 ] );
+            }
+        }
+        update_user_meta( $user_id, 'induction_team_contact_email', $contact );
+    }
+    if ( isset( $params['contact_phone'] ) ) {
+        $phone = sanitize_text_field( (string) $params['contact_phone'] );
+        update_user_meta( $user_id, 'induction_team_contact_phone', mb_substr( $phone, 0, INDUCTION_CONTACT_PHONE_MAX_LENGTH ) );
+    }
+
+    if ( isset( $params['visible'] ) ) {
+        update_user_meta( $user_id, 'induction_team_visible', $params['visible'] ? '1' : '' );
+    }
+    if ( isset( $params['is_owner'] ) ) {
+        if ( $params['is_owner'] ) {
+            foreach ( induction_team_owner_ids() as $previous_id ) {
+                if ( $previous_id !== $user_id ) {
+                    delete_user_meta( $previous_id, 'induction_team_is_owner' );
+                }
+            }
+            update_user_meta( $user_id, 'induction_team_is_owner', '1' );
+        } else {
+            delete_user_meta( $user_id, 'induction_team_is_owner' );
+        }
+    }
+
+    return null;
+}
+
+// ─── A staff member's own profile ───────────────────────────────────────────
+
+function induction_get_my_profile(): WP_REST_Response|WP_Error {
+    $user = wp_get_current_user();
+    if ( ! $user || ! $user->ID ) {
+        return new WP_Error( 'not_logged_in', 'You are not signed in.', [ 'status' => 401 ] );
+    }
+    return rest_ensure_response( induction_format_staff_user( $user ) );
+}
+
+function induction_update_my_profile( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $user_id = get_current_user_id();
+    if ( ! $user_id ) {
+        return new WP_Error( 'not_logged_in', 'You are not signed in.', [ 'status' => 401 ] );
+    }
+
+    $error = induction_save_profile_fields( $user_id, (array) $request->get_json_params(), false );
+    if ( $error ) {
+        return $error;
+    }
+
+    return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $user_id ) ) );
+}
+
+// Staff upload their own photo here rather than through wp/v2/media, because
+// the staff role has no upload_files capability and granting it would let them
+// put anything into the shared media library. This accepts one image, checks
+// it really is an image, and caps the size.
+function induction_upload_profile_photo( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $user_id = get_current_user_id();
+    if ( ! $user_id ) {
+        return new WP_Error( 'not_logged_in', 'You are not signed in.', [ 'status' => 401 ] );
+    }
+
+    // An admin may upload on someone else's behalf from the staff editor.
+    $target = (int) ( $request->get_param( 'user_id' ) ?: $user_id );
+    if ( $target !== $user_id && ! induction_is_admin_user() ) {
+        return new WP_Error( 'forbidden', 'You can only change your own photo.', [ 'status' => 403 ] );
+    }
+
+    $files = $request->get_file_params();
+    $file  = $files['file'] ?? null;
+    if ( ! $file || empty( $file['tmp_name'] ) ) {
+        return new WP_Error( 'no_file', 'No image was uploaded.', [ 'status' => 400 ] );
+    }
+    if ( (int) $file['size'] > INDUCTION_PROFILE_PHOTO_MAX_BYTES ) {
+        return new WP_Error(
+            'file_too_large',
+            sprintf( 'Photos must be %dMB or smaller.', INDUCTION_PROFILE_PHOTO_MAX_BYTES / 1024 / 1024 ),
+            [ 'status' => 400 ]
+        );
+    }
+
+    // Trust the file's actual contents, not the name or the declared type.
+    $check = wp_check_filetype_and_ext( $file['tmp_name'], $file['name'] );
+    if ( empty( $check['type'] ) || ! str_starts_with( (string) $check['type'], 'image/' ) ) {
+        return new WP_Error( 'not_an_image', 'That file is not an image.', [ 'status' => 400 ] );
+    }
+
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    require_once ABSPATH . 'wp-admin/includes/image.php';
+
+    $upload = wp_handle_upload( $file, [ 'test_form' => false ] );
+    if ( ! empty( $upload['error'] ) ) {
+        return new WP_Error( 'upload_failed', (string) $upload['error'], [ 'status' => 500 ] );
+    }
+
+    $attachment_id = wp_insert_attachment( [
+        'post_mime_type' => $upload['type'],
+        'post_title'     => sanitize_file_name( $file['name'] ),
+        'post_status'    => 'inherit',
+    ], $upload['file'] );
+
+    if ( is_wp_error( $attachment_id ) || ! $attachment_id ) {
+        return new WP_Error( 'attachment_failed', 'The image could not be saved.', [ 'status' => 500 ] );
+    }
+
+    wp_update_attachment_metadata(
+        $attachment_id,
+        wp_generate_attachment_metadata( $attachment_id, $upload['file'] )
+    );
+    update_user_meta( $target, 'induction_profile_photo', (int) $attachment_id );
+
+    return rest_ensure_response( [
+        'media_id' => (int) $attachment_id,
+        'url'      => induction_profile_photo_url( $target ),
+    ] );
+}
+
 function induction_update_team_profile( WP_REST_Request $request ): WP_REST_Response|WP_Error {
     $id   = (int) $request['id'];
     $user = get_user_by( 'id', $id );
@@ -2450,42 +2762,16 @@ function induction_update_team_profile( WP_REST_Request $request ): WP_REST_Resp
         return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
     }
 
-    $params = $request->get_json_params();
+    $params = (array) $request->get_json_params();
 
-    // photo_media_id is nullable-by-omission: only touch it if the client
-    // actually sent one (0 explicitly clears the photo; omitting the key
-    // leaves whatever photo is already set untouched).
-    if ( isset( $params['photo_media_id'] ) ) {
-        update_user_meta( $id, 'induction_team_photo', (int) $params['photo_media_id'] );
+    // Legacy key: earlier builds sent the photo as photo_media_id.
+    if ( isset( $params['photo_media_id'] ) && ! isset( $params['profile_photo_media_id'] ) ) {
+        $params['profile_photo_media_id'] = $params['photo_media_id'];
     }
-    if ( isset( $params['title'] ) ) {
-        $title = sanitize_text_field( (string) $params['title'] );
-        update_user_meta( $id, 'induction_team_title', induction_slash_meta( mb_substr( $title, 0, INDUCTION_TEAM_TITLE_MAX_LENGTH ) ) );
-    }
-    if ( isset( $params['region'] ) ) {
-        $region = sanitize_text_field( (string) $params['region'] );
-        update_user_meta( $id, 'induction_team_region', induction_slash_meta( mb_substr( $region, 0, INDUCTION_TEAM_REGION_MAX_LENGTH ) ) );
-    }
-    if ( isset( $params['bio'] ) ) {
-        $bio = sanitize_textarea_field( (string) $params['bio'] );
-        update_user_meta( $id, 'induction_team_bio', induction_slash_meta( mb_substr( $bio, 0, INDUCTION_TEAM_BIO_MAX_LENGTH ) ) );
-    }
-    if ( isset( $params['visible'] ) ) {
-        update_user_meta( $id, 'induction_team_visible', $params['visible'] ? '1' : '' );
-    }
-    // Owner is a single slot, not a flag: promoting someone demotes whoever
-    // held it, so the team page always has exactly zero or one owner.
-    if ( isset( $params['is_owner'] ) ) {
-        if ( $params['is_owner'] ) {
-            foreach ( induction_team_owner_ids() as $previous_id ) {
-                if ( $previous_id !== $id ) {
-                    delete_user_meta( $previous_id, 'induction_team_is_owner' );
-                }
-            }
-            update_user_meta( $id, 'induction_team_is_owner', '1' );
-        } else {
-            delete_user_meta( $id, 'induction_team_is_owner' );
-        }
+
+    $error = induction_save_profile_fields( $id, $params, true );
+    if ( $error ) {
+        return $error;
     }
 
     return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $id ) ) );
@@ -2513,7 +2799,7 @@ function induction_get_team(): WP_REST_Response {
     ] );
 
     $result = array_map( function ( WP_User $user ) use ( $wp_role_names ) {
-        $photo_id = (int) get_user_meta( $user->ID, 'induction_team_photo', true );
+        $is_owner = (bool) get_user_meta( $user->ID, 'induction_team_is_owner', true );
 
         // The job title is the label; the WP role is only a fallback so profiles
         // published before the title field existed don't lose their label.
@@ -2528,9 +2814,14 @@ function induction_get_team(): WP_REST_Response {
             'name'      => $user->display_name,
             'roleLabel' => $title,
             'region'    => (string) get_user_meta( $user->ID, 'induction_team_region', true ),
-            'photoUrl'  => $photo_id ? ( wp_get_attachment_image_url( $photo_id, 'medium' ) ?: '' ) : '',
+            // The same photo the staff member set on their account page.
+            'photoUrl'  => induction_profile_photo_url( $user->ID ),
             'bio'       => (string) get_user_meta( $user->ID, 'induction_team_bio', true ),
-            'isOwner'   => (bool) get_user_meta( $user->ID, 'induction_team_is_owner', true ),
+            'isOwner'   => $is_owner,
+            // Only the owner's card renders these, and /team is readable by any
+            // signed-in account — so they are not sent for anybody else.
+            'contactEmail' => $is_owner ? (string) get_user_meta( $user->ID, 'induction_team_contact_email', true ) : '',
+            'contactPhone' => $is_owner ? (string) get_user_meta( $user->ID, 'induction_team_contact_phone', true ) : '',
         ];
     }, $users );
 
@@ -3911,10 +4202,23 @@ function induction_maybe_enqueue_portal(): void {
         return;
     }
 
-    wp_enqueue_script( 'induction-app', INDUCTION_URL . 'assets/app/app.js', [], filemtime( $js_path ), true );
+    // Cache-bust on INDUCTION_VERSION rather than filemtime(). mtime is not
+    // deployment-safe: extracting a zip restores the archived timestamp, and a
+    // page cache (LiteSpeed on this host) can serve HTML carrying the previous
+    // ?ver=, so the browser never requests the new bundle and runs stale JS
+    // against a newer API. The version constant changes when we say it does,
+    // and is identical on every environment. BUMP IT ON EVERY RELEASE.
+    //
+    // Under WP_DEBUG the mtime is appended so local edits show up without a
+    // version bump on each save.
+    $asset_version = defined( 'WP_DEBUG' ) && WP_DEBUG
+        ? INDUCTION_VERSION . '.' . filemtime( $js_path )
+        : INDUCTION_VERSION;
+
+    wp_enqueue_script( 'induction-app', INDUCTION_URL . 'assets/app/app.js', [], $asset_version, true );
 
     if ( file_exists( $css_path ) ) {
-        wp_enqueue_style( 'induction-app', INDUCTION_URL . 'assets/app/app.css', [], filemtime( $css_path ) );
+        wp_enqueue_style( 'induction-app', INDUCTION_URL . 'assets/app/app.css', [], $asset_version );
     }
 
     wp_localize_script( 'induction-app', 'InductionApp', [
