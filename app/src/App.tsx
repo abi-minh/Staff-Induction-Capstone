@@ -99,6 +99,15 @@ export default function App() {
               element={<QuizReviewDetailPage />}
             />
           </Route>
+
+          {/*
+            Without this, any hash that matches nothing — a stale bookmark, a
+            link to a module that has since been unassigned, a typo — renders
+            null and the user sees a blank page with no way back. Send them to
+            the index instead, which routes on to /portal or /login according
+            to role and auth state.
+          */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </HashRouter>
     </QueryClientProvider>

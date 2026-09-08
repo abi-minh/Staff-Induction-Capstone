@@ -10,11 +10,15 @@ export default defineConfig(({ mode }) => {
     plugins: [react()],
 
     // Base path matches the URL where WordPress will serve these files.
-    base: '/wp-content/plugins/induction-platform/assets/app/',
+    base: '/wp-content/plugins/staff-portal/assets/app/',
 
     build: {
       outDir: resolve(__dirname, '../wp-plugin/assets/app'),
       emptyOutDir: true,
+      // No sourcemap in the shipped plugin: app.js.map is ~8MB and would
+      // publish readable source at a public URL. Flip to true temporarily when
+      // a runtime stack needs real file names instead of app.js:40:60630.
+      sourcemap: false,
       rollupOptions: {
         output: {
           entryFileNames: 'app.js',

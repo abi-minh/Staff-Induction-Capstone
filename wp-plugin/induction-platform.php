@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.2.0
+ * Version:     1.2.5
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.2.0' );
+define( 'INDUCTION_VERSION', '1.2.5' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -82,6 +82,7 @@ add_action( 'admin_init',      'induction_migrate_profile_photos' );
 add_action( 'rest_api_init',   'induction_migrate_profile_photos' );
 add_action( 'rest_api_init',   'induction_register_routes' );
 add_action( 'wp_enqueue_scripts', 'induction_maybe_enqueue_portal' );
+add_action( 'wp_enqueue_scripts', 'induction_portal_dequeue_third_party', 100 );
 add_action( 'plugins_loaded',  'induction_create_tables' );
 add_filter( 'template_include', 'induction_portal_template' );
 add_shortcode( 'induction_portal', 'induction_portal_shortcode' );
@@ -4146,10 +4147,137 @@ function induction_is_portal_page(): bool {
     return $post && has_shortcode( $post->post_content, 'induction_portal' );
 }
 
+/**
+ * Third-party assets to drop on the portal page, matched on the registered
+ * src rather than the handle: handles are private to each plugin and change
+ * between versions, whereas the path a plugin serves from does not.
+ *
+ * The portal page renders one React app into an empty document and bypasses
+ * the theme, so none of the storefront's front-end runs for any reason here.
+ * It is not merely wasted bandwidth. A performance recording from a staff
+ * member showed the browser hanging inside Google's analytics.js: the SPA uses
+ * a hash router, so every click on a sidebar link reads to a tag manager's
+ * history listener as a fresh page view, and the freeze reproduced only for
+ * users running a content blocker, which substitutes its own stub for
+ * analytics.js. Either half of that pairing is somebody else's code doing
+ * somebody else's job on a page that needs neither.
+ *
+ * Note the analytics property is a Universal Analytics one (UA-...), which
+ * stopped accepting data in July 2023, so nothing here is losing measurement
+ * that still exists. Retiring it site-wide is a separate job.
+ *
+ * @return string[] Case-insensitive substrings matched against each src.
+ */
+function induction_portal_blocked_asset_patterns(): array {
+    return (array) apply_filters( 'induction_portal_blocked_asset_patterns', [
+        // Analytics and tag managers - the observed cause of the hang.
+        'googletagmanager.com',
+        'google-analytics.com',
+        '/gtag/js',
+        'analytics.js',
+        // Storefront and page builder. Nothing on this page is built with
+        // either, and WooCommerce alone queues a dozen scripts.
+        '/plugins/woocommerce/',
+        '/plugins/woo-variation-gallery/',
+        '/plugins/woolentor-addons/',
+        '/plugins/elementor/',
+        '/plugins/elementor-pro/',
+        // Marketing and form widgets with no counterpart in the SPA. The
+        // portal signs in over JWT and has no reCAPTCHA-protected form.
+        '/plugins/custom-facebook-feed-pro/',
+        '/plugins/recaptcha-woo/',
+        'google.com/recaptcha',
+        // The theme is bypassed by portal-page.php, so its assets are dead
+        // weight by definition.
+        '/themes/',
+    ] );
+}
+
+/**
+ * Drop those assets, on this page only. Deliberately narrow:
+ *
+ *   - jQuery and the wp-* core scripts stay. They are cheap, and a plugin that
+ *     prints a raw inline jQuery() call in the footer would throw without it.
+ *     Inline scripts attached to a dequeued handle go with it automatically.
+ *   - Styles are left alone apart from the Elementor kit already handled in
+ *     induction_portal_render_head(); a missing stylesheet cannot hang a
+ *     browser, and stripping more risks the page shell.
+ */
+function induction_portal_dequeue_third_party(): void {
+    if ( ! induction_is_portal_page() ) {
+        return;
+    }
+
+    $scripts  = wp_scripts();
+    $patterns = induction_portal_blocked_asset_patterns();
+
+    foreach ( $scripts->queue as $handle ) {
+        $src = $scripts->registered[ $handle ]->src ?? '';
+        if ( ! is_string( $src ) || '' === $src ) {
+            continue;
+        }
+        // Never match this plugin's own bundle, whatever the pattern list says.
+        if ( false !== strpos( $src, INDUCTION_URL ) ) {
+            continue;
+        }
+        foreach ( $patterns as $pattern ) {
+            if ( false !== stripos( $src, (string) $pattern ) ) {
+                wp_dequeue_script( $handle );
+                break;
+            }
+        }
+    }
+}
+
+/**
+ * Remove <script> tags that were printed as raw markup rather than enqueued,
+ * so there is no handle to dequeue. Tag manager snippets are the usual case:
+ * both the loader and the inline dataLayer bootstrap that configures it, which
+ * is why inline script bodies are matched too and not just src attributes.
+ *
+ * Applied to buffered wp_head() and wp_footer() output.
+ */
+function induction_portal_strip_third_party( string $html ): string {
+    $patterns = array_merge(
+        induction_portal_blocked_asset_patterns(),
+        // Injected as raw markup and conflicts with the SPA's own scripts.
+        [ 'mailerlite', 'dataLayer', 'GoogleAnalyticsObject' ]
+    );
+
+    return (string) preg_replace_callback(
+        '#<script\b[^>]*>.*?</script>#is',
+        static function ( array $matches ) use ( $patterns ): string {
+            // The SPA's own bundle is printed by wp_footer() and must survive
+            // regardless of what the pattern list happens to contain.
+            if ( false !== strpos( $matches[0], INDUCTION_URL ) ) {
+                return $matches[0];
+            }
+            foreach ( $patterns as $pattern ) {
+                if ( false !== stripos( $matches[0], (string) $pattern ) ) {
+                    return '';
+                }
+            }
+            return $matches[0];
+        },
+        $html
+    );
+}
+
+/**
+ * wp_footer() is where this plugin's own bundle is printed, so it cannot simply
+ * be skipped - it is buffered and filtered like the head, which also catches a
+ * tag manager's body snippet.
+ */
+function induction_portal_render_footer(): void {
+    ob_start();
+    wp_footer();
+    echo induction_portal_strip_third_party( (string) ob_get_clean() );
+}
+
 // This page bypasses the theme entirely for the SPA (see portal-page.php),
 // so wp_head() still pulls in third-party CSS/JS meant for the theme's own
-// pages — none of which this page has any use for. Buffer wp_head() and
-// strip the two known offenders out of this page only, rather than
+// pages - none of which this page has any use for. Buffer wp_head() and
+// strip the known offenders out of this page only, rather than
 // disabling them site-wide:
 //   - MailerLite's universal.js: injected as raw markup (not via
 //     wp_enqueue_script, so there's no handle to dequeue) and conflicts
@@ -4164,11 +4292,7 @@ function induction_portal_render_head(): void {
     ob_start();
     wp_head();
     $head_output = ob_get_clean();
-    $head_output = preg_replace_callback(
-        '#<script\b[^>]*>.*?</script>#is',
-        fn( $matches ) => ( stripos( $matches[0], 'mailerlite' ) !== false ) ? '' : $matches[0],
-        $head_output
-    );
+    $head_output = induction_portal_strip_third_party( $head_output );
     $head_output = preg_replace( '#<link\b[^>]*href=["\'][^"\']*elementor[^"\']*["\'][^>]*/?>#i', '', $head_output );
     $head_output = preg_replace_callback(
         '#<style\b[^>]*id=["\'][^"\']*elementor[^"\']*["\'][^>]*>.*?</style>#is',

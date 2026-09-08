@@ -28,6 +28,6 @@ show_admin_bar( false );
 </head>
 <body>
     <div id="induction-app-root"></div>
-    <?php wp_footer(); ?>
+    <?php induction_portal_render_footer(); ?>
 </body>
 </html>
