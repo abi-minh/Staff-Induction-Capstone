@@ -10,6 +10,7 @@ import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import PeopleOutlinedIcon      from '@mui/icons-material/PeopleOutlined';
 import BadgeOutlinedIcon       from '@mui/icons-material/BadgeOutlined';
 import PlaceOutlinedIcon       from '@mui/icons-material/PlaceOutlined';
+import BackupOutlinedIcon      from '@mui/icons-material/BackupOutlined';
 import BarChartOutlinedIcon    from '@mui/icons-material/BarChartOutlined';
 import RateReviewOutlinedIcon  from '@mui/icons-material/RateReviewOutlined';
 import VisibilityOutlinedIcon  from '@mui/icons-material/VisibilityOutlined';
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   { label: 'Staff',         path: '/staff',        Icon: PeopleOutlinedIcon },
   { label: 'Staff Roles',   path: '/staff-roles',  Icon: BadgeOutlinedIcon },
   { label: 'Locations',     path: '/locations',    Icon: PlaceOutlinedIcon },
+  { label: 'Backup',        path: '/backup',       Icon: BackupOutlinedIcon },
   { label: 'Quiz Reviews',  path: '/quiz-reviews', Icon: RateReviewOutlinedIcon },
   { label: 'Reports',       path: '/reports',      Icon: BarChartOutlinedIcon },
 ];

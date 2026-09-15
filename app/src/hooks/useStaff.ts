@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, assignRole, unassignRole, fetchRoles, createStaffRole, deleteStaffRole, createStaff, removeStaff, updateStaffRole, updateTeamProfile, fetchReminderContext, sendTrainingReminder } from '../api/staff';
-import type { TeamProfileUpdate, ReminderDraft } from '../api/staff';
+import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, assignRole, unassignRole, fetchRoles, createStaffRole, deleteStaffRole, createStaff, removeStaff, updateStaffRole, updateTeamProfile, fetchReminderContext, fetchReminderContexts, sendTrainingReminder, sendBulkReminders } from '../api/staff';
+import type { TeamProfileUpdate, ReminderDraft, BulkReminderMessage } from '../api/staff';
 import type { NewStaffInput } from '../types';
 
 export function useStaff() {
@@ -98,6 +98,22 @@ export function useReminderContext(userId: number) {
     queryFn: () => fetchReminderContext(userId),
     enabled: userId > 0,
     staleTime: 0,
+  });
+}
+
+// Facts for a whole batch, fetched once when the bulk dialog opens.
+export function useReminderContexts(userIds: number[]) {
+  return useQuery({
+    queryKey: ['reminderContexts', [...userIds].sort((a, b) => a - b)],
+    queryFn: () => fetchReminderContexts(userIds),
+    enabled: userIds.length > 0,
+    staleTime: 0,
+  });
+}
+
+export function useSendBulkReminders() {
+  return useMutation({
+    mutationFn: (messages: BulkReminderMessage[]) => sendBulkReminders(messages),
   });
 }
 

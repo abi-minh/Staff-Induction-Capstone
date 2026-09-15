@@ -12,6 +12,7 @@ import StaffPage from "./pages/StaffPage";
 import StaffDetailPage from "./pages/StaffDetailPage";
 import StaffRolesPage from "./pages/StaffRolesPage";
 import LocationsPage from "./pages/LocationsPage";
+import BackupPage from "./pages/BackupPage";
 import LocationEditPage from "./pages/LocationEditPage";
 import ReportsPage from "./pages/ReportsPage";
 import OverduePage from "./pages/OverduePage";
@@ -23,6 +24,7 @@ import StaffModuleViewPage from "./pages/staff/StaffModuleViewPage";
 import StaffLibraryPage from "./pages/staff/StaffLibraryPage";
 import MeetTheTeamPage from "./pages/staff/MeetTheTeamPage";
 import StaffLocationsPage from "./pages/staff/StaffLocationsPage";
+import AccountSettingsPage from "./pages/staff/AccountSettingsPage";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
@@ -65,6 +67,7 @@ export default function App() {
             <Route path="library" element={<StaffLibraryPage />} />
             <Route path="team" element={<MeetTheTeamPage />} />
             <Route path="locations" element={<StaffLocationsPage />} />
+            <Route path="account" element={<AccountSettingsPage />} />
           </Route>
 
           <Route
@@ -86,6 +89,7 @@ export default function App() {
             <Route path="staff/:id" element={<StaffDetailPage />} />
             <Route path="staff-roles" element={<StaffRolesPage />} />
             <Route path="locations" element={<LocationsPage />} />
+            <Route path="backup" element={<BackupPage />} />
             <Route path="locations/:id" element={<LocationEditPage />} />
             <Route path="reports" element={<ReportsPage />} />
             <Route path="overdue" element={<OverduePage />} />
@@ -95,6 +99,15 @@ export default function App() {
               element={<QuizReviewDetailPage />}
             />
           </Route>
+
+          {/*
+            Without this, any hash that matches nothing — a stale bookmark, a
+            link to a module that has since been unassigned, a typo — renders
+            null and the user sees a blank page with no way back. Send them to
+            the index instead, which routes on to /portal or /login according
+            to role and auth state.
+          */}
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </HashRouter>
     </QueryClientProvider>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link as RouterLink } from 'react-router-dom';
 import {
-  Alert, Avatar, Box, Button, Checkbox, Chip, FormControlLabel, IconButton, Link, MenuItem,
+  Alert, Avatar, Box, Button, Checkbox, Chip, Divider, FormControlLabel, IconButton, Link, MenuItem,
   Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -75,9 +75,20 @@ export default function StaffDetailPage() {
   const [editingRole, setEditingRole] = useState(false);
   const [roleError, setRoleError] = useState('');
 
+  // Personal details. Saved through the same endpoint as the card fields, so
+  // one Save covers the whole panel rather than two competing buttons.
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [email, setEmail] = useState('');
+  const [dob, setDob] = useState('');
+  const [suburb, setSuburb] = useState('');
+  const [address, setAddress] = useState('');
+
   const [teamTitle, setTeamTitle] = useState('');
   const [teamRegion, setTeamRegion] = useState('');
   const [teamBio, setTeamBio] = useState('');
+  const [teamContactEmail, setTeamContactEmail] = useState('');
+  const [teamContactPhone, setTeamContactPhone] = useState('');
   const [teamVisible, setTeamVisible] = useState(false);
   const [teamIsOwner, setTeamIsOwner] = useState(false);
   const [teamPhotoPreview, setTeamPhotoPreview] = useState('');
@@ -88,9 +99,17 @@ export default function StaffDetailPage() {
 
   useEffect(() => {
     if (!staff) return;
+    setFirstName(staff.firstName);
+    setLastName(staff.lastName);
+    setEmail(staff.email);
+    setDob(staff.dob);
+    setSuburb(staff.suburb);
+    setAddress(staff.address);
     setTeamTitle(staff.teamTitle);
     setTeamRegion(staff.teamRegion);
     setTeamBio(staff.teamBio);
+    setTeamContactEmail(staff.teamContactEmail);
+    setTeamContactPhone(staff.teamContactPhone);
     setTeamVisible(staff.teamVisible);
     setTeamIsOwner(staff.teamIsOwner);
     setTeamPhotoPreview(staff.teamPhotoUrl);
@@ -115,9 +134,17 @@ export default function StaffDetailPage() {
   const canEditRole = !isAdmin && !isSelf;
   const currentRoleValue = staff.roles.find((r) => roles.some((opt) => opt.value === r)) ?? staff.roles[0] ?? '';
   const teamDirty =
+    firstName !== staff.firstName ||
+    lastName !== staff.lastName ||
+    email !== staff.email ||
+    dob !== staff.dob ||
+    suburb !== staff.suburb ||
+    address !== staff.address ||
     teamTitle !== staff.teamTitle ||
     teamRegion !== staff.teamRegion ||
     teamBio !== staff.teamBio ||
+    teamContactEmail !== staff.teamContactEmail ||
+    teamContactPhone !== staff.teamContactPhone ||
     teamVisible !== staff.teamVisible ||
     teamIsOwner !== staff.teamIsOwner ||
     teamPhotoMediaId !== null;
@@ -152,9 +179,17 @@ export default function StaffDetailPage() {
       await updateTeamProfile.mutateAsync({
         id: userId,
         update: {
+          firstName,
+          lastName,
+          email,
+          dob,
+          suburb,
+          address,
           title: teamTitle,
           region: teamRegion,
           bio: teamBio,
+          contactEmail: teamContactEmail,
+          contactPhone: teamContactPhone,
           visible: teamVisible,
           isOwner: teamIsOwner,
           ...(teamPhotoMediaId !== null ? { photoMediaId: teamPhotoMediaId } : {}),
@@ -163,7 +198,7 @@ export default function StaffDetailPage() {
       setTeamPhotoMediaId(null);
       setTeamSaved(true);
     } catch (err) {
-      setTeamError(err instanceof Error ? err.message : 'Could not save team profile.');
+      setTeamError(err instanceof Error ? err.message : 'Could not save this staff member.');
     }
   }
 
@@ -251,7 +286,7 @@ export default function StaffDetailPage() {
       <Paper variant="outlined" sx={{ p: 3, mb: 3, borderRadius: 2, maxWidth: 820 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2.5, color: 'primary.main' }}>
           <BadgeOutlinedIcon />
-          <Typography sx={{ fontWeight: 700, color: 'text.primary' }}>Meet Our Team Profile</Typography>
+          <Typography sx={{ fontWeight: 700, color: 'text.primary' }}>Profile &amp; Team Card</Typography>
         </Box>
         <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, flexShrink: 0 }}>
@@ -276,6 +311,58 @@ export default function StaffDetailPage() {
           </Box>
 
           <Box sx={{ flex: 1, minWidth: 240 }}>
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mb: 1.5 }}>
+              <TextField
+                label="First name"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                sx={{ flex: 1, minWidth: 200 }}
+              />
+              <TextField
+                label="Last name"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                helperText="The displayed name follows first + last"
+                sx={{ flex: 1, minWidth: 200 }}
+              />
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mb: 1.5 }}>
+              <TextField
+                label="Email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                helperText="Used for reminders and sign-in"
+                sx={{ flex: 1, minWidth: 200 }}
+              />
+              <TextField
+                label="Date of birth"
+                type="date"
+                value={dob}
+                onChange={(e) => setDob(e.target.value)}
+                slotProps={{ inputLabel: { shrink: true } }}
+                sx={{ flex: 1, minWidth: 200 }}
+              />
+            </Box>
+
+            <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mb: 2.5 }}>
+              <TextField
+                label="Suburb"
+                value={suburb}
+                onChange={(e) => setSuburb(e.target.value)}
+                sx={{ flex: 1, minWidth: 200 }}
+              />
+              <TextField
+                label="Address"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                sx={{ flex: 2, minWidth: 240 }}
+              />
+            </Box>
+
+            <Divider sx={{ mb: 2.5 }} />
+
             <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mb: 1.5 }}>
               <TextField
                 label="Job Title"
@@ -314,6 +401,25 @@ export default function StaffDetailPage() {
                 }
                 label="Show on the Meet Our Team page"
               />
+              <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mb: 1.5 }}>
+                <TextField
+                  label="Contact email"
+                  type="email"
+                  value={teamContactEmail}
+                  onChange={(e) => setTeamContactEmail(e.target.value)}
+                  placeholder="bookings@example.com"
+                  helperText="Business address — shown on the owner's card only"
+                  sx={{ flex: 1, minWidth: 220 }}
+                />
+                <TextField
+                  label="Contact phone"
+                  value={teamContactPhone}
+                  onChange={(e) => setTeamContactPhone(e.target.value)}
+                  helperText="Optional"
+                  sx={{ flex: 1, minWidth: 180 }}
+                />
+              </Box>
+
               <FormControlLabel
                 control={
                   <Checkbox

@@ -15,4 +15,25 @@ module.exports = {
       { allowConstantExport: true },
     ],
   },
+  overrides: [
+    {
+      // Cypress specs run in the test runner, not the browser bundle: they use
+      // Mocha and Cypress globals and are not React components.
+      files: ['cypress/**/*.ts'],
+      env: { browser: true, node: true, mocha: true },
+      globals: {
+        cy: 'readonly',
+        Cypress: 'readonly',
+        expect: 'readonly',
+        assert: 'readonly',
+      },
+      rules: { 'react-refresh/only-export-components': 'off' },
+    },
+    {
+      // Vitest specs import their own globals, so only the unused-expression
+      // relaxation that assertion libraries need applies here.
+      files: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+      rules: { '@typescript-eslint/no-unused-expressions': 'off' },
+    },
+  ],
 }

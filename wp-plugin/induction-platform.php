@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.1.6
+ * Version:     1.2.5
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.0.0' );
+define( 'INDUCTION_VERSION', '1.2.5' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -37,6 +37,32 @@ define( 'INDUCTION_TEAM_MAX_ENTRIES',       200 );
 
 // Reminder emails are composed in the SPA, so the subject arrives as free text.
 define( 'INDUCTION_REMINDER_SUBJECT_MAX_LENGTH', 200 );
+
+// Ceiling on one bulk reminder send. High enough for a whole roster, low
+// enough that a single request can't sit there firing wp_mail() indefinitely
+// and time out halfway through with no record of who was reached.
+define( 'INDUCTION_REMINDER_BULK_MAX', 200 );
+
+// Staff profiles. The photo is uploaded through our own endpoint rather than
+// wp/v2/media because the staff role deliberately has no upload_files
+// capability — see induction_upload_profile_photo().
+define( 'INDUCTION_PROFILE_PHOTO_MAX_BYTES',   4 * 1024 * 1024 );
+define( 'INDUCTION_PROFILE_NAME_MAX_LENGTH',   60 );
+define( 'INDUCTION_PROFILE_SUBURB_MAX_LENGTH', 80 );
+define( 'INDUCTION_PROFILE_ADDRESS_MAX_LENGTH', 200 );
+define( 'INDUCTION_CONTACT_PHONE_MAX_LENGTH',    40 );
+
+// How many content snapshots to keep per module. Deep enough to undo a bad
+// session's work, shallow enough that a large module's history stays bounded.
+define( 'INDUCTION_MODULE_VERSION_LIMIT', 30 );
+
+// Export/import. Files are embedded as base64, which inflates them by ~33% and
+// has to survive a POST back through PHP on the way in — so both a per-file and
+// a whole-export ceiling. Anything over the per-file cap is exported by URL
+// instead and sideloaded at import time, which degrades rather than fails.
+define( 'INDUCTION_EXPORT_FORMAT_VERSION',  1 );
+define( 'INDUCTION_EXPORT_MAX_FILE_BYTES',  8 * 1024 * 1024 );
+define( 'INDUCTION_EXPORT_MAX_TOTAL_BYTES', 64 * 1024 * 1024 );
 
 // Location map markers. The colour list must stay in step with MARKER_COLORS
 // in app/src/components/LocationMap.tsx — it's the palette the admin can pick.
@@ -52,8 +78,11 @@ add_action( 'init',            'induction_register_post_types' );
 add_action( 'init',            'induction_register_roles' );
 add_action( 'init',            'induction_migrate_legacy_modules', 20 );
 add_action( 'init',            'induction_register_user_meta' );
+add_action( 'admin_init',      'induction_migrate_profile_photos' );
+add_action( 'rest_api_init',   'induction_migrate_profile_photos' );
 add_action( 'rest_api_init',   'induction_register_routes' );
 add_action( 'wp_enqueue_scripts', 'induction_maybe_enqueue_portal' );
+add_action( 'wp_enqueue_scripts', 'induction_portal_dequeue_third_party', 100 );
 add_action( 'plugins_loaded',  'induction_create_tables' );
 add_filter( 'template_include', 'induction_portal_template' );
 add_shortcode( 'induction_portal', 'induction_portal_shortcode' );
@@ -141,6 +170,42 @@ function induction_register_user_meta(): void {
     register_meta( 'user', 'induction_team_bio',      [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',    'auth_callback' => $induction_auth ] );
     register_meta( 'user', 'induction_team_visible',  [ 'type' => 'boolean', 'single' => true, 'show_in_rest' => true, 'default' => false, 'auth_callback' => $induction_auth ] );
     register_meta( 'user', 'induction_team_is_owner', [ 'type' => 'boolean', 'single' => true, 'show_in_rest' => true, 'default' => false, 'auth_callback' => $induction_auth ] );
+
+    // One photo per person, used by the account settings page, the staff list
+    // avatar and the Meet Our Team card alike. Replaces induction_team_photo,
+    // whose values are migrated across once by
+    // induction_migrate_profile_photos() — a separate "team photo" was two
+    // sources of truth for the same face.
+    register_meta( 'user', 'induction_profile_photo', [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,  'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_dob',           [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '', 'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_suburb',        [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '', 'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_address',       [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '', 'auth_callback' => $induction_auth ] );
+
+    // Public contact details for the featured owner's team card. Deliberately
+    // separate from the account email: that one is a login credential, and the
+    // address customers should use is usually a different, business one.
+    // Admin-maintained, and only ever rendered on the owner's card.
+    register_meta( 'user', 'induction_team_contact_email', [ 'type' => 'string', 'single' => true, 'show_in_rest' => true, 'default' => '', 'auth_callback' => $induction_auth ] );
+    register_meta( 'user', 'induction_team_contact_phone', [ 'type' => 'string', 'single' => true, 'show_in_rest' => true, 'default' => '', 'auth_callback' => $induction_auth ] );
+}
+
+// Moves any existing Meet Our Team photo to the unified profile photo field.
+// Runs once; guarded by an option so a plugin update doesn't redo it and
+// clobber a photo someone has since changed.
+function induction_migrate_profile_photos(): void {
+    if ( get_option( 'induction_profile_photos_migrated' ) ) {
+        return;
+    }
+
+    foreach ( get_users( [ 'meta_key' => 'induction_team_photo', 'fields' => 'ID', 'number' => 500 ] ) as $user_id ) {
+        $existing = (int) get_user_meta( (int) $user_id, 'induction_profile_photo', true );
+        $legacy   = (int) get_user_meta( (int) $user_id, 'induction_team_photo', true );
+        if ( ! $existing && $legacy ) {
+            update_user_meta( (int) $user_id, 'induction_profile_photo', $legacy );
+        }
+    }
+
+    update_option( 'induction_profile_photos_migrated', 1 );
 }
 
 // ─── Sanitization ───────────────────────────────────────────────────────────
@@ -416,6 +481,26 @@ function induction_create_tables(): void {
             created_at   DATETIME NOT NULL,
             UNIQUE KEY user_module_block (user_id, module_id, block_id),
             KEY idx_user_module (user_id, module_id)
+        ) $charset;" );
+    }
+
+    // Module content history — one row per distinct saved state of a module's
+    // sections. Append-only: restoring writes forward rather than deleting, so
+    // history can't be lost by using it. Its own table rather than post meta
+    // because blocks_json is large and wp_postmeta is on far hotter paths.
+    $versions_table = $wpdb->prefix . 'induction_module_versions';
+    if ( $wpdb->get_var( "SHOW TABLES LIKE '$versions_table'" ) !== $versions_table ) {
+        dbDelta( "CREATE TABLE $versions_table (
+            id            BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            module_id     BIGINT UNSIGNED NOT NULL,
+            version       INT UNSIGNED NOT NULL,
+            blocks_json   LONGTEXT NOT NULL,
+            blocks_hash   CHAR(40) NOT NULL,
+            section_count INT UNSIGNED NOT NULL DEFAULT 0,
+            author_id     BIGINT UNSIGNED NULL,
+            created_at    DATETIME NOT NULL,
+            UNIQUE KEY module_version (module_id, version),
+            KEY idx_module_id (module_id)
         ) $charset;" );
     }
 
@@ -702,6 +787,47 @@ function induction_register_routes(): void {
         'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
     ] );
 
+    // Backup / migration.
+    register_rest_route( $ns, '/transfer/export', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_export_site',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    register_rest_route( $ns, '/transfer/import', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_import_site',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    // Module content history.
+    register_rest_route( $ns, '/modules/(?P<id>\d+)/versions', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_get_module_versions',
+        'permission_callback' => 'induction_is_admin_user',
+        'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+    ] );
+
+    register_rest_route( $ns, '/modules/(?P<id>\d+)/versions/(?P<version>\d+)', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_get_module_version',
+        'permission_callback' => 'induction_is_admin_user',
+        'args'                => [
+            'id'      => [ 'type' => 'integer', 'required' => true ],
+            'version' => [ 'type' => 'integer', 'required' => true ],
+        ],
+    ] );
+
+    register_rest_route( $ns, '/modules/(?P<id>\d+)/versions/(?P<version>\d+)/restore', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_restore_module_version',
+        'permission_callback' => 'induction_is_admin_user',
+        'args'                => [
+            'id'      => [ 'type' => 'integer', 'required' => true ],
+            'version' => [ 'type' => 'integer', 'required' => true ],
+        ],
+    ] );
+
     // Locations. These deliberately do NOT go through wp/v2/induction_location:
     // writing post meta through the posts controller runs WP's per-key meta
     // capability chain, which rejected location_lat on the live site even with
@@ -739,6 +865,40 @@ function induction_register_routes(): void {
             'permission_callback' => 'induction_is_admin_user',
             'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
         ],
+    ] );
+
+    // A staff member's own profile — the account settings page.
+    register_rest_route( $ns, '/me/profile', [
+        [
+            'methods'             => 'GET',
+            'callback'            => 'induction_get_my_profile',
+            'permission_callback' => 'is_user_logged_in',
+        ],
+        [
+            'methods'             => 'POST',
+            'callback'            => 'induction_update_my_profile',
+            'permission_callback' => 'is_user_logged_in',
+        ],
+    ] );
+
+    register_rest_route( $ns, '/me/profile/photo', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_upload_profile_photo',
+        'permission_callback' => 'is_user_logged_in',
+    ] );
+
+    // GET  /staff/reminders/context — contexts for several staff at once
+    register_rest_route( $ns, '/staff/reminders/context', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_get_reminder_contexts',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    // POST /staff/reminders — send a batch of composed reminders
+    register_rest_route( $ns, '/staff/reminders', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_send_bulk_reminders',
+        'permission_callback' => 'induction_is_admin_user',
     ] );
 
     // GET  /staff/{id}/reminder — what the SPA needs to compose a reminder
@@ -1844,24 +2004,47 @@ function induction_hide_admin_bar_for_portal_users( bool $show ): bool {
     return $show;
 }
 
+// The user's own photo, or 0. Reads the unified field and falls back to the
+// legacy team photo so a site that hasn't run the migration yet still shows a
+// face rather than a placeholder.
+function induction_profile_photo_id( int $user_id ): int {
+    $id = (int) get_user_meta( $user_id, 'induction_profile_photo', true );
+    return $id ?: (int) get_user_meta( $user_id, 'induction_team_photo', true );
+}
+
+function induction_profile_photo_url( int $user_id, string $size = 'medium' ): string {
+    $id = induction_profile_photo_id( $user_id );
+    return $id ? ( wp_get_attachment_image_url( $id, $size ) ?: '' ) : '';
+}
+
 function induction_format_staff_user( WP_User $user ): array {
-    $team_photo_id = (int) get_user_meta( $user->ID, 'induction_team_photo', true );
+    $photo_url = induction_profile_photo_url( $user->ID );
     return [
         'id'             => $user->ID,
         'name'           => $user->display_name,
         'slug'           => $user->user_login,
         'email'          => $user->user_email,
         'roles'          => $user->roles,
+        // An uploaded photo wins over the Gravatar fallback everywhere the
+        // staff list, detail page and portal show a face.
         'avatar_urls'    => [
-            '48' => get_avatar_url( $user->ID, [ 'size' => 48 ] ),
-            '96' => get_avatar_url( $user->ID, [ 'size' => 96 ] ),
+            '48' => $photo_url ?: get_avatar_url( $user->ID, [ 'size' => 48 ] ),
+            '96' => $photo_url ?: get_avatar_url( $user->ID, [ 'size' => 96 ] ),
         ],
-        'team_photo_url' => $team_photo_id ? ( wp_get_attachment_image_url( $team_photo_id, 'medium' ) ?: '' ) : '',
+        'first_name'     => (string) get_user_meta( $user->ID, 'first_name', true ),
+        'last_name'      => (string) get_user_meta( $user->ID, 'last_name', true ),
+        'dob'            => (string) get_user_meta( $user->ID, 'induction_dob', true ),
+        'suburb'         => (string) get_user_meta( $user->ID, 'induction_suburb', true ),
+        'address'        => (string) get_user_meta( $user->ID, 'induction_address', true ),
+        'profile_photo_url' => $photo_url,
+        'team_photo_url' => $photo_url,
         'team_title'     => (string) get_user_meta( $user->ID, 'induction_team_title', true ),
         'team_region'    => (string) get_user_meta( $user->ID, 'induction_team_region', true ),
         'team_bio'       => (string) get_user_meta( $user->ID, 'induction_team_bio', true ),
         'team_visible'   => (bool) get_user_meta( $user->ID, 'induction_team_visible', true ),
         'team_is_owner'  => (bool) get_user_meta( $user->ID, 'induction_team_is_owner', true ),
+        'team_contact_email' => (string) get_user_meta( $user->ID, 'induction_team_contact_email', true ),
+        'team_contact_phone' => (string) get_user_meta( $user->ID, 'induction_team_contact_phone', true ),
     ];
 }
 
@@ -1995,7 +2178,16 @@ function induction_create_staff( WP_REST_Request $request ): WP_REST_Response|WP
 
     induction_sync_user_into_role( $user_id, $role );
 
-    return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $user_id ) ) );
+    // Notifying is the default; an admin creating a placeholder account can
+    // opt out. A failed send must not fail the request — the account exists,
+    // and the response says whether the email went so the UI can say so too.
+    $notify   = null === $request->get_param( 'notify' ) ? true : (bool) $request->get_param( 'notify' );
+    $notified = $notify && induction_send_account_setup_email( get_user_by( 'id', $user_id ) );
+
+    $response             = induction_format_staff_user( get_user_by( 'id', $user_id ) );
+    $response['notified'] = $notified;
+
+    return rest_ensure_response( $response );
 }
 
 // Picks up any modules already targeted at $role for a single user — used
@@ -2342,6 +2534,228 @@ function induction_update_staff_role( WP_REST_Request $request ): WP_REST_Respon
     return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $id ) ) );
 }
 
+// Writes whatever profile fields are present in $params. Shared by the admin
+// staff editor and a staff member's own account settings page, so the two can
+// never drift apart on validation or on what a field means.
+//
+// $allow_admin_fields gates the two decisions that are not the staff member's
+// to make: whether they appear on Meet Our Team at all, and who is the owner.
+// Everything else — their name, contact details and the wording of their own
+// card — they own.
+function induction_save_profile_fields( int $user_id, array $params, bool $allow_admin_fields ): ?WP_Error {
+    $user_update = [ 'ID' => $user_id ];
+
+    if ( isset( $params['first_name'] ) || isset( $params['last_name'] ) ) {
+        $first = isset( $params['first_name'] )
+            ? mb_substr( sanitize_text_field( (string) $params['first_name'] ), 0, INDUCTION_PROFILE_NAME_MAX_LENGTH )
+            : (string) get_user_meta( $user_id, 'first_name', true );
+        $last = isset( $params['last_name'] )
+            ? mb_substr( sanitize_text_field( (string) $params['last_name'] ), 0, INDUCTION_PROFILE_NAME_MAX_LENGTH )
+            : (string) get_user_meta( $user_id, 'last_name', true );
+
+        $user_update['first_name'] = $first;
+        $user_update['last_name']  = $last;
+
+        // display_name is what the portal, staff list and team card all show,
+        // so it follows the name rather than being edited separately.
+        $full = trim( $first . ' ' . $last );
+        if ( '' !== $full ) {
+            $user_update['display_name'] = $full;
+        }
+    }
+
+    if ( isset( $params['email'] ) ) {
+        $email = sanitize_email( (string) $params['email'] );
+        if ( ! is_email( $email ) ) {
+            return new WP_Error( 'invalid_email', 'That email address is not valid.', [ 'status' => 400 ] );
+        }
+        $owner = email_exists( $email );
+        if ( $owner && (int) $owner !== $user_id ) {
+            return new WP_Error( 'email_taken', 'Another account already uses that email address.', [ 'status' => 409 ] );
+        }
+        $user_update['user_email'] = $email;
+    }
+
+    if ( count( $user_update ) > 1 ) {
+        $result = wp_update_user( $user_update );
+        if ( is_wp_error( $result ) ) {
+            return $result;
+        }
+    }
+
+    if ( isset( $params['dob'] ) ) {
+        $dob = trim( (string) $params['dob'] );
+        // Empty clears it; otherwise it must be a real calendar date, so a
+        // typo can't be stored as a date nothing can render.
+        if ( '' !== $dob ) {
+            [ $y, $m, $d ] = array_pad( array_map( 'intval', explode( '-', $dob ) ), 3, 0 );
+            if ( ! checkdate( $m, $d, $y ) ) {
+                return new WP_Error( 'invalid_dob', 'Enter the date of birth as YYYY-MM-DD.', [ 'status' => 400 ] );
+            }
+            $dob = sprintf( '%04d-%02d-%02d', $y, $m, $d );
+        }
+        update_user_meta( $user_id, 'induction_dob', $dob );
+    }
+
+    if ( isset( $params['suburb'] ) ) {
+        $suburb = sanitize_text_field( (string) $params['suburb'] );
+        update_user_meta( $user_id, 'induction_suburb', mb_substr( $suburb, 0, INDUCTION_PROFILE_SUBURB_MAX_LENGTH ) );
+    }
+
+    if ( isset( $params['address'] ) ) {
+        $address = sanitize_text_field( (string) $params['address'] );
+        update_user_meta( $user_id, 'induction_address', mb_substr( $address, 0, INDUCTION_PROFILE_ADDRESS_MAX_LENGTH ) );
+    }
+
+    // Staff-card wording: the person's own to edit.
+    if ( isset( $params['title'] ) ) {
+        $title = sanitize_text_field( (string) $params['title'] );
+        update_user_meta( $user_id, 'induction_team_title', mb_substr( $title, 0, INDUCTION_TEAM_TITLE_MAX_LENGTH ) );
+    }
+    if ( isset( $params['region'] ) ) {
+        $region = sanitize_text_field( (string) $params['region'] );
+        update_user_meta( $user_id, 'induction_team_region', mb_substr( $region, 0, INDUCTION_TEAM_REGION_MAX_LENGTH ) );
+    }
+    if ( isset( $params['bio'] ) ) {
+        $bio = sanitize_textarea_field( (string) $params['bio'] );
+        update_user_meta( $user_id, 'induction_team_bio', mb_substr( $bio, 0, INDUCTION_TEAM_BIO_MAX_LENGTH ) );
+    }
+
+    // 0 clears the photo; omitting the key leaves it alone.
+    if ( isset( $params['profile_photo_media_id'] ) ) {
+        update_user_meta( $user_id, 'induction_profile_photo', (int) $params['profile_photo_media_id'] );
+    }
+
+    if ( ! $allow_admin_fields ) {
+        return null;
+    }
+
+    // Contact details sit here rather than with the other card fields: they are
+    // the business's public details, not the individual's, so they stay
+    // admin-maintained even though they render on one person's card.
+    if ( isset( $params['contact_email'] ) ) {
+        $contact = trim( (string) $params['contact_email'] );
+        if ( '' !== $contact ) {
+            $contact = sanitize_email( $contact );
+            if ( ! is_email( $contact ) ) {
+                return new WP_Error( 'invalid_contact_email', 'That contact email address is not valid.', [ 'status' => 400 ] );
+            }
+        }
+        update_user_meta( $user_id, 'induction_team_contact_email', $contact );
+    }
+    if ( isset( $params['contact_phone'] ) ) {
+        $phone = sanitize_text_field( (string) $params['contact_phone'] );
+        update_user_meta( $user_id, 'induction_team_contact_phone', mb_substr( $phone, 0, INDUCTION_CONTACT_PHONE_MAX_LENGTH ) );
+    }
+
+    if ( isset( $params['visible'] ) ) {
+        update_user_meta( $user_id, 'induction_team_visible', $params['visible'] ? '1' : '' );
+    }
+    if ( isset( $params['is_owner'] ) ) {
+        if ( $params['is_owner'] ) {
+            foreach ( induction_team_owner_ids() as $previous_id ) {
+                if ( $previous_id !== $user_id ) {
+                    delete_user_meta( $previous_id, 'induction_team_is_owner' );
+                }
+            }
+            update_user_meta( $user_id, 'induction_team_is_owner', '1' );
+        } else {
+            delete_user_meta( $user_id, 'induction_team_is_owner' );
+        }
+    }
+
+    return null;
+}
+
+// ─── A staff member's own profile ───────────────────────────────────────────
+
+function induction_get_my_profile(): WP_REST_Response|WP_Error {
+    $user = wp_get_current_user();
+    if ( ! $user || ! $user->ID ) {
+        return new WP_Error( 'not_logged_in', 'You are not signed in.', [ 'status' => 401 ] );
+    }
+    return rest_ensure_response( induction_format_staff_user( $user ) );
+}
+
+function induction_update_my_profile( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $user_id = get_current_user_id();
+    if ( ! $user_id ) {
+        return new WP_Error( 'not_logged_in', 'You are not signed in.', [ 'status' => 401 ] );
+    }
+
+    $error = induction_save_profile_fields( $user_id, (array) $request->get_json_params(), false );
+    if ( $error ) {
+        return $error;
+    }
+
+    return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $user_id ) ) );
+}
+
+// Staff upload their own photo here rather than through wp/v2/media, because
+// the staff role has no upload_files capability and granting it would let them
+// put anything into the shared media library. This accepts one image, checks
+// it really is an image, and caps the size.
+function induction_upload_profile_photo( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $user_id = get_current_user_id();
+    if ( ! $user_id ) {
+        return new WP_Error( 'not_logged_in', 'You are not signed in.', [ 'status' => 401 ] );
+    }
+
+    // An admin may upload on someone else's behalf from the staff editor.
+    $target = (int) ( $request->get_param( 'user_id' ) ?: $user_id );
+    if ( $target !== $user_id && ! induction_is_admin_user() ) {
+        return new WP_Error( 'forbidden', 'You can only change your own photo.', [ 'status' => 403 ] );
+    }
+
+    $files = $request->get_file_params();
+    $file  = $files['file'] ?? null;
+    if ( ! $file || empty( $file['tmp_name'] ) ) {
+        return new WP_Error( 'no_file', 'No image was uploaded.', [ 'status' => 400 ] );
+    }
+    if ( (int) $file['size'] > INDUCTION_PROFILE_PHOTO_MAX_BYTES ) {
+        return new WP_Error(
+            'file_too_large',
+            sprintf( 'Photos must be %dMB or smaller.', INDUCTION_PROFILE_PHOTO_MAX_BYTES / 1024 / 1024 ),
+            [ 'status' => 400 ]
+        );
+    }
+
+    // Trust the file's actual contents, not the name or the declared type.
+    $check = wp_check_filetype_and_ext( $file['tmp_name'], $file['name'] );
+    if ( empty( $check['type'] ) || ! str_starts_with( (string) $check['type'], 'image/' ) ) {
+        return new WP_Error( 'not_an_image', 'That file is not an image.', [ 'status' => 400 ] );
+    }
+
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    require_once ABSPATH . 'wp-admin/includes/image.php';
+
+    $upload = wp_handle_upload( $file, [ 'test_form' => false ] );
+    if ( ! empty( $upload['error'] ) ) {
+        return new WP_Error( 'upload_failed', (string) $upload['error'], [ 'status' => 500 ] );
+    }
+
+    $attachment_id = wp_insert_attachment( [
+        'post_mime_type' => $upload['type'],
+        'post_title'     => sanitize_file_name( $file['name'] ),
+        'post_status'    => 'inherit',
+    ], $upload['file'] );
+
+    if ( is_wp_error( $attachment_id ) || ! $attachment_id ) {
+        return new WP_Error( 'attachment_failed', 'The image could not be saved.', [ 'status' => 500 ] );
+    }
+
+    wp_update_attachment_metadata(
+        $attachment_id,
+        wp_generate_attachment_metadata( $attachment_id, $upload['file'] )
+    );
+    update_user_meta( $target, 'induction_profile_photo', (int) $attachment_id );
+
+    return rest_ensure_response( [
+        'media_id' => (int) $attachment_id,
+        'url'      => induction_profile_photo_url( $target ),
+    ] );
+}
+
 function induction_update_team_profile( WP_REST_Request $request ): WP_REST_Response|WP_Error {
     $id   = (int) $request['id'];
     $user = get_user_by( 'id', $id );
@@ -2349,42 +2763,16 @@ function induction_update_team_profile( WP_REST_Request $request ): WP_REST_Resp
         return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
     }
 
-    $params = $request->get_json_params();
+    $params = (array) $request->get_json_params();
 
-    // photo_media_id is nullable-by-omission: only touch it if the client
-    // actually sent one (0 explicitly clears the photo; omitting the key
-    // leaves whatever photo is already set untouched).
-    if ( isset( $params['photo_media_id'] ) ) {
-        update_user_meta( $id, 'induction_team_photo', (int) $params['photo_media_id'] );
+    // Legacy key: earlier builds sent the photo as photo_media_id.
+    if ( isset( $params['photo_media_id'] ) && ! isset( $params['profile_photo_media_id'] ) ) {
+        $params['profile_photo_media_id'] = $params['photo_media_id'];
     }
-    if ( isset( $params['title'] ) ) {
-        $title = sanitize_text_field( (string) $params['title'] );
-        update_user_meta( $id, 'induction_team_title', induction_slash_meta( mb_substr( $title, 0, INDUCTION_TEAM_TITLE_MAX_LENGTH ) ) );
-    }
-    if ( isset( $params['region'] ) ) {
-        $region = sanitize_text_field( (string) $params['region'] );
-        update_user_meta( $id, 'induction_team_region', induction_slash_meta( mb_substr( $region, 0, INDUCTION_TEAM_REGION_MAX_LENGTH ) ) );
-    }
-    if ( isset( $params['bio'] ) ) {
-        $bio = sanitize_textarea_field( (string) $params['bio'] );
-        update_user_meta( $id, 'induction_team_bio', induction_slash_meta( mb_substr( $bio, 0, INDUCTION_TEAM_BIO_MAX_LENGTH ) ) );
-    }
-    if ( isset( $params['visible'] ) ) {
-        update_user_meta( $id, 'induction_team_visible', $params['visible'] ? '1' : '' );
-    }
-    // Owner is a single slot, not a flag: promoting someone demotes whoever
-    // held it, so the team page always has exactly zero or one owner.
-    if ( isset( $params['is_owner'] ) ) {
-        if ( $params['is_owner'] ) {
-            foreach ( induction_team_owner_ids() as $previous_id ) {
-                if ( $previous_id !== $id ) {
-                    delete_user_meta( $previous_id, 'induction_team_is_owner' );
-                }
-            }
-            update_user_meta( $id, 'induction_team_is_owner', '1' );
-        } else {
-            delete_user_meta( $id, 'induction_team_is_owner' );
-        }
+
+    $error = induction_save_profile_fields( $id, $params, true );
+    if ( $error ) {
+        return $error;
     }
 
     return rest_ensure_response( induction_format_staff_user( get_user_by( 'id', $id ) ) );
@@ -2412,7 +2800,7 @@ function induction_get_team(): WP_REST_Response {
     ] );
 
     $result = array_map( function ( WP_User $user ) use ( $wp_role_names ) {
-        $photo_id = (int) get_user_meta( $user->ID, 'induction_team_photo', true );
+        $is_owner = (bool) get_user_meta( $user->ID, 'induction_team_is_owner', true );
 
         // The job title is the label; the WP role is only a fallback so profiles
         // published before the title field existed don't lose their label.
@@ -2427,13 +2815,703 @@ function induction_get_team(): WP_REST_Response {
             'name'      => $user->display_name,
             'roleLabel' => $title,
             'region'    => (string) get_user_meta( $user->ID, 'induction_team_region', true ),
-            'photoUrl'  => $photo_id ? ( wp_get_attachment_image_url( $photo_id, 'medium' ) ?: '' ) : '',
+            // The same photo the staff member set on their account page.
+            'photoUrl'  => induction_profile_photo_url( $user->ID ),
             'bio'       => (string) get_user_meta( $user->ID, 'induction_team_bio', true ),
-            'isOwner'   => (bool) get_user_meta( $user->ID, 'induction_team_is_owner', true ),
+            'isOwner'   => $is_owner,
+            // Only the owner's card renders these, and /team is readable by any
+            // signed-in account — so they are not sent for anybody else.
+            'contactEmail' => $is_owner ? (string) get_user_meta( $user->ID, 'induction_team_contact_email', true ) : '',
+            'contactPhone' => $is_owner ? (string) get_user_meta( $user->ID, 'induction_team_contact_phone', true ) : '',
         ];
     }, $users );
 
     return rest_ensure_response( $result );
+}
+
+// ─── Backup / Migration ─────────────────────────────────────────────────────
+//
+// One JSON envelope carrying training content, the records staff have built up
+// against it, and the media both depend on. Staff ACCOUNTS are deliberately not
+// exported: creating or reconciling WordPress users on import is a different
+// and much riskier problem. Records instead carry a portable user reference
+// (login + email) and are matched to existing users at import; anything that
+// can't be matched is skipped and reported rather than guessed at.
+//
+// Attachment IDs are meaningless on another site, so every referenced file is
+// collected into a media manifest keyed by its ID here, and the importer builds
+// an old-ID -> new-ID map and rewrites the references inside the content.
+
+function induction_export_collect_media( int $attachment_id, array &$media, array &$budget ): void {
+    if ( ! $attachment_id || isset( $media[ $attachment_id ] ) ) {
+        return;
+    }
+    $post = get_post( $attachment_id );
+    if ( ! $post || 'attachment' !== $post->post_type ) {
+        return;
+    }
+
+    $path = get_attached_file( $attachment_id );
+    $size = ( $path && file_exists( $path ) ) ? (int) filesize( $path ) : 0;
+
+    $entry = [
+        'filename' => $path ? basename( $path ) : ( $post->post_name . '' ),
+        'mime'     => (string) get_post_mime_type( $attachment_id ),
+        'title'    => $post->post_title,
+        'url'      => (string) wp_get_attachment_url( $attachment_id ),
+        'size'     => $size,
+        'data'     => null,
+        'embedded' => false,
+    ];
+
+    $fits = $size > 0
+        && $size <= INDUCTION_EXPORT_MAX_FILE_BYTES
+        && ( $budget['used'] + $size ) <= INDUCTION_EXPORT_MAX_TOTAL_BYTES;
+
+    if ( $fits ) {
+        $contents = file_get_contents( $path );
+        if ( false !== $contents ) {
+            $entry['data']     = base64_encode( $contents );
+            $entry['embedded'] = true;
+            $budget['used']   += $size;
+        }
+    } else {
+        // Over budget: the URL is still recorded so import can try to fetch it.
+        $budget['skipped'][] = $entry['filename'];
+    }
+
+    $media[ $attachment_id ] = $entry;
+}
+
+// Walks a decoded section tree for attachment IDs. Row blocks nest their
+// children, so this recurses rather than assuming a flat list.
+function induction_export_media_ids_in_blocks( array $blocks, array &$ids ): void {
+    foreach ( $blocks as $block ) {
+        if ( ! is_array( $block ) ) {
+            continue;
+        }
+        $data = $block['data'] ?? [];
+        if ( is_array( $data ) ) {
+            if ( ! empty( $data['mediaId'] ) ) {
+                $ids[] = (int) $data['mediaId'];
+            }
+            if ( ! empty( $data['children'] ) && is_array( $data['children'] ) ) {
+                $children = array_column( $data['children'], 'block' );
+                induction_export_media_ids_in_blocks( array_filter( $children, 'is_array' ), $ids );
+            }
+        }
+    }
+}
+
+function induction_export_site(): WP_REST_Response {
+    global $wpdb;
+
+    $media  = [];
+    $budget = [ 'used' => 0, 'skipped' => [] ];
+
+    // ── Modules ──
+    $module_posts = get_posts( [
+        'post_type'      => 'induction_module',
+        'post_status'    => [ 'publish', 'draft' ],
+        'posts_per_page' => -1,
+        'orderby'        => 'ID',
+        'order'          => 'ASC',
+    ] );
+
+    $module_refs = [];
+    $modules     = [];
+    foreach ( $module_posts as $post ) {
+        $ref = 'module-' . $post->ID;
+        $module_refs[ $post->ID ] = $ref;
+
+        $blocks_json = (string) ( get_post_meta( $post->ID, 'module_blocks', true ) ?: '[]' );
+        $blocks      = json_decode( $blocks_json, true );
+        $blocks      = is_array( $blocks ) ? $blocks : [];
+
+        $ids = [];
+        foreach ( $blocks as $section ) {
+            if ( ! is_array( $section ) ) {
+                continue;
+            }
+            induction_export_media_ids_in_blocks( (array) ( $section['blocks'] ?? [] ), $ids );
+            if ( ! empty( $section['heroImage'] ) && is_numeric( $section['heroImage'] ) ) {
+                $ids[] = (int) $section['heroImage'];
+            }
+        }
+        $hero = (int) get_post_meta( $post->ID, 'module_hero_image', true );
+        if ( $hero ) {
+            $ids[] = $hero;
+        }
+        foreach ( array_unique( $ids ) as $id ) {
+            induction_export_collect_media( $id, $media, $budget );
+        }
+
+        $modules[] = [
+            'ref'     => $ref,
+            'title'   => $post->post_title,
+            'content' => $post->post_content,
+            'excerpt' => $post->post_excerpt,
+            'status'  => $post->post_status,
+            'meta'    => [
+                'module_role_targets'      => (array) ( get_post_meta( $post->ID, 'module_role_targets', true ) ?: [] ),
+                'module_estimated_minutes' => (int) get_post_meta( $post->ID, 'module_estimated_minutes', true ),
+                'module_order'             => (int) get_post_meta( $post->ID, 'module_order', true ),
+                'module_duration_days'     => (int) get_post_meta( $post->ID, 'module_duration_days', true ),
+                'module_icon'              => (string) get_post_meta( $post->ID, 'module_icon', true ),
+                'module_hero_image'        => $hero,
+                'quiz_pass_threshold'      => (int) get_post_meta( $post->ID, 'quiz_pass_threshold', true ),
+            ],
+            'blocks'  => $blocks,
+        ];
+    }
+
+    // ── Locations ──
+    $locations = [];
+    foreach ( get_posts( [
+        'post_type'      => 'induction_location',
+        'post_status'    => [ 'publish', 'draft' ],
+        'posts_per_page' => -1,
+    ] ) as $post ) {
+        $thumb = (int) get_post_meta( $post->ID, 'location_thumbnail_id', true );
+        if ( $thumb ) {
+            induction_export_collect_media( $thumb, $media, $budget );
+        }
+        $locations[] = [
+            'title'        => $post->post_title,
+            'status'       => $post->post_status,
+            'address'      => (string) get_post_meta( $post->ID, 'location_address', true ),
+            'lat'          => (float) get_post_meta( $post->ID, 'location_lat', true ),
+            'lng'          => (float) get_post_meta( $post->ID, 'location_lng', true ),
+            'zoom'         => (int) get_post_meta( $post->ID, 'location_zoom', true ),
+            'thumbnail_id' => $thumb,
+            'notes'        => (string) get_post_meta( $post->ID, 'location_notes', true ),
+            'markers'      => (string) ( get_post_meta( $post->ID, 'location_markers', true ) ?: '[]' ),
+            'paths'        => (string) ( get_post_meta( $post->ID, 'location_paths', true ) ?: '[]' ),
+        ];
+    }
+
+    // ── Documents ──
+    $documents = [];
+    foreach ( get_posts( [
+        'post_type'      => 'induction_document',
+        'post_status'    => [ 'publish', 'draft' ],
+        'posts_per_page' => -1,
+    ] ) as $post ) {
+        $file_id = (int) get_post_meta( $post->ID, 'document_file_id', true );
+        if ( $file_id ) {
+            induction_export_collect_media( $file_id, $media, $budget );
+        }
+        $documents[] = [
+            'title'                 => $post->post_title,
+            'status'                => $post->post_status,
+            'document_category'     => (string) get_post_meta( $post->ID, 'document_category', true ),
+            'document_file_id'      => $file_id,
+            'document_role_targets' => (array) ( get_post_meta( $post->ID, 'document_role_targets', true ) ?: [] ),
+        ];
+    }
+
+    // ── Records ── keyed by portable user reference, not user_id.
+    $user_ref = function ( int $user_id ): ?array {
+        $u = get_userdata( $user_id );
+        return $u ? [ 'login' => $u->user_login, 'email' => $u->user_email ] : null;
+    };
+
+    $progress_rows = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}induction_progress", ARRAY_A ) ?? [];
+    $progress = [];
+    foreach ( $progress_rows as $row ) {
+        $ref = $module_refs[ (int) $row['module_id'] ] ?? null;
+        $usr = $user_ref( (int) $row['user_id'] );
+        if ( ! $ref || ! $usr ) {
+            continue; // orphaned row: module or user is gone
+        }
+        unset( $row['id'], $row['user_id'], $row['module_id'] );
+        $progress[] = array_merge( [ 'module_ref' => $ref, 'user' => $usr ], $row );
+    }
+
+    $assignment_rows = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}induction_assignments", ARRAY_A ) ?? [];
+    $assignments = [];
+    foreach ( $assignment_rows as $row ) {
+        $ref = $module_refs[ (int) $row['module_id'] ] ?? null;
+        $usr = $user_ref( (int) $row['user_id'] );
+        if ( ! $ref || ! $usr ) {
+            continue;
+        }
+        unset( $row['id'], $row['user_id'], $row['module_id'], $row['assigned_by'] );
+        $assignments[] = array_merge( [ 'module_ref' => $ref, 'user' => $usr ], $row );
+    }
+
+    $quiz_rows = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}induction_quiz_responses", ARRAY_A ) ?? [];
+    $quiz = [];
+    foreach ( $quiz_rows as $row ) {
+        $ref = $module_refs[ (int) $row['module_id'] ] ?? null;
+        $usr = $user_ref( (int) $row['user_id'] );
+        if ( ! $ref || ! $usr ) {
+            continue;
+        }
+        unset( $row['id'], $row['user_id'], $row['module_id'] );
+        $quiz[] = array_merge( [ 'module_ref' => $ref, 'user' => $usr ], $row );
+    }
+
+    return rest_ensure_response( [
+        'format'         => 'induction-platform-export',
+        'format_version' => INDUCTION_EXPORT_FORMAT_VERSION,
+        'exported_at'    => current_time( 'mysql' ),
+        'site'           => [
+            'name' => wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ),
+            'url'  => home_url( '/' ),
+        ],
+        'modules'        => $modules,
+        'locations'      => $locations,
+        'documents'      => $documents,
+        'media'          => $media,
+        'records'        => [
+            'progress'       => $progress,
+            'assignments'    => $assignments,
+            'quiz_responses' => $quiz,
+        ],
+        'notes'          => [
+            'media_bytes_embedded' => $budget['used'],
+            'media_not_embedded'   => $budget['skipped'],
+        ],
+    ] );
+}
+
+// ── Import ──────────────────────────────────────────────────────────────────
+
+// Recreates one attachment, preferring the embedded bytes and falling back to
+// fetching the recorded URL. Returns the new attachment ID, or 0.
+function induction_import_media_item( array $entry ): int {
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    require_once ABSPATH . 'wp-admin/includes/media.php';
+    require_once ABSPATH . 'wp-admin/includes/image.php';
+
+    $filename = sanitize_file_name( (string) ( $entry['filename'] ?? 'import' ) );
+
+    if ( ! empty( $entry['data'] ) ) {
+        $bytes = base64_decode( (string) $entry['data'], true );
+        if ( false === $bytes ) {
+            return 0;
+        }
+        $upload = wp_upload_bits( $filename, null, $bytes );
+        if ( ! empty( $upload['error'] ) ) {
+            return 0;
+        }
+        $path = $upload['file'];
+    } elseif ( ! empty( $entry['url'] ) ) {
+        $tmp = download_url( (string) $entry['url'] );
+        if ( is_wp_error( $tmp ) ) {
+            return 0;
+        }
+        $upload = wp_upload_bits( $filename, null, (string) file_get_contents( $tmp ) );
+        @unlink( $tmp );
+        if ( ! empty( $upload['error'] ) ) {
+            return 0;
+        }
+        $path = $upload['file'];
+    } else {
+        return 0;
+    }
+
+    $attachment_id = wp_insert_attachment( [
+        'post_mime_type' => (string) ( $entry['mime'] ?? 'application/octet-stream' ),
+        'post_title'     => (string) ( $entry['title'] ?? $filename ),
+        'post_status'    => 'inherit',
+    ], $path );
+
+    if ( is_wp_error( $attachment_id ) || ! $attachment_id ) {
+        return 0;
+    }
+
+    wp_update_attachment_metadata( $attachment_id, wp_generate_attachment_metadata( $attachment_id, $path ) );
+    return (int) $attachment_id;
+}
+
+// Rewrites attachment IDs inside a section tree using the old->new map.
+function induction_import_remap_blocks( array $blocks, array $map ): array {
+    foreach ( $blocks as &$block ) {
+        if ( ! is_array( $block ) ) {
+            continue;
+        }
+        if ( isset( $block['data'] ) && is_array( $block['data'] ) ) {
+            if ( ! empty( $block['data']['mediaId'] ) ) {
+                $old = (int) $block['data']['mediaId'];
+                $block['data']['mediaId'] = $map[ $old ] ?? 0;
+                if ( isset( $block['data']['url'] ) && ! empty( $map[ $old ] ) ) {
+                    $block['data']['url'] = (string) wp_get_attachment_url( $map[ $old ] );
+                }
+            }
+            if ( ! empty( $block['data']['children'] ) && is_array( $block['data']['children'] ) ) {
+                foreach ( $block['data']['children'] as &$child ) {
+                    if ( isset( $child['block'] ) && is_array( $child['block'] ) ) {
+                        $remapped      = induction_import_remap_blocks( [ $child['block'] ], $map );
+                        $child['block'] = $remapped[0];
+                    }
+                }
+                unset( $child );
+            }
+        }
+    }
+    unset( $block );
+    return $blocks;
+}
+
+function induction_import_site( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    global $wpdb;
+
+    $payload = $request->get_json_params();
+    if ( ! is_array( $payload ) || ( $payload['format'] ?? '' ) !== 'induction-platform-export' ) {
+        return new WP_Error( 'induction_bad_export', 'That file is not an induction platform export.', [ 'status' => 400 ] );
+    }
+    if ( (int) ( $payload['format_version'] ?? 0 ) > INDUCTION_EXPORT_FORMAT_VERSION ) {
+        return new WP_Error(
+            'induction_export_too_new',
+            'That export was made by a newer version of the plugin than this site is running.',
+            [ 'status' => 400 ]
+        );
+    }
+
+    $summary = [
+        'modules' => 0, 'locations' => 0, 'documents' => 0, 'media' => 0,
+        'progress' => 0, 'assignments' => 0, 'quiz_responses' => 0,
+        'media_failed' => 0, 'records_skipped_unknown_user' => 0,
+    ];
+
+    // ── Media first: everything else references it ──
+    $media_map = [];
+    foreach ( (array) ( $payload['media'] ?? [] ) as $old_id => $entry ) {
+        if ( ! is_array( $entry ) ) {
+            continue;
+        }
+        $new_id = induction_import_media_item( $entry );
+        if ( $new_id ) {
+            $media_map[ (int) $old_id ] = $new_id;
+            $summary['media']++;
+        } else {
+            $summary['media_failed']++;
+        }
+    }
+
+    // ── Modules ── always created fresh; import never overwrites existing content.
+    $module_id_by_ref = [];
+    foreach ( (array) ( $payload['modules'] ?? [] ) as $module ) {
+        if ( ! is_array( $module ) ) {
+            continue;
+        }
+        $new_id = wp_insert_post( [
+            'post_type'    => 'induction_module',
+            'post_title'   => sanitize_text_field( (string) ( $module['title'] ?? '' ) ),
+            'post_content' => wp_kses_post( (string) ( $module['content'] ?? '' ) ),
+            'post_excerpt' => sanitize_text_field( (string) ( $module['excerpt'] ?? '' ) ),
+            'post_status'  => 'publish' === ( $module['status'] ?? 'draft' ) ? 'publish' : 'draft',
+        ], true );
+        if ( is_wp_error( $new_id ) ) {
+            continue;
+        }
+
+        $meta   = (array) ( $module['meta'] ?? [] );
+        $blocks = induction_import_remap_blocks( (array) ( $module['blocks'] ?? [] ), $media_map );
+
+        // Sections carry their own hero image ID, remapped alongside the blocks.
+        foreach ( $blocks as &$section ) {
+            if ( is_array( $section ) && ! empty( $section['heroImage'] ) && is_numeric( $section['heroImage'] ) ) {
+                $section['heroImage'] = $media_map[ (int) $section['heroImage'] ] ?? '';
+            }
+            if ( is_array( $section ) && ! empty( $section['blocks'] ) ) {
+                $section['blocks'] = induction_import_remap_blocks( (array) $section['blocks'], $media_map );
+            }
+        }
+        unset( $section );
+
+        $hero = (int) ( $meta['module_hero_image'] ?? 0 );
+        update_post_meta( $new_id, 'module_role_targets', (array) ( $meta['module_role_targets'] ?? [] ) );
+        update_post_meta( $new_id, 'module_estimated_minutes', (int) ( $meta['module_estimated_minutes'] ?? 0 ) );
+        update_post_meta( $new_id, 'module_order', (int) ( $meta['module_order'] ?? 0 ) );
+        update_post_meta( $new_id, 'module_duration_days', (int) ( $meta['module_duration_days'] ?? 0 ) );
+        update_post_meta( $new_id, 'module_icon', induction_slash_meta( sanitize_text_field( (string) ( $meta['module_icon'] ?? '' ) ) ) );
+        update_post_meta( $new_id, 'module_hero_image', $hero ? ( $media_map[ $hero ] ?? 0 ) : 0 );
+        update_post_meta( $new_id, 'quiz_pass_threshold', (int) ( $meta['quiz_pass_threshold'] ?? 70 ) );
+
+        $encoded = induction_encode_meta_json( $blocks );
+        if ( null !== $encoded ) {
+            update_post_meta( $new_id, 'module_blocks', induction_slash_meta( $encoded ) );
+            induction_snapshot_module_blocks( (int) $new_id, $encoded );
+        }
+
+        if ( ! empty( $module['ref'] ) ) {
+            $module_id_by_ref[ (string) $module['ref'] ] = (int) $new_id;
+        }
+        $summary['modules']++;
+    }
+
+    // ── Locations ──
+    foreach ( (array) ( $payload['locations'] ?? [] ) as $loc ) {
+        if ( ! is_array( $loc ) ) {
+            continue;
+        }
+        $new_id = wp_insert_post( [
+            'post_type'   => 'induction_location',
+            'post_title'  => sanitize_text_field( (string) ( $loc['title'] ?? '' ) ),
+            'post_status' => 'publish' === ( $loc['status'] ?? 'draft' ) ? 'publish' : 'draft',
+        ], true );
+        if ( is_wp_error( $new_id ) ) {
+            continue;
+        }
+        $thumb = (int) ( $loc['thumbnail_id'] ?? 0 );
+        induction_save_location_meta( (int) $new_id, [
+            'address'      => (string) ( $loc['address'] ?? '' ),
+            'lat'          => (float) ( $loc['lat'] ?? 0 ),
+            'lng'          => (float) ( $loc['lng'] ?? 0 ),
+            'zoom'         => (int) ( $loc['zoom'] ?? 17 ),
+            'thumbnail_id' => $thumb ? ( $media_map[ $thumb ] ?? 0 ) : 0,
+            'notes'        => (string) ( $loc['notes'] ?? '' ),
+            'markers'      => (string) ( $loc['markers'] ?? '[]' ),
+            'paths'        => (string) ( $loc['paths'] ?? '[]' ),
+        ] );
+        $summary['locations']++;
+    }
+
+    // ── Documents ──
+    foreach ( (array) ( $payload['documents'] ?? [] ) as $doc ) {
+        if ( ! is_array( $doc ) ) {
+            continue;
+        }
+        $new_id = wp_insert_post( [
+            'post_type'   => 'induction_document',
+            'post_title'  => sanitize_text_field( (string) ( $doc['title'] ?? '' ) ),
+            'post_status' => 'publish' === ( $doc['status'] ?? 'draft' ) ? 'publish' : 'draft',
+        ], true );
+        if ( is_wp_error( $new_id ) ) {
+            continue;
+        }
+        $file = (int) ( $doc['document_file_id'] ?? 0 );
+        update_post_meta( $new_id, 'document_category', induction_slash_meta( sanitize_text_field( (string) ( $doc['document_category'] ?? '' ) ) ) );
+        update_post_meta( $new_id, 'document_file_id', $file ? ( $media_map[ $file ] ?? 0 ) : 0 );
+        update_post_meta( $new_id, 'document_role_targets', (array) ( $doc['document_role_targets'] ?? [] ) );
+        $summary['documents']++;
+    }
+
+    // ── Records ── matched to users that already exist here; never created.
+    $resolve_user = function ( $ref ) {
+        if ( ! is_array( $ref ) ) {
+            return 0;
+        }
+        $by_login = ! empty( $ref['login'] ) ? get_user_by( 'login', $ref['login'] ) : false;
+        if ( $by_login ) {
+            return (int) $by_login->ID;
+        }
+        $by_email = ! empty( $ref['email'] ) ? get_user_by( 'email', $ref['email'] ) : false;
+        return $by_email ? (int) $by_email->ID : 0;
+    };
+
+    $record_sets = [
+        'progress'       => $wpdb->prefix . 'induction_progress',
+        'assignments'    => $wpdb->prefix . 'induction_assignments',
+        'quiz_responses' => $wpdb->prefix . 'induction_quiz_responses',
+    ];
+
+    foreach ( $record_sets as $key => $table ) {
+        foreach ( (array) ( $payload['records'][ $key ] ?? [] ) as $row ) {
+            if ( ! is_array( $row ) ) {
+                continue;
+            }
+            $user_id   = $resolve_user( $row['user'] ?? null );
+            $module_id = $module_id_by_ref[ (string) ( $row['module_ref'] ?? '' ) ] ?? 0;
+            if ( ! $user_id || ! $module_id ) {
+                $summary['records_skipped_unknown_user']++;
+                continue;
+            }
+            unset( $row['user'], $row['module_ref'] );
+            $row['user_id']   = $user_id;
+            $row['module_id'] = $module_id;
+            if ( 'assignments' === $key ) {
+                $row['assigned_by'] = get_current_user_id();
+            }
+            // Duplicate (user, module[, block]) rows are rejected by the unique
+            // keys; that is the intended behaviour on a re-import.
+            if ( $wpdb->insert( $table, $row ) ) {
+                $summary[ $key ]++;
+            }
+        }
+    }
+
+    return rest_ensure_response( [ 'imported' => true, 'summary' => $summary ] );
+}
+
+// ─── Module Content History ─────────────────────────────────────────────────
+
+// Appends the given blocks JSON as the module's next version. A save that
+// didn't change the sections (renaming the module, changing its icon) is not a
+// new version, so identical content is skipped by hash — otherwise history
+// fills with duplicates and the useful entries scroll away.
+function induction_snapshot_module_blocks( int $module_id, string $blocks_json, ?int $author_id = null ): void {
+    global $wpdb;
+    $table = $wpdb->prefix . 'induction_module_versions';
+    $hash  = sha1( $blocks_json );
+
+    $latest = $wpdb->get_row( $wpdb->prepare(
+        "SELECT version, blocks_hash FROM $table WHERE module_id = %d ORDER BY version DESC LIMIT 1",
+        $module_id
+    ), ARRAY_A );
+
+    if ( $latest && $latest['blocks_hash'] === $hash ) {
+        return;
+    }
+
+    $decoded = json_decode( $blocks_json, true );
+
+    $wpdb->insert( $table, [
+        'module_id'     => $module_id,
+        'version'       => $latest ? (int) $latest['version'] + 1 : 1,
+        'blocks_json'   => $blocks_json,
+        'blocks_hash'   => $hash,
+        'section_count' => is_array( $decoded ) ? count( $decoded ) : 0,
+        'author_id'     => $author_id ?: ( get_current_user_id() ?: null ),
+        'created_at'    => current_time( 'mysql' ),
+    ] );
+
+    induction_prune_module_versions( $module_id );
+}
+
+function induction_prune_module_versions( int $module_id ): void {
+    global $wpdb;
+    $table = $wpdb->prefix . 'induction_module_versions';
+
+    $keep = $wpdb->get_col( $wpdb->prepare(
+        "SELECT id FROM $table WHERE module_id = %d ORDER BY version DESC LIMIT %d",
+        $module_id,
+        INDUCTION_MODULE_VERSION_LIMIT
+    ) );
+
+    if ( count( $keep ) < INDUCTION_MODULE_VERSION_LIMIT ) {
+        return;
+    }
+
+    $placeholders = implode( ',', array_fill( 0, count( $keep ), '%d' ) );
+    $wpdb->query( $wpdb->prepare(
+        "DELETE FROM $table WHERE module_id = %d AND id NOT IN ($placeholders)",
+        array_merge( [ $module_id ], array_map( 'intval', $keep ) )
+    ) );
+}
+
+// Captures whatever is already stored as version 1, the first time a module is
+// edited after this feature landed. Without it the state that existed before
+// versioning began would be the one thing history couldn't get back — i.e. the
+// version an author is most likely to want on the day they upgrade.
+function induction_seed_module_version_history( int $module_id ): void {
+    global $wpdb;
+    $table = $wpdb->prefix . 'induction_module_versions';
+
+    $existing_rows = (int) $wpdb->get_var( $wpdb->prepare(
+        "SELECT COUNT(*) FROM $table WHERE module_id = %d",
+        $module_id
+    ) );
+    if ( $existing_rows > 0 ) {
+        return;
+    }
+
+    $stored = (string) get_post_meta( $module_id, 'module_blocks', true );
+    if ( '' === $stored || '[]' === $stored ) {
+        return;
+    }
+
+    induction_snapshot_module_blocks( $module_id, $stored, null );
+}
+
+function induction_get_module_versions( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    global $wpdb;
+    $module_id = (int) $request['id'];
+    $post      = get_post( $module_id );
+    if ( ! $post || 'induction_module' !== $post->post_type ) {
+        return new WP_Error( 'not_found', 'Module not found.', [ 'status' => 404 ] );
+    }
+
+    $table = $wpdb->prefix . 'induction_module_versions';
+    // blocks_json is deliberately excluded — a list of 30 large payloads is not
+    // what the history panel needs, and it's fetched per version on restore.
+    $rows = $wpdb->get_results( $wpdb->prepare(
+        "SELECT version, blocks_hash, section_count, author_id, created_at, CHAR_LENGTH(blocks_json) AS size_bytes
+         FROM $table WHERE module_id = %d ORDER BY version DESC",
+        $module_id
+    ), ARRAY_A ) ?? [];
+
+    $current_hash = sha1( (string) ( get_post_meta( $module_id, 'module_blocks', true ) ?: '[]' ) );
+
+    return rest_ensure_response( array_map( function ( $row ) use ( $current_hash ) {
+        $author = $row['author_id'] ? get_userdata( (int) $row['author_id'] ) : null;
+        return [
+            'version'       => (int) $row['version'],
+            'section_count' => (int) $row['section_count'],
+            'size_bytes'    => (int) $row['size_bytes'],
+            'author_name'   => $author ? $author->display_name : '',
+            'created_at'    => $row['created_at'],
+            'is_current'    => $row['blocks_hash'] === $current_hash,
+        ];
+    }, $rows ) );
+}
+
+function induction_get_module_version( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    global $wpdb;
+    $module_id = (int) $request['id'];
+    $version   = (int) $request['version'];
+    $table     = $wpdb->prefix . 'induction_module_versions';
+
+    $blocks = $wpdb->get_var( $wpdb->prepare(
+        "SELECT blocks_json FROM $table WHERE module_id = %d AND version = %d",
+        $module_id,
+        $version
+    ) );
+
+    if ( null === $blocks ) {
+        return new WP_Error( 'not_found', 'Version not found.', [ 'status' => 404 ] );
+    }
+
+    return rest_ensure_response( [ 'version' => $version, 'blocks' => $blocks ] );
+}
+
+// Restore writes the old content forward as a new version rather than rewinding
+// the history, so restoring is itself undoable and nothing is ever destroyed.
+function induction_restore_module_version( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    global $wpdb;
+    $module_id = (int) $request['id'];
+    $version   = (int) $request['version'];
+
+    $post = get_post( $module_id );
+    if ( ! $post || 'induction_module' !== $post->post_type ) {
+        return new WP_Error( 'not_found', 'Module not found.', [ 'status' => 404 ] );
+    }
+
+    $table  = $wpdb->prefix . 'induction_module_versions';
+    $blocks = $wpdb->get_var( $wpdb->prepare(
+        "SELECT blocks_json FROM $table WHERE module_id = %d AND version = %d",
+        $module_id,
+        $version
+    ) );
+    if ( null === $blocks ) {
+        return new WP_Error( 'not_found', 'Version not found.', [ 'status' => 404 ] );
+    }
+
+    $decoded = json_decode( (string) $blocks, true );
+    if ( ! is_array( $decoded ) ) {
+        return new WP_Error(
+            'induction_version_unreadable',
+            'That version could not be read back and was not restored. Nothing was changed.',
+            [ 'status' => 500 ]
+        );
+    }
+
+    $encoded = induction_encode_meta_json( $decoded );
+    if ( null === $encoded ) {
+        return new WP_Error(
+            'induction_blocks_encode_failed',
+            'That version could not be encoded for storage. Nothing was changed.',
+            [ 'status' => 500 ]
+        );
+    }
+
+    update_post_meta( $module_id, 'module_blocks', induction_slash_meta( $encoded ) );
+    induction_snapshot_module_blocks( $module_id, $encoded );
+
+    return rest_ensure_response( induction_format_module( get_post( $module_id ) ) );
 }
 
 // ─── Locations ──────────────────────────────────────────────────────────────
@@ -2633,17 +3711,19 @@ function induction_portal_page_url(): string {
 // admin can edit it before sending — this endpoint supplies the facts, not
 // the wording. Due dates are pre-formatted with the site's own date_format so
 // the draft matches dates shown everywhere else.
-function induction_get_reminder_context( WP_REST_Request $request ): WP_REST_Response|WP_Error {
-    $id   = (int) $request['id'];
-    $user = get_user_by( 'id', $id );
+// Shared by the single and bulk endpoints so one staff member's reminder and
+// fifty of them are drafted from identically shaped facts.
+function induction_reminder_context_for_user( int $user_id ): ?array {
+    $user = get_user_by( 'id', $user_id );
     if ( ! $user ) {
-        return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
+        return null;
     }
 
-    $outstanding = induction_outstanding_assignments( $id );
+    $outstanding = induction_outstanding_assignments( $user_id );
     $date_format = get_option( 'date_format' );
 
-    return rest_ensure_response( [
+    return [
+        'user_id'       => $user_id,
         'name'          => $user->display_name,
         'email'         => is_email( $user->user_email ) ? $user->user_email : '',
         'site_name'     => wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ),
@@ -2656,7 +3736,152 @@ function induction_get_reminder_context( WP_REST_Request $request ): WP_REST_Res
             'due_label'  => $m['due_date'] ? mysql2date( $date_format, $m['due_date'] ) : '',
             'is_overdue' => $m['is_overdue'],
         ], $outstanding ),
+    ];
+}
+
+function induction_get_reminder_context( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $context = induction_reminder_context_for_user( (int) $request['id'] );
+    if ( null === $context ) {
+        return new WP_Error( 'not_found', 'User not found.', [ 'status' => 404 ] );
+    }
+    return rest_ensure_response( $context );
+}
+
+// Contexts for many staff at once, so the compose dialog can render a per
+// person preview without one request per recipient.
+function induction_get_reminder_contexts( WP_REST_Request $request ): WP_REST_Response {
+    $raw = (string) $request->get_param( 'user_ids' );
+    $ids = array_slice(
+        array_unique( array_filter( array_map( 'intval', explode( ',', $raw ) ) ) ),
+        0,
+        INDUCTION_REMINDER_BULK_MAX
+    );
+
+    $contexts = [];
+    foreach ( $ids as $id ) {
+        $context = induction_reminder_context_for_user( $id );
+        if ( null !== $context ) {
+            $contexts[] = $context;
+        }
+    }
+
+    return rest_ensure_response( $contexts );
+}
+
+// Sends a batch of already-composed messages. Same contract as the single
+// send: the SPA decides the wording, this decides nothing. Every recipient
+// gets an individual result so a partial failure is visible rather than being
+// flattened into one success or one error.
+function induction_send_bulk_reminders( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $params   = $request->get_json_params();
+    $messages = is_array( $params['messages'] ?? null ) ? $params['messages'] : [];
+
+    if ( ! $messages ) {
+        return new WP_Error( 'no_messages', 'No reminders to send.', [ 'status' => 400 ] );
+    }
+    if ( count( $messages ) > INDUCTION_REMINDER_BULK_MAX ) {
+        return new WP_Error(
+            'too_many_messages',
+            sprintf( 'Send to at most %d staff at a time.', INDUCTION_REMINDER_BULK_MAX ),
+            [ 'status' => 400 ]
+        );
+    }
+
+    $results = [];
+    foreach ( $messages as $message ) {
+        if ( ! is_array( $message ) ) {
+            continue;
+        }
+        $user_id = (int) ( $message['user_id'] ?? 0 );
+        $user    = $user_id ? get_user_by( 'id', $user_id ) : null;
+
+        if ( ! $user ) {
+            $results[] = [ 'user_id' => $user_id, 'name' => '', 'sent' => false, 'reason' => 'Staff member not found.' ];
+            continue;
+        }
+        if ( ! is_email( $user->user_email ) ) {
+            $results[] = [ 'user_id' => $user_id, 'name' => $user->display_name, 'sent' => false, 'reason' => 'No email address on file.' ];
+            continue;
+        }
+
+        $subject = trim( sanitize_text_field( (string) ( $message['subject'] ?? '' ) ) );
+        $body    = trim( wp_kses_post( (string) ( $message['body'] ?? '' ) ) );
+
+        if ( '' === $subject || '' === trim( wp_strip_all_tags( $body ) ) ) {
+            $results[] = [ 'user_id' => $user_id, 'name' => $user->display_name, 'sent' => false, 'reason' => 'Empty subject or message.' ];
+            continue;
+        }
+
+        $sent = wp_mail(
+            $user->user_email,
+            mb_substr( $subject, 0, INDUCTION_REMINDER_SUBJECT_MAX_LENGTH ),
+            $body,
+            [ 'Content-Type: text/html; charset=UTF-8' ]
+        );
+
+        $results[] = [
+            'user_id' => $user_id,
+            'name'    => $user->display_name,
+            'email'   => $user->user_email,
+            'sent'    => (bool) $sent,
+            'reason'  => $sent ? '' : 'WordPress could not send the email.',
+        ];
+    }
+
+    $sent_count = count( array_filter( $results, fn( $r ) => $r['sent'] ) );
+
+    return rest_ensure_response( [
+        'sent'    => $sent_count,
+        'failed'  => count( $results ) - $sent_count,
+        'results' => $results,
     ] );
+}
+
+// ─── Account setup email ────────────────────────────────────────────────────
+
+// Sent when an admin creates a staff account. Deliberately does NOT contain the
+// password the admin typed: mailing a plaintext credential is the thing this
+// replaces. It carries a WordPress password-reset link instead, so the staff
+// member sets their own and the admin never has to relay one out of band.
+function induction_send_account_setup_email( WP_User $user ): bool {
+    if ( ! is_email( $user->user_email ) ) {
+        return false;
+    }
+
+    $site       = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
+    $portal_url = induction_portal_page_url();
+
+    $key = get_password_reset_key( $user );
+    if ( is_wp_error( $key ) ) {
+        return false;
+    }
+    $set_password_url = network_site_url(
+        'wp-login.php?action=rp&key=' . rawurlencode( $key ) . '&login=' . rawurlencode( $user->user_login ),
+        'login'
+    );
+
+    $subject = sprintf( '[%s] Your induction account', $site );
+    $body    = sprintf(
+        '<p>Hi %1$s,</p>' .
+        '<p>An induction account has been created for you at %2$s.</p>' .
+        '<p><strong>Username:</strong> %3$s</p>' .
+        '<p><a href="%4$s">Choose your password</a> to get started, then sign in to the ' .
+        '<a href="%5$s">staff portal</a> to see the training assigned to you.</p>' .
+        '<p>If that link has expired, use the "Lost your password?" option on the sign-in page.</p>' .
+        '<p>— %2$s</p>',
+        esc_html( $user->display_name ),
+        esc_html( $site ),
+        esc_html( $user->user_login ),
+        esc_url( $set_password_url ),
+        esc_url( $portal_url )
+    );
+
+    return (bool) wp_mail(
+        $user->user_email,
+        $subject,
+        $body,
+        [ 'Content-Type: text/html; charset=UTF-8' ]
+    );
 }
 
 // Sends the subject and body the admin composed and edited in the SPA. This
@@ -2799,7 +4024,12 @@ function induction_save_module_meta( int $id, array $meta ): true|WP_Error {
                 [ 'status' => 500 ]
             );
         }
+        // Every write to module_blocks funnels through here, so this is the one
+        // place history has to be recorded — it covers the module editor, the
+        // section editor, and anything added later.
+        induction_seed_module_version_history( $id );
         update_post_meta( $id, 'module_blocks', induction_slash_meta( $encoded_blocks ) );
+        induction_snapshot_module_blocks( $id, $encoded_blocks );
     }
     if ( isset( $meta['module_icon'] ) ) {
         update_post_meta( $id, 'module_icon', induction_slash_meta( sanitize_text_field( (string) $meta['module_icon'] ) ) );
@@ -2917,10 +4147,137 @@ function induction_is_portal_page(): bool {
     return $post && has_shortcode( $post->post_content, 'induction_portal' );
 }
 
+/**
+ * Third-party assets to drop on the portal page, matched on the registered
+ * src rather than the handle: handles are private to each plugin and change
+ * between versions, whereas the path a plugin serves from does not.
+ *
+ * The portal page renders one React app into an empty document and bypasses
+ * the theme, so none of the storefront's front-end runs for any reason here.
+ * It is not merely wasted bandwidth. A performance recording from a staff
+ * member showed the browser hanging inside Google's analytics.js: the SPA uses
+ * a hash router, so every click on a sidebar link reads to a tag manager's
+ * history listener as a fresh page view, and the freeze reproduced only for
+ * users running a content blocker, which substitutes its own stub for
+ * analytics.js. Either half of that pairing is somebody else's code doing
+ * somebody else's job on a page that needs neither.
+ *
+ * Note the analytics property is a Universal Analytics one (UA-...), which
+ * stopped accepting data in July 2023, so nothing here is losing measurement
+ * that still exists. Retiring it site-wide is a separate job.
+ *
+ * @return string[] Case-insensitive substrings matched against each src.
+ */
+function induction_portal_blocked_asset_patterns(): array {
+    return (array) apply_filters( 'induction_portal_blocked_asset_patterns', [
+        // Analytics and tag managers - the observed cause of the hang.
+        'googletagmanager.com',
+        'google-analytics.com',
+        '/gtag/js',
+        'analytics.js',
+        // Storefront and page builder. Nothing on this page is built with
+        // either, and WooCommerce alone queues a dozen scripts.
+        '/plugins/woocommerce/',
+        '/plugins/woo-variation-gallery/',
+        '/plugins/woolentor-addons/',
+        '/plugins/elementor/',
+        '/plugins/elementor-pro/',
+        // Marketing and form widgets with no counterpart in the SPA. The
+        // portal signs in over JWT and has no reCAPTCHA-protected form.
+        '/plugins/custom-facebook-feed-pro/',
+        '/plugins/recaptcha-woo/',
+        'google.com/recaptcha',
+        // The theme is bypassed by portal-page.php, so its assets are dead
+        // weight by definition.
+        '/themes/',
+    ] );
+}
+
+/**
+ * Drop those assets, on this page only. Deliberately narrow:
+ *
+ *   - jQuery and the wp-* core scripts stay. They are cheap, and a plugin that
+ *     prints a raw inline jQuery() call in the footer would throw without it.
+ *     Inline scripts attached to a dequeued handle go with it automatically.
+ *   - Styles are left alone apart from the Elementor kit already handled in
+ *     induction_portal_render_head(); a missing stylesheet cannot hang a
+ *     browser, and stripping more risks the page shell.
+ */
+function induction_portal_dequeue_third_party(): void {
+    if ( ! induction_is_portal_page() ) {
+        return;
+    }
+
+    $scripts  = wp_scripts();
+    $patterns = induction_portal_blocked_asset_patterns();
+
+    foreach ( $scripts->queue as $handle ) {
+        $src = $scripts->registered[ $handle ]->src ?? '';
+        if ( ! is_string( $src ) || '' === $src ) {
+            continue;
+        }
+        // Never match this plugin's own bundle, whatever the pattern list says.
+        if ( false !== strpos( $src, INDUCTION_URL ) ) {
+            continue;
+        }
+        foreach ( $patterns as $pattern ) {
+            if ( false !== stripos( $src, (string) $pattern ) ) {
+                wp_dequeue_script( $handle );
+                break;
+            }
+        }
+    }
+}
+
+/**
+ * Remove <script> tags that were printed as raw markup rather than enqueued,
+ * so there is no handle to dequeue. Tag manager snippets are the usual case:
+ * both the loader and the inline dataLayer bootstrap that configures it, which
+ * is why inline script bodies are matched too and not just src attributes.
+ *
+ * Applied to buffered wp_head() and wp_footer() output.
+ */
+function induction_portal_strip_third_party( string $html ): string {
+    $patterns = array_merge(
+        induction_portal_blocked_asset_patterns(),
+        // Injected as raw markup and conflicts with the SPA's own scripts.
+        [ 'mailerlite', 'dataLayer', 'GoogleAnalyticsObject' ]
+    );
+
+    return (string) preg_replace_callback(
+        '#<script\b[^>]*>.*?</script>#is',
+        static function ( array $matches ) use ( $patterns ): string {
+            // The SPA's own bundle is printed by wp_footer() and must survive
+            // regardless of what the pattern list happens to contain.
+            if ( false !== strpos( $matches[0], INDUCTION_URL ) ) {
+                return $matches[0];
+            }
+            foreach ( $patterns as $pattern ) {
+                if ( false !== stripos( $matches[0], (string) $pattern ) ) {
+                    return '';
+                }
+            }
+            return $matches[0];
+        },
+        $html
+    );
+}
+
+/**
+ * wp_footer() is where this plugin's own bundle is printed, so it cannot simply
+ * be skipped - it is buffered and filtered like the head, which also catches a
+ * tag manager's body snippet.
+ */
+function induction_portal_render_footer(): void {
+    ob_start();
+    wp_footer();
+    echo induction_portal_strip_third_party( (string) ob_get_clean() );
+}
+
 // This page bypasses the theme entirely for the SPA (see portal-page.php),
 // so wp_head() still pulls in third-party CSS/JS meant for the theme's own
-// pages — none of which this page has any use for. Buffer wp_head() and
-// strip the two known offenders out of this page only, rather than
+// pages - none of which this page has any use for. Buffer wp_head() and
+// strip the known offenders out of this page only, rather than
 // disabling them site-wide:
 //   - MailerLite's universal.js: injected as raw markup (not via
 //     wp_enqueue_script, so there's no handle to dequeue) and conflicts
@@ -2935,11 +4292,7 @@ function induction_portal_render_head(): void {
     ob_start();
     wp_head();
     $head_output = ob_get_clean();
-    $head_output = preg_replace_callback(
-        '#<script\b[^>]*>.*?</script>#is',
-        fn( $matches ) => ( stripos( $matches[0], 'mailerlite' ) !== false ) ? '' : $matches[0],
-        $head_output
-    );
+    $head_output = induction_portal_strip_third_party( $head_output );
     $head_output = preg_replace( '#<link\b[^>]*href=["\'][^"\']*elementor[^"\']*["\'][^>]*/?>#i', '', $head_output );
     $head_output = preg_replace_callback(
         '#<style\b[^>]*id=["\'][^"\']*elementor[^"\']*["\'][^>]*>.*?</style>#is',
@@ -2973,10 +4326,23 @@ function induction_maybe_enqueue_portal(): void {
         return;
     }
 
-    wp_enqueue_script( 'induction-app', INDUCTION_URL . 'assets/app/app.js', [], filemtime( $js_path ), true );
+    // Cache-bust on INDUCTION_VERSION rather than filemtime(). mtime is not
+    // deployment-safe: extracting a zip restores the archived timestamp, and a
+    // page cache (LiteSpeed on this host) can serve HTML carrying the previous
+    // ?ver=, so the browser never requests the new bundle and runs stale JS
+    // against a newer API. The version constant changes when we say it does,
+    // and is identical on every environment. BUMP IT ON EVERY RELEASE.
+    //
+    // Under WP_DEBUG the mtime is appended so local edits show up without a
+    // version bump on each save.
+    $asset_version = defined( 'WP_DEBUG' ) && WP_DEBUG
+        ? INDUCTION_VERSION . '.' . filemtime( $js_path )
+        : INDUCTION_VERSION;
+
+    wp_enqueue_script( 'induction-app', INDUCTION_URL . 'assets/app/app.js', [], $asset_version, true );
 
     if ( file_exists( $css_path ) ) {
-        wp_enqueue_style( 'induction-app', INDUCTION_URL . 'assets/app/app.css', [], filemtime( $css_path ) );
+        wp_enqueue_style( 'induction-app', INDUCTION_URL . 'assets/app/app.css', [], $asset_version );
     }
 
     wp_localize_script( 'induction-app', 'InductionApp', [

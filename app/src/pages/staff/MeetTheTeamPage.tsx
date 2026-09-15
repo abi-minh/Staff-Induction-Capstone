@@ -1,5 +1,5 @@
 import {
-  Avatar, Box, Card, CardContent, CircularProgress, Typography,
+  Avatar, Box, Card, CardContent, CircularProgress, Link, Typography,
 } from '@mui/material';
 import PlaceOutlinedIcon from '@mui/icons-material/PlaceOutlined';
 import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined';
@@ -59,6 +59,22 @@ function OwnerPanel({ owner }: { owner: TeamMember }) {
           <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{owner.name}</Typography>
         </Box>
         {owner.region && <Region region={owner.region} />}
+        {(owner.contactEmail || owner.contactPhone) && (
+          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.25 }}>
+            {owner.contactEmail && (
+              <Link href={`mailto:${owner.contactEmail}`} variant="body2" sx={{ fontWeight: 500 }}>
+                {owner.contactEmail}
+              </Link>
+            )}
+            {owner.contactPhone && (
+              // tel: keeps it tappable on a phone, which is where staff will
+              // most often reach for it.
+              <Link href={`tel:${owner.contactPhone.replace(/\s+/g, '')}`} variant="body2" color="text.secondary">
+                {owner.contactPhone}
+              </Link>
+            )}
+          </Box>
+        )}
       </Box>
 
       <Box sx={{ flex: 1, minWidth: 260, display: 'flex', flexDirection: 'column', gap: 1.5 }}>

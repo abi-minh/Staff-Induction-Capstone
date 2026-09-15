@@ -224,6 +224,8 @@ interface WPTeamMember {
   photoUrl: string;
   bio: string;
   isOwner: boolean;
+  contactEmail: string;
+  contactPhone: string;
 }
 
 export async function fetchTeam(): Promise<TeamMember[]> {
@@ -236,5 +238,7 @@ export async function fetchTeam(): Promise<TeamMember[]> {
     photoUrl: t.photoUrl ?? '',
     bio: t.bio ?? '',
     isOwner: t.isOwner ?? false,
+    contactEmail: t.contactEmail ?? '',
+    contactPhone: t.contactPhone ?? '',
   }));
 }

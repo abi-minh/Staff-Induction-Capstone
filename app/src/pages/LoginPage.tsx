@@ -11,8 +11,9 @@ function isAdminRole(roles: string[]): boolean {
 }
 
 export default function LoginPage() {
-  const navigate         = useNavigate();
-  const { setAuth }      = useAuthStore();
+  const navigate       = useNavigate();
+  const setAuth        = useAuthStore((s) => s.setAuth);
+  const sessionExpired = useAuthStore((s) => s.sessionExpired);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error,    setError]    = useState('');
@@ -26,10 +27,14 @@ export default function LoginPage() {
       const token = await login(username, password);
       const user  = await fetchCurrentUser(token.token);
       setAuth(token.token, user);
+      // Clear the spinner before navigating, not in a finally that runs after
+      // it: if rendering the destination ever throws or hangs, a stranded
+      // spinner on a painted login card is indistinguishable from a hung
+      // browser, which is how this failure was reported.
+      setLoading(false);
       navigate(isAdminRole(user.roles) ? '/' : '/portal', { replace: true });
     } catch (err) {
       setError((err as Error).message);
-    } finally {
       setLoading(false);
     }
   }
@@ -77,6 +82,11 @@ export default function LoginPage() {
           />
 
           {error && <Alert severity="error">{error}</Alert>}
+          {!error && sessionExpired && (
+            <Alert severity="info">
+              Your session ended. Please sign in again.
+            </Alert>
+          )}
 
           <Button
             type="submit"

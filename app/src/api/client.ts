@@ -1,4 +1,5 @@
 import axios, { AxiosError } from 'axios';
+import { useAuthStore } from '../store/authStore';
 
 const BASE_URL =
   window.InductionApp?.restUrl ??
@@ -19,14 +20,23 @@ client.interceptors.request.use((config) => {
   return config;
 });
 
-// Normalise errors; clear auth on 401.
+// Normalise errors; drop auth on 401.
+//
+// This must NEVER reload the page. WordPress answers 401 whenever the JWT is
+// not accepted — an expired token, but equally an Authorization header stripped
+// by a proxy or security plugin, or a cached response — and 403 when the token
+// is fine but the capability is missing. Reloading on 401 turned any one of
+// those into a loop: sign in, first portal query 401s, reload, sign in again.
+// It also fired mid-submit on the login page, so the spinner froze on a
+// painted card and looked like a browser hang.
+//
+// Clearing the store instead lets RequireAuth route to /login on the next
+// render, with sessionExpired set so the user is told what happened.
 client.interceptors.response.use(
   (res) => res,
   (error: AxiosError<{ message?: string; code?: string }>) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('induction_token');
-      localStorage.removeItem('induction_user');
-      window.location.reload();
+    if (error.response?.status === 401 && useAuthStore.getState().token) {
+      useAuthStore.getState().expireSession();
     }
     const message = error.response?.data?.message ?? error.message ?? 'An error occurred';
     return Promise.reject(new Error(message));
