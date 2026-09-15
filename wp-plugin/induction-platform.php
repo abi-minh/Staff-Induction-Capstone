@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.3.1
+ * Version:     1.3.2
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.3.1' );
+define( 'INDUCTION_VERSION', '1.3.2' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -1160,14 +1160,13 @@ function induction_get_user_assignments( WP_REST_Request $request ): WP_REST_Res
     // (a real, currently-registered role) is what replaced it.
     $roles = $user->roles;
 
-    $modules = get_posts( [
+    $modules = induction_sort_modules_by_order( get_posts( [
         'post_type'      => 'induction_module',
         'post_status'    => 'publish',
         'posts_per_page' => -1,
-        'orderby'        => 'meta_value_num',
-        'meta_key'       => 'module_order',
+        'orderby'        => 'ID',
         'order'          => 'ASC',
-    ] );
+    ] ) );
 
     $assigned = array_filter( $modules, function( $post ) use ( $user_id, $roles ) {
         $targets = get_post_meta( $post->ID, 'module_role_targets', true ) ?: [];
@@ -1387,14 +1386,13 @@ function induction_get_reports_summary(): WP_REST_Response {
     $table = $wpdb->prefix . 'induction_progress';
 
     // All published modules.
-    $modules = get_posts( [
+    $modules = induction_sort_modules_by_order( get_posts( [
         'post_type'      => 'induction_module',
         'post_status'    => 'publish',
         'posts_per_page' => -1,
-        'orderby'        => 'meta_value_num',
-        'meta_key'       => 'module_order',
+        'orderby'        => 'ID',
         'order'          => 'ASC',
-    ] );
+    ] ) );
 
     // Staff members that can be assigned modules
     $staff = get_users( [ 'role__in' => array_keys( induction_member_roles() ), 'number' => 500 ] );
@@ -4595,15 +4593,43 @@ function induction_save_module_meta( int $id, array $meta ): true|WP_Error {
     return true;
 }
 
+/**
+ * Order modules by their module_order meta, ascending, with the post ID as a
+ * stable tiebreaker.
+ *
+ * Deliberately not WP_Query's `meta_key` + `orderby => meta_value_num`, which
+ * is what these queries used before. That pairing makes WP_Query INNER JOIN
+ * wp_postmeta, so a module with no module_order row is dropped from the result
+ * entirely rather than sorted last: absent from the admin list, absent from the
+ * assign dialog, and — for the staff-facing query — absent from the portal,
+ * with no error raised anywhere.
+ *
+ * Nothing in the UI creates a module in that state (the editor always sends
+ * module_order, and import writes it explicitly), but a module created through
+ * the REST API without the field does, and so would any module predating it.
+ * A missing row reads as 0 here, which sorts it first — the same place the
+ * registered default would put it.
+ *
+ * posts_per_page is -1 at every call site, so the full set is already in memory
+ * and sorting in PHP costs nothing the database was not already paying.
+ */
+function induction_sort_modules_by_order( array $posts ): array {
+    usort( $posts, static function ( WP_Post $a, WP_Post $b ): int {
+        $order_a = (int) get_post_meta( $a->ID, 'module_order', true );
+        $order_b = (int) get_post_meta( $b->ID, 'module_order', true );
+        return [ $order_a, $a->ID ] <=> [ $order_b, $b->ID ];
+    } );
+    return $posts;
+}
+
 function induction_get_modules(): WP_REST_Response {
-    $posts = get_posts( [
+    $posts = induction_sort_modules_by_order( get_posts( [
         'post_type'      => 'induction_module',
         'post_status'    => [ 'publish', 'draft' ],
         'posts_per_page' => -1,
-        'orderby'        => 'meta_value_num',
-        'meta_key'       => 'module_order',
+        'orderby'        => 'ID',
         'order'          => 'ASC',
-    ] );
+    ] ) );
     return rest_ensure_response( array_map( 'induction_format_module', $posts ) );
 }
 
