@@ -344,16 +344,29 @@ export interface ResourceCategory {
 export type HeadingLevel = 1 | 2 | 3 | 4;
 export type ListStyle = "ordered" | "unordered";
 
+export type BlockAlign = "left" | "center" | "right";
+
+export interface BlockLayout {
+  align?: BlockAlign;
+  width?: number;
+}
+
+export const MIN_BLOCK_WIDTH = 15;
+
 export interface HeadingBlock {
   id: string;
   type: "heading";
   data: { level: HeadingLevel; text: string };
+  layout?: BlockLayout;
+  textAlign?: BlockAlign;
 }
 
 export interface TextBlock {
   id: string;
   type: "text";
   data: { html: string };
+  layout?: BlockLayout;
+  textAlign?: BlockAlign;
 }
 
 export interface ImageBlock {
@@ -366,18 +379,21 @@ export interface ImageBlock {
     caption: string;
     width?: number;
   };
+  layout?: BlockLayout;
 }
 
 export interface VideoBlock {
   id: string;
   type: "video";
   data: { mediaId: number; url: string; caption: string };
+  layout?: BlockLayout;
 }
 
 export interface ListBlock {
   id: string;
   type: "list";
   data: { style: ListStyle; items: string[] };
+  layout?: BlockLayout;
 }
 
 export interface MultipleChoiceBlock {
@@ -423,6 +439,7 @@ export interface CalloutBlock {
     title?: string;
     body: string;
   };
+  layout?: BlockLayout;
 }
 
 // A non-row, non-quiz content block placed inside a row at a specific column.
@@ -447,6 +464,7 @@ export interface RowBlock {
     columns: number; // MIN_ROW_COLUMNS..MAX_ROW_COLUMNS
     children: PlacedBlock[]; // ordered left-to-right by colStart
   };
+  layout?: BlockLayout;
 }
 
 export const MIN_ROW_COLUMNS = 2;

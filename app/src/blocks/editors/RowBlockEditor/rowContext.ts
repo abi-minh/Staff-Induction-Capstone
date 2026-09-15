@@ -1,11 +1,13 @@
 import { createContext, useContext } from 'react';
-import type { PlacedBlock, RowChildBlock } from '../../../types';
+import type { BlockAlign, BlockLayout, PlacedBlock, RowChildBlock } from '../../../types';
 
 export interface RowContextValue {
   rowId:             string;
   selectedChildId:   string | null;
   onSelectChild:     (id: string | null) => void;
   onUpdateChildData: (id: string, data: RowChildBlock['data']) => void;
+  onUpdateChildLayout: (id: string, layout: BlockLayout) => void;
+  onUpdateChildTextAlign: (id: string, textAlign: BlockAlign) => void;
   onRemoveChild:     (id: string) => void;
   onGrowChild:       (id: string) => void;
   onShrinkChild:     (id: string) => void;

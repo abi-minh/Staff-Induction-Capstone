@@ -1,9 +1,11 @@
 import { Box, InputBase, MenuItem, Select } from '@mui/material';
-import type { HeadingBlock, HeadingLevel } from '../../types';
+import type { BlockAlign, HeadingBlock, HeadingLevel } from '../../types';
+import TextAlignControls from '../TextAlignControls';
 
 interface Props {
   block: HeadingBlock;
   onChange: (data: HeadingBlock['data']) => void;
+  onTextAlignChange?: (align: BlockAlign) => void;
 }
 
 const LEVEL_STYLE: Record<HeadingLevel, { fontSize: string; fontWeight: number }> = {
@@ -13,7 +15,7 @@ const LEVEL_STYLE: Record<HeadingLevel, { fontSize: string; fontWeight: number }
   4: { fontSize: '1.15rem', fontWeight: 600 },
 };
 
-export default function HeadingBlockEditor({ block, onChange }: Props) {
+export default function HeadingBlockEditor({ block, onChange, onTextAlignChange }: Props) {
   const style = LEVEL_STYLE[block.data.level];
 
   return (
@@ -31,6 +33,10 @@ export default function HeadingBlockEditor({ block, onChange }: Props) {
         <MenuItem value={4}>H4</MenuItem>
       </Select>
 
+      {onTextAlignChange && (
+        <TextAlignControls value={block.textAlign} onChange={onTextAlignChange} />
+      )}
+
       <InputBase
         fullWidth
         value={block.data.text}
@@ -40,7 +46,7 @@ export default function HeadingBlockEditor({ block, onChange }: Props) {
           fontSize: style.fontSize,
           fontWeight: style.fontWeight,
           lineHeight: 1.2,
-          '& input': { p: 0 },
+          '& input': { p: 0, textAlign: block.textAlign ?? 'left' },
         }}
       />
     </Box>
