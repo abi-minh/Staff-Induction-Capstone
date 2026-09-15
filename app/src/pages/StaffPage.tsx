@@ -12,6 +12,7 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
+  IconButton,
   InputAdornment,
   Link,
   MenuItem,
@@ -30,6 +31,7 @@ import SearchIcon from "@mui/icons-material/Search";
 import PersonAddAlt1Icon from "@mui/icons-material/PersonAddAlt1";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
+import VisibilityOffOutlinedIcon from "@mui/icons-material/VisibilityOffOutlined";
 import MailOutlinedIcon from "@mui/icons-material/MailOutlined";
 import {
   useStaff,
@@ -168,6 +170,11 @@ export default function StaffPage() {
   const { data: roles = [], isLoading: rolesLoading } = useRoles();
   // Creating a staff account can only ever grant a role the app hands out.
   const assignableRoles = roles.filter((r) => r.assignable);
+
+  // The admin types this password and then has to read it back to the new
+  // starter, so being able to check it before sending is the whole point of
+  // the field. Reset on every open so it never reveals the previous entry.
+  const [showPassword, setShowPassword] = useState(false);
   const bulkAssign = useBulkAssign();
   const unassign = useUnassign();
   const createStaff = useCreateStaff();
@@ -306,6 +313,7 @@ export default function StaffPage() {
 
   function openAdd() {
     setAddForm({ name: "", username: "", email: "", role: "", password: "" });
+    setShowPassword(false);
     setAddError("");
     setCreated(null);
     usernameEditedRef.current = false;
@@ -1084,13 +1092,32 @@ export default function StaffPage() {
               </TextField>
               <TextField
                 label="Password"
-                type="password"
+                type={showPassword ? "text" : "password"}
                 value={addForm.password}
                 onChange={(e) =>
                   setAddForm((f) => ({ ...f, password: e.target.value }))
                 }
                 fullWidth
                 helperText="Min 8 characters. Share these credentials with the new staff member so they can log in."
+                slotProps={{
+                  input: {
+                    endAdornment: (
+                      <InputAdornment position="end">
+                        <IconButton
+                          onClick={() => setShowPassword((v) => !v)}
+                          edge="end"
+                          size="small"
+                          aria-label={showPassword ? "Hide password" : "Show password"}
+                          sx={{ color: "text.secondary" }}
+                        >
+                          {showPassword
+                            ? <VisibilityOffOutlinedIcon fontSize="small" />
+                            : <VisibilityOutlinedIcon fontSize="small" />}
+                        </IconButton>
+                      </InputAdornment>
+                    ),
+                  },
+                }}
               />
             </>
           )}

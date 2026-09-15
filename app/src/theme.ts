@@ -77,6 +77,19 @@ export const theme = createTheme({
   },
 });
 
+// Height of AdminLayout's app bar — MUI's default Toolbar on sm and up.
+export const APP_BAR_HEIGHT = 64;
+
+// Rendered height of stickyActionBarSx: a medium Button (~38px) plus its
+// py: 1.5 padding (24px) and the 1px bottom border. Hard-coded because CSS
+// gives a sticky element no way to measure the sticky element above it —
+// keep this in step if that bar's padding or control size changes.
+export const EDITOR_ACTION_BAR_HEIGHT = 63;
+
+// What anything sticky *inside* an editor page has to clear: both bars above
+// it, plus a little breathing room.
+export const EDITOR_STICKY_TOP = APP_BAR_HEIGHT + EDITOR_ACTION_BAR_HEIGHT + 16;
+
 // An editor's top action bar. The module and section editors are long enough
 // that the save button scrolls out of reach, and scrolling back up to save is
 // the kind of friction that turns into unsaved work. On desktop the bar sticks
@@ -86,7 +99,7 @@ export const theme = createTheme({
 // background spans the full width as the page scrolls beneath it.
 export const stickyActionBarSx = {
   position: { xs: 'static' as const, md: 'sticky' as const },
-  top: { md: 64 },
+  top: { md: APP_BAR_HEIGHT },
   zIndex: (t: { zIndex: { appBar: number } }) => t.zIndex.appBar - 1,
   bgcolor: 'background.default',
   mx: { md: -4 },

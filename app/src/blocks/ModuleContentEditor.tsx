@@ -65,6 +65,7 @@ import ChildPreview from "./editors/RowBlockEditor/ChildPreview";
 import TextBlockEditor from "./editors/TextBlockEditor";
 import VideoBlockEditor from "./editors/VideoBlockEditor";
 import { closestCenter } from "@dnd-kit/collision";
+import { EDITOR_STICKY_TOP } from "../theme";
 
 type ContentBlockType =
   | "heading"
@@ -262,17 +263,11 @@ function PaletteItem({
   );
 }
 
+// Positioning deliberately lives on this component's wrapper in the canvas
+// row rather than here — see the comment at its call site.
 function BlockInserterPanel() {
   return (
-    <Box
-      sx={{
-        width: 168,
-        flexShrink: 0,
-        position: "sticky",
-        top: 16,
-        alignSelf: "flex-start",
-      }}
-    >
+    <Box sx={{ width: 168 }}>
       <Typography
         variant="overline"
         sx={{
@@ -729,8 +724,35 @@ export default function ModuleContentEditor({ blocks, onChange }: Props) {
         // Click on canvas background deselects
         onClick={() => setSelectedId(null)}
       >
-        {/* Left: block inserter panel */}
-        <Box onClick={(e) => e.stopPropagation()}>
+        {/* Left: block inserter panel. The sticky positioning belongs on this
+            element, not inside BlockInserterPanel: as a direct flex child its
+            containing block is the row, which is as tall as the canvas, so it
+            has somewhere to travel. Nested one level deeper it was bounded by
+            a wrapper only as tall as itself and never moved at all.
+
+            The offset clears the app bar and the editor's own sticky action
+            bar; without it the palette pins underneath them and its top rows
+            are unreachable. maxHeight keeps every block type reachable on a
+            short viewport by letting the palette scroll within itself. */}
+        <Box
+          onClick={(e) => e.stopPropagation()}
+          sx={{
+            flexShrink: 0,
+            alignSelf: "flex-start",
+            position: "sticky",
+            top: {
+              xs: "calc(env(safe-area-inset-top, 0px) + 72px)",
+              md: EDITOR_STICKY_TOP,
+            },
+            maxHeight: {
+              xs: "calc(100vh - env(safe-area-inset-top, 0px) - 88px)",
+              md: `calc(100vh - ${EDITOR_STICKY_TOP + 16}px)`,
+            },
+            overflowY: "auto",
+            // Room for the scrollbar so it never sits on top of a block name.
+            pr: 0.5,
+          }}
+        >
           <BlockInserterPanel />
         </Box>
 
