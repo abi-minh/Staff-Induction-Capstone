@@ -1,5 +1,6 @@
 /// <reference types="cypress" />
 import { testEnv } from '../../support/testEnv';
+import { serverMessage } from '../../support/serverError';
 
 describe('Locations', () => {
   let locationId: number;
@@ -94,7 +95,11 @@ describe('Locations', () => {
 describe('Backup and migration', () => {
   it('exports an envelope with the documented shape', () => {
     cy.api('GET', 'induction/v1/transfer/export').then(({ status, body }) => {
-      expect(status).to.eq(200);
+      // The body is in the assertion message on purpose: a bare "expected 500
+      // to equal 200" says nothing, and export is the one route that can fail
+      // for environmental reasons (it base64-embeds up to 64MB of media into a
+      // single JSON response, so PHP's memory_limit is in play).
+      expect(status, `export failed — server said: ${serverMessage(body)}`).to.eq(200);
       expect(body.format).to.eq('induction-platform-export');
       expect(body.format_version).to.be.a('number');
       expect(body).to.include.keys(['modules', 'locations', 'documents', 'media', 'records']);
@@ -103,7 +108,10 @@ describe('Backup and migration', () => {
   });
 
   it('gives every module a ref that its records point at', () => {
-    cy.api('GET', 'induction/v1/transfer/export').then(({ body }) => {
+    cy.api('GET', 'induction/v1/transfer/export').then(({ status, body }) => {
+      // Fail on the cause, not on a TypeError three lines later.
+      expect(status, `export failed — server said: ${serverMessage(body)}`).to.eq(200);
+
       const refs = body.modules.map((m: { ref: string }) => m.ref);
       expect(new Set(refs).size, 'refs are unique').to.eq(refs.length);
 
@@ -114,7 +122,9 @@ describe('Backup and migration', () => {
   });
 
   it('never exports a raw user_id in place of a portable reference', () => {
-    cy.api('GET', 'induction/v1/transfer/export').then(({ body }) => {
+    cy.api('GET', 'induction/v1/transfer/export').then(({ status, body }) => {
+      expect(status, `export failed — server said: ${serverMessage(body)}`).to.eq(200);
+
       body.records.progress.forEach((row: Record<string, unknown>) => {
         expect(row).to.not.have.property('user_id');
         expect(row.user).to.include.keys(['login', 'email']);

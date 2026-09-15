@@ -111,6 +111,12 @@ describe('Resource categories', () => {
   describe('filing a file', () => {
     let fileId: number;
     let slug: string;
+    // Where the borrowed file was filed before this suite touched it. There is
+    // no upload route in induction/v1, so these cases have to re-file a file
+    // that already exists — which means putting it back exactly, not dropping
+    // it in the default bucket. Getting that wrong silently re-files one of the
+    // client's own documents and looks like a user mistake.
+    let originalCategory: string;
 
     before(() => {
       cy.api('POST', 'induction/v1/resource-categories', {
@@ -123,8 +129,30 @@ describe('Resource categories', () => {
       cy.api('GET', 'induction/v1/media').then(({ body }) => {
         expect(body, 'the test site needs at least one file in the library')
           .to.have.length.greaterThan(0);
-        fileId = body[0].id;
+
+        type MediaItem = { id: number; filename?: string; category?: string; usage?: unknown[] };
+        const files = body as MediaItem[];
+
+        // Preference order, safest first: a file this suite uploaded on an
+        // earlier run, then any file attached to nothing, and only then the
+        // newest file. `usage` is populated by the API with the modules and
+        // documents referencing the file, so an empty one is genuinely idle.
+        const target =
+          files.find((m) => /cypress/i.test(m.filename ?? '')) ??
+          files.find((m) => !m.usage?.length) ??
+          files[0];
+
+        fileId = target.id;
+        originalCategory = target.category ?? DEFAULT_CATEGORY;
       });
+    });
+
+    after(() => {
+      // Belt and braces: the last case re-files it too, but a failure part-way
+      // through would otherwise leave a real document in a Cypress category.
+      if (fileId) {
+        cy.api('POST', `induction/v1/media/${fileId}/category`, { category: originalCategory });
+      }
     });
 
     it('reports a category on every file in the library', () => {
@@ -154,7 +182,8 @@ describe('Resource categories', () => {
           expect(body.code).to.eq('category_in_use');
         });
 
-      cy.api('POST', `induction/v1/media/${fileId}/category`, { category: DEFAULT_CATEGORY })
+      // Back where it came from, not into the default bucket.
+      cy.api('POST', `induction/v1/media/${fileId}/category`, { category: originalCategory })
         .its('status').should('eq', 200);
     });
 
@@ -176,7 +205,12 @@ describe('Resource categories', () => {
           document_role_targets: ['all'],
         },
       }).then(({ status, body }) => {
-        expect(status).to.be.oneOf([200, 201]);
+        // This is the suite's only write through a core wp/v2 route, and the
+        // admin UI creates documents the same way (api/documents.ts). A 403
+        // here therefore means the admin cannot add a reference document at
+        // all — so the server's message matters more than the status.
+        expect(status, `document create refused — server said: ${JSON.stringify(body).slice(0, 600)}`)
+          .to.be.oneOf([200, 201]);
 
         // Writing the document's category stamps the file behind it.
         cy.api('GET', 'induction/v1/media').then(({ body: media }) => {

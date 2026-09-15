@@ -13,9 +13,11 @@ describe('L4 · assign, complete, grade, report', () => {
   let staffName: string;
 
   before(() => {
-    cy.api('GET', 'induction/v1/staff').then(({ body }) => {
-      const staff = body.find((s: { roles: string[] }) => s.roles.includes('staff'));
-      expect(staff, 'the test site needs a staff-role account').to.exist;
+    // The fixture account, not the first staff-role record: this journey
+    // assigns a module, completes it and files a graded quiz result, so running
+    // it against whoever happens to sort first writes a real colleague's
+    // training history.
+    cy.fixtureStaff().then((staff) => {
       staffId = staff.id;
       staffName = staff.name;
     });
@@ -24,6 +26,12 @@ describe('L4 · assign, complete, grade, report', () => {
       title: `L4 lifecycle ${Date.now()}`,
       status: 'publish',
       meta: {
+        // Mirrors what the module editor sends on create, so the fixture is a
+        // module a real admin could have made. Omitting it used to make the
+        // module invisible to every list query — the plugin no longer drops
+        // modules without this meta, but matching the UI keeps the fixture
+        // honest rather than relying on that.
+        module_order: 0,
         quiz_pass_threshold: 50,
         module_blocks: JSON.stringify([{
           id: 'section-l4',
@@ -58,7 +66,15 @@ describe('L4 · assign, complete, grade, report', () => {
       cy.contains('button', 'Assign').click();
     });
 
-    cy.get('[role="dialog"]').within(() => {
+    // Scoped by title: the Staff page mounts several Dialogs (assign, add staff,
+    // reminder, bulk reminder), and a bare [role="dialog"] can match more than
+    // one, which makes within() throw rather than fail on the assertion.
+    cy.contains('[role="dialog"]', 'Assign Modules').within(() => {
+      // Search rather than scan: the dialog renders a capped list, and a module
+      // created seconds ago is not necessarily in the part of it that is
+      // visible. Typing is also what an admin does on a site with more than a
+      // screenful of modules, so the test stops depending on list ordering.
+      cy.get('input[placeholder*="Search"]').type('L4 lifecycle');
       cy.contains('L4 lifecycle').click();
       cy.contains('button', /save|assign/i).click();
     });
@@ -71,9 +87,21 @@ describe('L4 · assign, complete, grade, report', () => {
   });
 
   it('shows the module to the staff member and records progress', () => {
+    // Opening the module fires a fire-and-forget progress upsert from an effect
+    // (StaffModuleViewPage), so the row does not exist the instant the content
+    // renders. Waiting on the request is deterministic; polling the API and
+    // hoping is not. Registered before the visit because the effect runs on
+    // mount, ahead of any interaction.
+    cy.intercept('POST', '**/induction/v1/progress').as('startProgress');
+
     cy.visitAs('staff', `/#/portal/training/${moduleId}`);
+    // The section title is on the module's index page; the block content is not.
+    // Opening the section is what the staff member actually does, and what
+    // starts the progress row asserted below.
     cy.contains('Beach safety').should('be.visible');
+    cy.contains('button', /Attempt Now|Review/).click();
     cy.contains('Always wear a PFD').should('be.visible');
+    cy.wait('@startProgress').its('response.statusCode').should('eq', 200);
 
     cy.api('GET', `induction/v1/progress/user/${staffId}`).then(({ body }) => {
       const row = body.find(
@@ -91,7 +119,12 @@ describe('L4 · assign, complete, grade, report', () => {
       // WordPress before either callback runs, not a 200 with an inferred user.
       cy.request({
         method: 'POST', url: wp('induction/v1/quiz/save'), headers,
-        body: { user_id: staffId, module_id: moduleId, block_id: 'q1', answer: true },
+        // A string, not a boolean. The route declares answer as a string and
+        // saveQuizAnswer() in the app types it the same way, so a true/false
+        // block sends "true" — the spec was the thing that was wrong here, and
+        // the block's correctAnswer being a real boolean in the fixture is what
+        // made the mistake look plausible.
+        body: { user_id: staffId, module_id: moduleId, block_id: 'q1', answer: 'true' },
       }).its('status').should('eq', 200);
 
       cy.request({
@@ -108,8 +141,21 @@ describe('L4 · assign, complete, grade, report', () => {
 
   it('lets an admin grade it as passed from the review UI', () => {
     cy.visitAs('admin', '/#/quiz-reviews');
-    cy.contains('L4 lifecycle').click();
-    cy.contains('button', /pass|approve/i).click();
+    // The module name is a plain table cell — clicking it does nothing. Each
+    // row carries its own Review button, which is the way in.
+    // An anchor, not a button: the control is <Button component={RouterLink}>,
+    // which MUI renders as <a href>. Matching on 'button' could never succeed.
+    cy.contains('tr', 'L4 lifecycle').within(() => {
+      cy.contains('a', 'Review').click();
+    });
+
+    // Two steps, not one: Pass only sets local state in the review form, and
+    // nothing reaches the server until Save Grade is pressed. The spec was
+    // asserting on a grade it had never submitted.
+    cy.contains('button', 'Pass').click();
+    cy.intercept('POST', '**/induction/v1/quiz/grade').as('grade');
+    cy.contains('button', 'Save Grade').click();
+    cy.wait('@grade').its('response.statusCode').should('eq', 200);
 
     cy.api('GET', `induction/v1/progress/user/${staffId}`).then(({ body }) => {
       const row = body.find(
@@ -126,10 +172,19 @@ describe('L4 · assign, complete, grade, report', () => {
         (r: { module_id: number }) => r.module_id === moduleId,
       );
       expect(report, 'the module appears in reporting').to.exist;
-      expect(report.total_completed).to.be.greaterThan(0);
 
+      // Breakdown before aggregate, deliberately. total_completed is derived
+      // from staff_breakdown, and only counts staff the module is targeted at
+      // — so a bare "expected 0 to be above 0" cannot distinguish "not counted
+      // as assigned" from "not recorded as complete". Checking the row first
+      // names which of the two it is, and the report is in the message because
+      // that is the evidence needed either way.
+      const seen = JSON.stringify(report);
       const entry = report.staff_breakdown.find((s: { user_id: number }) => s.user_id === staffId);
-      expect(entry.status).to.eq('completed');
+
+      expect(entry, `staff ${staffId} is not listed as assigned — report was ${seen}`).to.exist;
+      expect(entry.status, `graded as passed, but reporting says otherwise — ${seen}`).to.eq('completed');
+      expect(report.total_completed, `breakdown and total disagree — ${seen}`).to.be.greaterThan(0);
     });
   });
 });

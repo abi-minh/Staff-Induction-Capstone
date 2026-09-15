@@ -15,3 +15,8 @@ app/cypress.env.json
 # NOT build output and stay tracked.
 wp-plugin/assets/app/
 wp-plugin/staff-portal.zip
+
+# Standalone bundle for the Cypress lifecycle suite (npm run build:e2e). Built
+# with base=/ so vite preview can serve it at the root, which is the one thing
+# the plugin build must never be.
+app/dist-e2e/

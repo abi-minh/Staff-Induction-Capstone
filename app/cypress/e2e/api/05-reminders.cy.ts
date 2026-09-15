@@ -9,9 +9,10 @@ describe('Training reminders', () => {
   let staffId: number;
 
   before(() => {
-    cy.api('GET', 'induction/v1/staff').then(({ body }) => {
-      expect(body, 'the test site needs at least one staff account').to.have.length.greaterThan(0);
-      staffId = body[0].id;
+    // The fixture account, never body[0]: these specs send real mail, and the
+    // first record on a populated site is a real staff member.
+    cy.fixtureStaff().then((staff) => {
+      staffId = staff.id;
     });
   });
 
@@ -94,22 +95,27 @@ describe('Training reminders', () => {
       }
     });
 
+    // The batch is the fixture account plus a deliberately unresolvable id,
+    // rather than the first two records on the site. That still exercises
+    // per-recipient reporting across a mixed batch — one success, one failure —
+    // without a second real person receiving anything.
     it('reports a per-recipient result for every address in a batch', () => {
-      cy.api('GET', 'induction/v1/staff').then(({ body: staff }) => {
-        const targets = staff.slice(0, 2);
-        cy.api('POST', 'induction/v1/staff/reminders', {
-          messages: targets.map((s: { id: number }) => ({
-            user_id: s.id,
-            subject: 'Cypress bulk reminder',
-            body: '<p>Bulk body.</p>',
-          })),
-        }).then(({ status, body }) => {
-          expect(status).to.eq(200);
-          expect(body.results).to.have.length(targets.length);
-          expect(body.sent + body.failed).to.eq(targets.length);
-          body.results.forEach((r: { user_id: number; sent: boolean }) => {
-            expect(r).to.include.keys(['user_id', 'name', 'sent', 'reason']);
-          });
+      const targets = [staffId, 99999];
+
+      cy.api('POST', 'induction/v1/staff/reminders', {
+        messages: targets.map((id) => ({
+          user_id: id,
+          subject: 'Cypress bulk reminder',
+          body: '<p>Bulk body.</p>',
+        })),
+      }).then(({ status, body }) => {
+        expect(status).to.eq(200);
+        expect(body.results).to.have.length(targets.length);
+        expect(body.sent + body.failed).to.eq(targets.length);
+        expect(body.sent, 'the fixture account is mailable').to.eq(1);
+        expect(body.failed, 'the unknown id is reported, not dropped').to.eq(1);
+        body.results.forEach((r: { user_id: number; sent: boolean }) => {
+          expect(r).to.include.keys(['user_id', 'name', 'sent', 'reason']);
         });
       });
     });

@@ -1,0 +1,103 @@
+name: CI
+
+# The gates the deliverables agreement promises "on every change". Fast layers
+# only: type check, lint, unit tests, production build, and the endpoint suite.
+# The browser suite runs in nightly.yml so a slow job never becomes a reason to
+# push straight to the branch.
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  static:
+    name: Type check, lint, unit tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Type check test specs
+        run: npm run typecheck:cypress
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      # Runs tsc again as part of the build script, deliberately: this is the
+      # artefact that actually ships, so it is verified as a whole.
+      - name: Production build
+        run: npm run build
+
+      - name: Upload unit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: app/test-results/
+          if-no-files-found: ignore
+
+  api:
+    name: Endpoint suite
+    runs-on: ubuntu-latest
+    needs: static
+    # Skipped automatically on forks and wherever the test-site secrets are not
+    # configured, so a missing secret is a skipped job rather than a red build
+    # nobody can fix.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # Job level, not step level, and that placement is load-bearing: a step's
+    # `if` cannot see variables declared in that same step's `env` block, so the
+    # guard below read an empty string and skipped the tests on every run — a
+    # green job that had executed nothing.
+    env:
+      CYPRESS_WP_URL: ${{ secrets.TEST_WP_URL }}
+      CYPRESS_ADMIN_USER: ${{ secrets.TEST_ADMIN_USER }}
+      CYPRESS_ADMIN_PASS: ${{ secrets.TEST_ADMIN_PASS }}
+      CYPRESS_STAFF_USER: ${{ secrets.TEST_STAFF_USER }}
+      CYPRESS_STAFF_PASS: ${{ secrets.TEST_STAFF_PASS }}
+      CYPRESS_MAIL_URL: ${{ secrets.TEST_MAIL_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - run: npm ci
+
+      # Says so out loud. A silently skipped suite reads as a pass, which is the
+      # failure mode this whole job exists to prevent.
+      - name: Report that the test site is not configured
+        if: ${{ env.CYPRESS_WP_URL == '' }}
+        run: |
+          echo "::warning title=Endpoint suite skipped::TEST_WP_URL is not set, so the endpoint tests did not run."
+
+      - name: Endpoint tests
+        if: ${{ env.CYPRESS_WP_URL != '' }}
+        run: npm run test:api
+
+      - name: Upload endpoint results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-results
+          path: |
+            app/test-results/
+            app/cypress/screenshots/
+          if-no-files-found: ignore

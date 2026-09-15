@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:e2e": "vite build -c vite.config.e2e.ts",
+    "preview:e2e": "vite preview -c vite.config.e2e.ts --port 5175",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

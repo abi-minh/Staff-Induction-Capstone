@@ -45,8 +45,16 @@ describe('L7 · restore a previous version', () => {
     if (moduleId) cy.api('DELETE', `induction/v1/modules/${moduleId}`);
   });
 
+  // The module page is a section index, not the section body: each section is a
+  // card with an Attempt Now button that opens it in place (no route change).
+  // A section already worked through offers Review instead, so match either.
+  function openFirstSection() {
+    cy.contains('button', /Attempt Now|Review/).click();
+  }
+
   it('shows the staff member the replacement first', () => {
     cy.visitAs('staff', `/#/portal/training/${moduleId}`);
+    openFirstSection();
     cy.contains(REPLACEMENT).should('be.visible');
     cy.contains(ORIGINAL).should('not.exist');
   });
@@ -55,8 +63,10 @@ describe('L7 · restore a previous version', () => {
     cy.visitAs('admin', `/#/modules/${moduleId}`);
     cy.contains('button', 'History').click();
 
-    cy.get('[role="dialog"]').within(() => {
-      cy.contains('Content history').should('be.visible');
+    // Scoped by its title, not by [role="dialog"] alone: ModuleHistoryDialog
+    // renders two Dialogs — the history list and its restore confirmation — so
+    // a bare role selector matches more than one element and within() refuses.
+    cy.contains('[role="dialog"]', 'Content history').within(() => {
       cy.contains('v1').should('exist');
       cy.contains('v2').should('exist');
       cy.contains('current').should('exist');
@@ -67,12 +77,19 @@ describe('L7 · restore a previous version', () => {
     cy.visitAs('admin', `/#/modules/${moduleId}`);
     cy.contains('button', 'History').click();
 
-    cy.get('[role="dialog"]').within(() => {
+    cy.contains('[role="dialog"]', 'Content history').within(() => {
       cy.contains('tr', 'v1').within(() => cy.contains('button', 'Restore').click());
     });
-    // The confirm dialog spells out what is being replaced.
-    cy.contains('Restore v1?').should('be.visible');
-    cy.contains('button', 'Restore').click();
+
+    // The confirm dialog spells out what is being replaced. Scoped too: by now
+    // both dialogs are open and each carries a Restore button.
+    cy.intercept('POST', '**/versions/*/restore').as('restore');
+    cy.contains('[role="dialog"]', 'Restore v1?')
+      .should('be.visible')
+      .within(() => cy.contains('button', 'Restore').click());
+
+    // Wait for the write, or the reads below race it.
+    cy.wait('@restore').its('response.statusCode').should('eq', 200);
 
     cy.api('GET', `induction/v1/modules/${moduleId}`).then(({ body }) => {
       expect(body.meta.module_blocks).to.contain(ORIGINAL);
@@ -86,6 +103,7 @@ describe('L7 · restore a previous version', () => {
 
   it('serves the restored content to the staff member', () => {
     cy.visitAs('staff', `/#/portal/training/${moduleId}`);
+    openFirstSection();
     cy.contains(ORIGINAL).should('be.visible');
     cy.contains(REPLACEMENT).should('not.exist');
   });

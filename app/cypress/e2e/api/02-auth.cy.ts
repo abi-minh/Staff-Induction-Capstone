@@ -3,12 +3,16 @@ import { testEnv, wp } from '../../support/testEnv';
 
 describe('Authentication and role boundaries', () => {
   it('issues a token for valid credentials', () => {
-    const { user, pass } = testEnv().admin;
-    cy.request('POST', wp('jwt-auth/v1/token'), { username: user, password: pass })
-      .then(({ status, body }) => {
-        expect(status).to.eq(200);
-        expect(body.token).to.be.a('string').and.have.length.greaterThan(20);
-      });
+    const { user } = testEnv().admin;
+    // The password comes off the secret channel, not testEnv() — see the note
+    // in support/testEnv.ts about the Cypress 16 expose/env split.
+    cy.env<Record<string, string>>(['adminPass']).then(({ adminPass }) => {
+      cy.request('POST', wp('jwt-auth/v1/token'), { username: user, password: adminPass })
+        .then(({ status, body }) => {
+          expect(status).to.eq(200);
+          expect(body.token).to.be.a('string').and.have.length.greaterThan(20);
+        });
+    });
   });
 
   it('rejects a wrong password without leaking whether the user exists', () => {

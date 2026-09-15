@@ -66,11 +66,18 @@ describe('Staff account creation', () => {
       });
   });
 
+  // 409, not 400: the plugin uses Conflict for every "already exists" case
+  // (username, email, staff role, resource category), and that is the correct
+  // status for a well-formed request that collides with existing state. The
+  // spec asserted 400 on an assumption; the server was right.
   it('rejects a duplicate username', () => {
     const input = newStaff('e');
     cy.api('POST', 'induction/v1/staff', input).then(({ body }) => {
       created.push(body.id);
-      cy.api('POST', 'induction/v1/staff', input).its('status').should('eq', 400);
+      cy.api('POST', 'induction/v1/staff', input).then(({ status, body: err }) => {
+        expect(status).to.eq(409);
+        expect(err.code).to.eq('username_exists');
+      });
     });
   });
 

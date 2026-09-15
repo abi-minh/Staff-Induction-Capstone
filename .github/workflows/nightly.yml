@@ -1,0 +1,63 @@
+name: Nightly lifecycle suite
+
+# The browser journeys: slow, and they mutate the test site, so they run on a
+# schedule and on demand rather than per push.
+on:
+  schedule:
+    - cron: '0 16 * * *'   # 02:00 AEST
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: app
+
+jobs:
+  lifecycle:
+    name: Cypress lifecycle journeys
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - run: npm ci
+
+      # Not `npm run build`: that one targets the WordPress plugin directory and
+      # bakes in the plugin's base path, so `vite preview` serves it under
+      # /wp-content/... and the site root 404s. build:e2e writes a root-based
+      # bundle to its own directory instead. The REST target is injected at
+      # visit time by cy.visitAs(), so there is nothing environment-specific in
+      # this build.
+      - name: Build the standalone e2e bundle
+        run: npm run build:e2e
+
+      - name: Serve it
+        run: npm run preview:e2e &
+
+      - name: Wait for the app
+        run: npx wait-on http://localhost:5175 --timeout 60000
+
+      - name: Lifecycle journeys
+        run: npm run test:e2e
+        env:
+          CYPRESS_APP_URL: http://localhost:5175
+          CYPRESS_WP_URL: ${{ secrets.TEST_WP_URL }}
+          CYPRESS_ADMIN_USER: ${{ secrets.TEST_ADMIN_USER }}
+          CYPRESS_ADMIN_PASS: ${{ secrets.TEST_ADMIN_PASS }}
+          CYPRESS_STAFF_USER: ${{ secrets.TEST_STAFF_USER }}
+          CYPRESS_STAFF_PASS: ${{ secrets.TEST_STAFF_PASS }}
+          CYPRESS_MAIL_URL: ${{ secrets.TEST_MAIL_URL }}
+
+      - name: Upload failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-results
+          path: |
+            app/test-results/
+            app/cypress/screenshots/
+            app/cypress/videos/
+          if-no-files-found: ignore

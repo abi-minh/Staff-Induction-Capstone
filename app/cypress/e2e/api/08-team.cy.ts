@@ -68,8 +68,10 @@ describe('Meet Our Team', () => {
     let staffId: number;
 
     before(() => {
-      cy.api('GET', 'induction/v1/staff').then(({ body }) => {
-        staffId = body[0].id;
+      // These cases overwrite the contact details on whichever account they
+      // resolve, so it has to be the fixture one.
+      cy.fixtureStaff().then((staff) => {
+        staffId = staff.id;
       });
     });
 
