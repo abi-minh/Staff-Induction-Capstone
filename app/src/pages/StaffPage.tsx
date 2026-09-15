@@ -166,6 +166,8 @@ export default function StaffPage() {
   const { data: modules = [], isLoading: modulesLoading } = useModules();
   const { data: reports } = useReports();
   const { data: roles = [], isLoading: rolesLoading } = useRoles();
+  // Creating a staff account can only ever grant a role the app hands out.
+  const assignableRoles = roles.filter((r) => r.assignable);
   const bulkAssign = useBulkAssign();
   const unassign = useUnassign();
   const createStaff = useCreateStaff();
@@ -280,8 +282,17 @@ export default function StaffPage() {
   }, [filteredStaff, reports, statusFilter, sortBy, sortDir]);
 
   const selectionMode = removeMode || remindMode;
+
+  // Administrators now appear in this list, but the server refuses to delete
+  // one — so they are selectable for a reminder and not for removal, rather
+  // than being silently skipped after the confirm dialog.
+  function isSelectable(s: StaffMember): boolean {
+    if (s.id === currentUserId) return false;
+    return !removeMode || !s.roles.includes("administrator");
+  }
+
   const selectableIds = rows
-    .filter((r) => r.staff.id !== currentUserId)
+    .filter((r) => isSelectable(r.staff))
     .map((r) => r.staff.id);
 
   function handleSort(key: SortKey) {
@@ -731,7 +742,7 @@ export default function StaffPage() {
                       <Checkbox
                         checked={selectedIds.includes(s.id)}
                         onChange={() => toggleSelect(s.id)}
-                        disabled={s.id === currentUserId}
+                        disabled={!isSelectable(s)}
                       />
                     </TableCell>
                   )}
@@ -837,7 +848,7 @@ export default function StaffPage() {
                     <Checkbox
                       checked={selectedIds.includes(s.id)}
                       onChange={() => toggleSelect(s.id)}
-                      disabled={s.id === currentUserId}
+                      disabled={!isSelectable(s)}
                       sx={{ p: 0.5 }}
                     />
                   )}
@@ -1065,7 +1076,7 @@ export default function StaffPage() {
                 disabled={rolesLoading}
                 helperText={rolesLoading ? "Loading roles…" : undefined}
               >
-                {roles.map((r) => (
+                {assignableRoles.map((r) => (
                   <MenuItem key={r.value} value={r.value}>
                     {r.label}
                   </MenuItem>

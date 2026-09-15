@@ -257,7 +257,9 @@ export default function StaffDetailPage() {
                 disabled={updateRole.isLoading}
                 sx={{ mt: 0.5, minWidth: 200, display: 'block' }}
               >
-                {roles.map((r) => (
+                {/* Only roles the app hands out — a staff member is never
+                    promoted to a WordPress administrator from here. */}
+                {roles.filter((r) => r.assignable).map((r) => (
                   <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>
                 ))}
               </TextField>

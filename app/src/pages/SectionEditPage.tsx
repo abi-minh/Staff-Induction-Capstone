@@ -8,6 +8,7 @@ import { useModule, useUpdateModule } from '../hooks/useModules';
 import { fetchModule } from '../api/modules';
 import SectionEditor from './SectionEditor';
 import { parseSections } from '../blocks/utils';
+import { stickyActionBarSx } from '../theme';
 import type { Module, Section } from '../types';
 
 const roundedButtonSx = { borderRadius: '10px' };
@@ -114,9 +115,11 @@ export default function SectionEditPage() {
 
   return (
     <Box>
-      {/* Top bar */}
+      {/* Top bar — sticky on desktop so Save Changes stays reachable
+          however far down the section the admin has scrolled. */}
       <Box
         sx={{
+          ...stickyActionBarSx,
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',

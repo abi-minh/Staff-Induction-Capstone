@@ -36,7 +36,10 @@ import {
 } from "../hooks/useStaff";
 import { useModules } from "../hooks/useModules";
 
-const BUILT_IN_ROLES = ["staff", "induction_admin"];
+// Roles this page lists but must never offer to delete. "administrator" is
+// WordPress's own and is only here because the induction app treats admins as
+// induction admins — see induction_member_roles() in the plugin.
+const BUILT_IN_ROLES = ["staff", "induction_admin", "administrator"];
 
 export default function StaffRolesPage() {
   const navigate = useNavigate();

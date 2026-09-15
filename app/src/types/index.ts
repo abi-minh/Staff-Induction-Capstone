@@ -117,6 +117,10 @@ export interface StaffMember {
 export interface Role {
   value: string;
   label: string;
+  // False for `administrator`: the app recognises it as an induction role —
+  // admins appear in the staff list and can be targeted by a module — but
+  // never offers it as a role to hand out. See induction_member_roles().
+  assignable: boolean;
 }
 
 // A published "Meet Our Team" entry, as seen by any staff member on the portal.
@@ -319,6 +323,20 @@ export interface MediaItem {
   size: number;
   uploadedAt: string;
   usage: MediaUsage[];
+  // Category slug, or '' for a file that has not been filed anywhere — which
+  // is a real state, not an error: a file outlives the category it was in.
+  category: string;
+  categoryLabel: string;
+}
+
+// One entry in the managed category list every uploaded file is filed under.
+export interface ResourceCategory {
+  value: string;
+  label: string;
+  /** Files currently in this category. */
+  count: number;
+  /** The built-in bucket, which cannot be deleted. */
+  protected: boolean;
 }
 
 // ─── Blocks (Page Builder) ───────────────────────────────────────────────────

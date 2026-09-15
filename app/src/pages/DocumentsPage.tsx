@@ -9,6 +9,9 @@ import SearchIcon from '@mui/icons-material/Search';
 import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined';
 import FileDownloadOutlinedIcon from '@mui/icons-material/FileDownloadOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
+import AddIcon from '@mui/icons-material/Add';
+import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
+import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
@@ -17,7 +20,19 @@ import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutl
 import { useMedia, useDeleteMedia } from '../hooks/useMedia';
 import { useCreateDocument, useUploadMedia } from '../hooks/useDocuments';
 import { useRoles } from '../hooks/useStaff';
+import {
+  useResourceCategories,
+  useCreateResourceCategory,
+  useRenameResourceCategory,
+  useDeleteResourceCategory,
+  useSetMediaCategory,
+} from '../hooks/useResourceCategories';
 import type { MediaItem, MediaType, MediaUsage } from '../types';
+
+// Filter sentinel for files that are in no category at all. Not a category —
+// there is deliberately no way to *file* something here, only to find what
+// has fallen out of a category that was renamed away or deleted.
+const UNCATEGORISED = '__none';
 
 const TYPE_LABEL: Record<MediaType, string> = {
   image: 'Image', video: 'Video', pdf: 'PDF', other: 'File',
@@ -66,6 +81,13 @@ function FileThumb({ item }: { item: MediaItem }) {
       <Icon sx={{ color }} />
     </Box>
   );
+}
+
+function CategoryCell({ item }: { item: MediaItem }) {
+  if (!item.category) {
+    return <Chip label="Uncategorised" size="small" color="warning" variant="outlined" sx={{ borderRadius: 999 }} />;
+  }
+  return <Chip label={item.categoryLabel} size="small" variant="outlined" sx={{ borderRadius: 999 }} />;
 }
 
 function UsedBy({ usage }: { usage: MediaUsage[] }) {
@@ -127,10 +149,32 @@ export default function DocumentsPage() {
   const createDocument = useCreateDocument();
   const uploadMedia = useUploadMedia();
 
+  const { data: categories = [] } = useResourceCategories();
+  const createCategory = useCreateResourceCategory();
+  const renameCategory = useRenameResourceCategory();
+  const deleteCategory = useDeleteResourceCategory();
+  const setMediaCategory = useSetMediaCategory();
+
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<MediaType | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MediaItem | null>(null);
   const [deleteError, setDeleteError] = useState('');
+
+  // Re-filing one file.
+  const [moveTarget, setMoveTarget] = useState<MediaItem | null>(null);
+  const [moveTo, setMoveTo] = useState('');
+  const [moveError, setMoveError] = useState('');
+
+  // Managing the list itself.
+  const [manageOpen, setManageOpen] = useState(false);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [newCategory, setNewCategory] = useState('');
+  const [manageError, setManageError] = useState('');
+
+  const defaultCategory = categories.find((c) => c.protected)?.value
+    ?? categories[0]?.value
+    ?? '';
 
   const [uploadOpen, setUploadOpen] = useState(false);
   const [upTitle, setUpTitle] = useState('');
@@ -143,7 +187,7 @@ export default function DocumentsPage() {
 
   function openUpload() {
     setUpTitle('');
-    setUpCategory('');
+    setUpCategory(defaultCategory);
     setUpVisible(['all']);
     setUpFileName('');
     setUpError('');
@@ -166,7 +210,7 @@ export default function DocumentsPage() {
       await createDocument.mutateAsync({
         title: upTitle.trim() || upFileName || 'Untitled document',
         status: 'publish',
-        document_category: upCategory.trim(),
+        document_category: upCategory,
         document_file_id: uploaded.id,
         document_role_targets: upVisible,
       });
@@ -185,18 +229,103 @@ export default function DocumentsPage() {
     pdf: media.filter((m) => m.type === 'pdf').length,
   }), [media]);
 
+  // Counted off the media list rather than the category endpoint, so the
+  // number on a chip always matches the number of rows clicking it produces.
+  const categoryCounts = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const m of media) {
+      const key = m.category || UNCATEGORISED;
+      out[key] = (out[key] ?? 0) + 1;
+    }
+    return out;
+  }, [media]);
+
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return media.filter((m) => {
       if (typeFilter && m.type !== typeFilter) return false;
+      if (categoryFilter === UNCATEGORISED && m.category) return false;
+      if (categoryFilter !== null && categoryFilter !== UNCATEGORISED && m.category !== categoryFilter) {
+        return false;
+      }
       if (!needle) return true;
       return m.filename.toLowerCase().includes(needle)
+        || m.categoryLabel.toLowerCase().includes(needle)
         || m.usage.some((u) => u.title.toLowerCase().includes(needle));
     });
-  }, [media, search, typeFilter]);
+  }, [media, search, typeFilter, categoryFilter]);
 
   function toggleType(t: MediaType) {
     setTypeFilter((cur) => (cur === t ? null : t));
+  }
+
+  function openMove(m: MediaItem) {
+    setMoveTarget(m);
+    setMoveTo(m.category || defaultCategory);
+    setMoveError('');
+  }
+
+  async function handleMove() {
+    if (!moveTarget) return;
+    setMoveError('');
+    try {
+      await setMediaCategory.mutateAsync({ id: moveTarget.id, category: moveTo });
+      setMoveTarget(null);
+    } catch (err) {
+      setMoveError(err instanceof Error ? err.message : 'Could not move the file.');
+    }
+  }
+
+  function openManage() {
+    setDrafts(Object.fromEntries(categories.map((c) => [c.value, c.label])));
+    setNewCategory('');
+    setManageError('');
+    setManageOpen(true);
+  }
+
+  // Committed on blur rather than behind a save button: the slug never
+  // changes, so a rename is a label edit and nothing downstream has to move.
+  async function commitRename(value: string, original: string) {
+    const next = (drafts[value] ?? '').trim();
+    if (!next || next === original) {
+      setDrafts((d) => ({ ...d, [value]: original }));
+      return;
+    }
+    setManageError('');
+    try {
+      await renameCategory.mutateAsync({ value, name: next });
+    } catch (err) {
+      setDrafts((d) => ({ ...d, [value]: original }));
+      setManageError(err instanceof Error ? err.message : 'Could not rename the category.');
+    }
+  }
+
+  async function handleCreateCategory() {
+    const name = newCategory.trim();
+    if (!name) return;
+    setManageError('');
+    try {
+      const created = await createCategory.mutateAsync(name);
+      setDrafts((d) => ({ ...d, [created.value]: created.label }));
+      setNewCategory('');
+    } catch (err) {
+      setManageError(err instanceof Error ? err.message : 'Could not create the category.');
+    }
+  }
+
+  async function handleDeleteCategory(value: string) {
+    setManageError('');
+    try {
+      await deleteCategory.mutateAsync(value);
+      setDrafts((d) => {
+        const next = { ...d };
+        delete next[value];
+        return next;
+      });
+      if (categoryFilter === value) setCategoryFilter(null);
+    } catch (err) {
+      setManageError(err instanceof Error ? err.message : 'Could not delete the category.');
+    }
   }
 
   async function handleDelete() {
@@ -220,14 +349,24 @@ export default function DocumentsPage() {
           <Typography variant="h1" sx={{ fontSize: '2rem' }}>Documents</Typography>
           <Typography color="text.secondary">View and manage all uploaded files</Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<UploadFileOutlinedIcon />}
-          onClick={openUpload}
-          sx={{ borderRadius: 999 }}
-        >
-          Upload Document
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+          <Button
+            variant="outlined"
+            startIcon={<FolderOutlinedIcon />}
+            onClick={openManage}
+            sx={{ borderRadius: 999 }}
+          >
+            Manage Categories
+          </Button>
+          <Button
+            variant="contained"
+            startIcon={<UploadFileOutlinedIcon />}
+            onClick={openUpload}
+            sx={{ borderRadius: 999 }}
+          >
+            Upload Document
+          </Button>
+        </Box>
       </Box>
 
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' }, gap: 2.5, mb: 3 }}>
@@ -255,6 +394,37 @@ export default function DocumentsPage() {
               },
             }}
           />
+
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 2 }}>
+            <Chip
+              label={`All (${media.length})`}
+              onClick={() => setCategoryFilter(null)}
+              color={categoryFilter === null ? 'primary' : 'default'}
+              variant={categoryFilter === null ? 'filled' : 'outlined'}
+              sx={{ borderRadius: 999 }}
+            />
+            {categories.map((c) => (
+              <Chip
+                key={c.value}
+                label={`${c.label} (${categoryCounts[c.value] ?? 0})`}
+                onClick={() => setCategoryFilter(c.value)}
+                color={categoryFilter === c.value ? 'primary' : 'default'}
+                variant={categoryFilter === c.value ? 'filled' : 'outlined'}
+                sx={{ borderRadius: 999 }}
+              />
+            ))}
+            {/* Only worth offering when something has actually fallen out of
+                a category — otherwise it is a chip that always finds nothing. */}
+            {!!categoryCounts[UNCATEGORISED] && (
+              <Chip
+                label={`Uncategorised (${categoryCounts[UNCATEGORISED]})`}
+                onClick={() => setCategoryFilter(UNCATEGORISED)}
+                color={categoryFilter === UNCATEGORISED ? 'warning' : 'default'}
+                variant={categoryFilter === UNCATEGORISED ? 'filled' : 'outlined'}
+                sx={{ borderRadius: 999 }}
+              />
+            )}
+          </Box>
         </Box>
 
         <Box sx={{ overflowX: 'auto', display: { xs: 'none', md: 'block' } }}>
@@ -262,6 +432,7 @@ export default function DocumentsPage() {
             <TableHead>
               <TableRow>
                 <TableCell sx={headCellSx}>File Name</TableCell>
+                <TableCell sx={headCellSx}>Category</TableCell>
                 <TableCell sx={headCellSx}>Used by</TableCell>
                 <TableCell sx={headCellSx}>Uploaded</TableCell>
                 <TableCell sx={headCellSx}>Size</TableCell>
@@ -278,10 +449,16 @@ export default function DocumentsPage() {
                       <Chip label={TYPE_LABEL[m.type]} color={TYPE_CHIP[m.type]} size="small" variant="outlined" sx={{ borderRadius: 999, flexShrink: 0 }} />
                     </Box>
                   </TableCell>
+                  <TableCell><CategoryCell item={m} /></TableCell>
                   <TableCell><UsedBy usage={m.usage} /></TableCell>
                   <TableCell><Typography variant="body2">{formatDate(m.uploadedAt)}</Typography></TableCell>
                   <TableCell><Typography variant="body2">{formatSize(m.size)}</Typography></TableCell>
                   <TableCell align="right">
+                    <Tooltip title="Change category">
+                      <IconButton size="small" onClick={() => openMove(m)} sx={{ color: 'text.secondary' }}>
+                        <DriveFileMoveOutlinedIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
                     <Tooltip title="Download">
                       <IconButton component="a" href={m.url} download target="_blank" rel="noreferrer" size="small" sx={{ color: 'primary.main' }}>
                         <FileDownloadOutlinedIcon fontSize="small" />
@@ -298,7 +475,7 @@ export default function DocumentsPage() {
 
               {filtered.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} sx={{ py: 6 }}>
+                  <TableCell colSpan={6} sx={{ py: 6 }}>
                     <Typography color="text.secondary">No files match your search.</Typography>
                   </TableCell>
                 </TableRow>
@@ -319,6 +496,10 @@ export default function DocumentsPage() {
               </Box>
               <Box sx={{ mt: 1.5, display: 'grid', gap: 0.75 }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                  <Typography variant="body2" color="text.secondary">Category</Typography>
+                  <CategoryCell item={m} />
+                </Box>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
                   <Typography variant="body2" color="text.secondary">Used by</Typography>
                   <Box sx={{ textAlign: 'right' }}><UsedBy usage={m.usage} /></Box>
                 </Box>
@@ -334,6 +515,9 @@ export default function DocumentsPage() {
               <Box sx={{ mt: 1.5, display: 'flex', gap: 1 }}>
                 <Button component="a" href={m.url} download target="_blank" rel="noreferrer" size="small" variant="outlined" startIcon={<FileDownloadOutlinedIcon />} sx={{ borderRadius: 999 }}>
                   Download
+                </Button>
+                <Button size="small" variant="outlined" startIcon={<DriveFileMoveOutlinedIcon />} onClick={() => openMove(m)} sx={{ borderRadius: 999 }}>
+                  Move
                 </Button>
                 <Button size="small" variant="outlined" color="error" startIcon={<DeleteOutlineIcon />} onClick={() => { setDeleteError(''); setDeleteTarget(m); }} sx={{ borderRadius: 999 }}>
                   Delete
@@ -389,6 +573,101 @@ export default function DocumentsPage() {
         </DialogActions>
       </Dialog>
 
+      <Dialog open={moveTarget !== null} onClose={() => setMoveTarget(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Change category</DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          {moveError && <Alert severity="error" sx={{ mb: 2 }}>{moveError}</Alert>}
+          <Typography color="text.secondary" sx={{ mb: 2, wordBreak: 'break-all' }}>
+            {moveTarget?.filename}
+          </Typography>
+          <TextField
+            select
+            label="Category"
+            value={moveTo}
+            onChange={(e) => setMoveTo(e.target.value)}
+            fullWidth
+          >
+            {categories.map((c) => (
+              <MenuItem key={c.value} value={c.value}>{c.label}</MenuItem>
+            ))}
+            <MenuItem value="">Uncategorised</MenuItem>
+          </TextField>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={() => setMoveTarget(null)} disabled={setMediaCategory.isLoading}>Cancel</Button>
+          <Button variant="contained" onClick={handleMove} disabled={setMediaCategory.isLoading}>
+            {setMediaCategory.isLoading ? 'Moving…' : 'Move'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={manageOpen} onClose={() => setManageOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Resource categories</DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          {manageError && <Alert severity="error" sx={{ mb: 2 }}>{manageError}</Alert>}
+          <Typography color="text.secondary" sx={{ mb: 2 }}>
+            Renaming a category re-labels it everywhere; the files in it stay put. A
+            category can only be deleted once it is empty.
+          </Typography>
+
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+            {categories.map((c) => (
+              <Box key={c.value} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <TextField
+                  size="small"
+                  value={drafts[c.value] ?? c.label}
+                  onChange={(e) => setDrafts((d) => ({ ...d, [c.value]: e.target.value }))}
+                  onBlur={() => commitRename(c.value, c.label)}
+                  fullWidth
+                />
+                <Chip label={`${c.count} file${c.count === 1 ? '' : 's'}`} size="small" variant="outlined" sx={{ borderRadius: 999, flexShrink: 0 }} />
+                <Tooltip
+                  title={
+                    c.protected ? 'Built-in category'
+                      : c.count > 0 ? 'Move its files out first'
+                        : 'Delete category'
+                  }
+                >
+                  <span>
+                    <IconButton
+                      size="small"
+                      color="error"
+                      disabled={c.protected || c.count > 0 || deleteCategory.isLoading}
+                      onClick={() => handleDeleteCategory(c.value)}
+                    >
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Box>
+            ))}
+          </Box>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 3 }}>
+            <TextField
+              size="small"
+              label="New category"
+              value={newCategory}
+              onChange={(e) => setNewCategory(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleCreateCategory(); } }}
+              fullWidth
+            />
+            <Button
+              variant="outlined"
+              startIcon={<AddIcon />}
+              onClick={handleCreateCategory}
+              disabled={!newCategory.trim() || createCategory.isLoading}
+              sx={{ borderRadius: 999, flexShrink: 0 }}
+            >
+              Add
+            </Button>
+          </Box>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={() => setManageOpen(false)}>Done</Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog open={uploadOpen} onClose={() => setUploadOpen(false)} maxWidth="xs" fullWidth>
         <DialogTitle>Upload Document</DialogTitle>
         <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, pt: 1 }}>
@@ -419,12 +698,17 @@ export default function DocumentsPage() {
           </Box>
           <TextField label="Title" value={upTitle} onChange={(e) => setUpTitle(e.target.value)} fullWidth />
           <TextField
+            select
             label="Category"
             value={upCategory}
             onChange={(e) => setUpCategory(e.target.value)}
-            placeholder="e.g. Safety, Policies"
+            helperText="Manage the list from Manage Categories"
             fullWidth
-          />
+          >
+            {categories.map((c) => (
+              <MenuItem key={c.value} value={c.value}>{c.label}</MenuItem>
+            ))}
+          </TextField>
           <TextField
             select
             label="Visible to"

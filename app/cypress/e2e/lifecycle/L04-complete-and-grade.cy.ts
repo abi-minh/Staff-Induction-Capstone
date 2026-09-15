@@ -87,14 +87,16 @@ describe('L4 · assign, complete, grade, report', () => {
     cy.loginAs('staff').then((token) => {
       const headers = { Authorization: `Bearer ${token}` };
 
+      // user_id is a required arg on both routes — omitting it is a 400 from
+      // WordPress before either callback runs, not a 200 with an inferred user.
       cy.request({
         method: 'POST', url: wp('induction/v1/quiz/save'), headers,
-        body: { module_id: moduleId, block_id: 'q1', answer: true },
+        body: { user_id: staffId, module_id: moduleId, block_id: 'q1', answer: true },
       }).its('status').should('eq', 200);
 
       cy.request({
         method: 'POST', url: wp('induction/v1/quiz/submit-for-review'), headers,
-        body: { module_id: moduleId },
+        body: { user_id: staffId, module_id: moduleId },
       }).its('status').should('eq', 200);
     });
 

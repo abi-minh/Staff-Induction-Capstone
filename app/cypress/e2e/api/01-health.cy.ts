@@ -30,6 +30,8 @@ const EXPECTED_ROUTES = [
   '/induction/v1/transfer/import',
   '/induction/v1/staff/reminders',
   '/induction/v1/staff/reminders/context',
+  '/induction/v1/media',
+  '/induction/v1/resource-categories',
 ];
 
 describe('Endpoint health', () => {

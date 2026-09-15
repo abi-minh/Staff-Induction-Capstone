@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.2.5
+ * Version:     1.3.0
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.2.5' );
+define( 'INDUCTION_VERSION', '1.3.0' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -42,6 +42,20 @@ define( 'INDUCTION_REMINDER_SUBJECT_MAX_LENGTH', 200 );
 // enough that a single request can't sit there firing wp_mail() indefinitely
 // and time out halfway through with no record of who was reached.
 define( 'INDUCTION_REMINDER_BULK_MAX', 200 );
+
+// Ceiling on how many graders one quiz submission mails. A site with more
+// induction admins than this has a bigger problem than an unnotified grader,
+// and a student clicking Submit must never sit through an unbounded mail loop.
+define( 'INDUCTION_QUIZ_REVIEW_NOTIFY_MAX', 25 );
+
+// Resource categories. One bucket ships with the plugin and cannot be deleted,
+// so the library is never in a state where an upload has nowhere to go. The
+// ceiling exists because these render as a filter strip, not a search box —
+// past a few dozen, filtering by category stops being faster than searching.
+define( 'INDUCTION_RESOURCE_CATEGORY_DEFAULT',       'module-resources' );
+define( 'INDUCTION_RESOURCE_CATEGORY_DEFAULT_LABEL', 'Module Resources' );
+define( 'INDUCTION_RESOURCE_CATEGORY_LABEL_MAX_LENGTH', 60 );
+define( 'INDUCTION_RESOURCE_CATEGORY_MAX', 40 );
 
 // Staff profiles. The photo is uploaded through our own endpoint rather than
 // wp/v2/media because the staff role deliberately has no upload_files
@@ -77,6 +91,7 @@ define( 'INDUCTION_LOCATION_MARKER_COLORS', [ 'red', 'amber', 'blue', 'green' ] 
 add_action( 'init',            'induction_register_post_types' );
 add_action( 'init',            'induction_register_roles' );
 add_action( 'init',            'induction_migrate_legacy_modules', 20 );
+add_action( 'init',            'induction_migrate_resource_categories', 21 );
 add_action( 'init',            'induction_register_user_meta' );
 add_action( 'admin_init',      'induction_migrate_profile_photos' );
 add_action( 'rest_api_init',   'induction_migrate_profile_photos' );
@@ -86,6 +101,12 @@ add_action( 'wp_enqueue_scripts', 'induction_portal_dequeue_third_party', 100 );
 add_action( 'plugins_loaded',  'induction_create_tables' );
 add_filter( 'template_include', 'induction_portal_template' );
 add_shortcode( 'induction_portal', 'induction_portal_shortcode' );
+// A document's category is the writable surface; the category stamped on its
+// file is what the library filters on. Hooked on the meta write rather than on
+// save_post because the REST posts controller writes meta *after* save_post
+// fires, which would leave the mirror reading the previous value.
+add_action( 'added_post_meta',   'induction_mirror_document_category', 10, 3 );
+add_action( 'updated_post_meta', 'induction_mirror_document_category', 10, 3 );
 add_action( 'admin_init',      'induction_block_portal_users_from_admin' );
 add_filter( 'show_admin_bar',  'induction_hide_admin_bar_for_portal_users' );
 
@@ -126,7 +147,7 @@ function induction_register_post_types(): void {
         'capability_type' => 'post',
     ] );
 
-    register_post_meta( 'induction_document', 'document_category',     [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',  'auth_callback' => $induction_auth ] );
+    register_post_meta( 'induction_document', 'document_category',     [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',  'sanitize_callback' => 'sanitize_key', 'auth_callback' => $induction_auth ] );
     register_post_meta( 'induction_document', 'document_file_id',      [ 'type' => 'integer', 'single' => true, 'show_in_rest' => true, 'default' => 0,   'auth_callback' => $induction_auth ] );
     register_post_meta( 'induction_document', 'document_role_targets', [ 'type' => 'array',   'single' => true, 'show_in_rest' => [ 'schema' => [ 'type' => 'array', 'items' => [ 'type' => 'string' ] ] ], 'default' => [],   'auth_callback' => $induction_auth ] );
 
@@ -763,6 +784,43 @@ function induction_register_routes(): void {
         'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
     ] );
 
+    // POST /media/{id}/category — file the attachment under a category
+    register_rest_route( $ns, '/media/(?P<id>\d+)/category', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_update_media_category',
+        'permission_callback' => 'induction_is_admin_user',
+        'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
+    ] );
+
+    // Resource categories. Readable by any signed-in user, because the staff
+    // portal renders the same filter strip the admin library does; only an
+    // admin may change the list itself.
+    register_rest_route( $ns, '/resource-categories', [
+        [
+            'methods'             => 'GET',
+            'callback'            => 'induction_get_resource_categories',
+            'permission_callback' => 'is_user_logged_in',
+        ],
+        [
+            'methods'             => 'POST',
+            'callback'            => 'induction_create_resource_category',
+            'permission_callback' => 'induction_is_admin_user',
+        ],
+    ] );
+
+    register_rest_route( $ns, '/resource-categories/(?P<slug>[a-z0-9_-]+)', [
+        [
+            'methods'             => 'POST',
+            'callback'            => 'induction_rename_resource_category',
+            'permission_callback' => 'induction_is_admin_user',
+        ],
+        [
+            'methods'             => 'DELETE',
+            'callback'            => 'induction_delete_resource_category',
+            'permission_callback' => 'induction_is_admin_user',
+        ],
+    ] );
+
     // GET /staff/{id} — single staff user
     register_rest_route( $ns, '/staff/(?P<id>\d+)', [
         'methods'             => 'GET',
@@ -1096,7 +1154,7 @@ function induction_get_user_assignments( WP_REST_Request $request ): WP_REST_Res
 // role that no longer exists). Every assign/unassign call runs targets
 // through this so stale/invalid entries don't linger indefinitely.
 function induction_normalise_targets( array $targets ): array {
-    $valid_roles = array_keys( induction_assignable_roles() );
+    $valid_roles = array_keys( induction_member_roles() );
     return array_values( array_filter( $targets, function ( $t ) use ( $valid_roles ) {
         return is_string( $t ) && ( str_starts_with( $t, 'user:' ) || in_array( $t, $valid_roles, true ) );
     } ) );
@@ -1215,8 +1273,8 @@ function induction_assign_role( WP_REST_Request $request ): WP_REST_Response|WP_
     if ( ! $module_id || $role === '' ) {
         return new WP_REST_Response( [ 'message' => 'module_id and role are required' ], 400 );
     }
-    $assignable = induction_assignable_roles();
-    if ( ! isset( $assignable[ $role ] ) ) {
+    $targetable = induction_member_roles();
+    if ( ! isset( $targetable[ $role ] ) ) {
         return new WP_Error( 'invalid_role', 'Please choose a valid role.', [ 'status' => 400 ] );
     }
 
@@ -1301,7 +1359,7 @@ function induction_get_reports_summary(): WP_REST_Response {
     ] );
 
     // Staff members that can be assigned modules
-    $staff = get_users( [ 'role__in' => array_keys( induction_assignable_roles() ), 'number' => 500 ] );
+    $staff = get_users( [ 'role__in' => array_keys( induction_member_roles() ), 'number' => 500 ] );
 
     // All progress records in one query (avoids N+1).
     $all_progress = $wpdb->get_results(
@@ -1616,6 +1674,14 @@ function induction_quiz_submit_for_review( WP_REST_Request $request ): WP_REST_R
         ARRAY_A
     );
 
+    // A submission already sitting in the grading queue has already been
+    // mailed out. Re-submitting before anyone grades it — which the portal
+    // allows, since the student can still edit their answers — must not mail
+    // every grader a second time.
+    $already_pending = $existing
+        && null !== $existing['quiz_submitted_at']
+        && null === $existing['passed'];
+
     $data = [
         'quiz_submitted_at' => $now,
         'score'             => null,
@@ -1638,7 +1704,18 @@ function induction_quiz_submit_for_review( WP_REST_Request $request ): WP_REST_R
         $row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE id = %d", $wpdb->insert_id ), ARRAY_A );
     }
 
-    return new WP_REST_Response( induction_format_progress_row( $row ) );
+    // Mail is best-effort: the submission is recorded either way, and the
+    // response reports how many graders were reached so a misconfigured
+    // mailer shows up as a zero rather than as a lost submission.
+    $student  = get_user_by( 'id', $user_id );
+    $notified = ( ! $already_pending && $student )
+        ? induction_send_quiz_review_notification( $student, $module_id )
+        : 0;
+
+    $response                      = induction_format_progress_row( $row );
+    $response['reviewersNotified'] = $notified;
+
+    return new WP_REST_Response( $response );
 }
 
 // Lists module-level quiz submissions awaiting admin grading.
@@ -2058,10 +2135,37 @@ function induction_assignable_roles(): array {
     return array_intersect_key( $names, array_flip( $allowed ) );
 }
 
+// Everyone the induction system treats as one of its own people: the
+// assignable roles plus `administrator`. A WordPress admin is an induction
+// admin by default — they already hold manage_induction (see
+// induction_register_roles()), so they belong in the staff list, in the
+// reports aggregate, and in the pool a module can be targeted at.
+//
+// Deliberately a separate list from induction_assignable_roles():
+// `administrator` is a role this app recognises, never one it hands out.
+// Keeping the two apart is what stops an induction_admin — who is not a full
+// administrator — from minting one through Add Staff or Change Role.
+function induction_member_roles(): array {
+    $roles = induction_assignable_roles();
+    $names = wp_roles()->get_names();
+    if ( isset( $names['administrator'] ) ) {
+        $roles['administrator'] = $names['administrator'];
+    }
+    return $roles;
+}
+
 function induction_get_roles(): WP_REST_Response {
-    $out = [];
-    foreach ( induction_assignable_roles() as $slug => $label ) {
-        $out[] = [ 'value' => $slug, 'label' => $label ];
+    $assignable = induction_assignable_roles();
+    $out        = [];
+    foreach ( induction_member_roles() as $slug => $label ) {
+        $out[] = [
+            'value' => $slug,
+            'label' => $label,
+            // The pickers that *grant* a role (Add Staff, Change Role) filter
+            // on this; the ones that merely *target* a role (a module's
+            // Assigned Roles, a document's visibility) show every member role.
+            'assignable' => isset( $assignable[ $slug ] ),
+        ];
     }
     return rest_ensure_response( $out );
 }
@@ -2069,8 +2173,9 @@ function induction_get_roles(): WP_REST_Response {
 // Staff roles ("Fishing Instructor", "Office Admin") are plain custom
 // WordPress roles — the same mechanism as the built-in "staff"/
 // "induction_admin" roles, so they automatically show up everywhere
-// induction_assignable_roles() is already used (Add Staff, Change Role, the
-// Module Edit screen's Assigned Roles picker) with no further wiring. The
+// induction_assignable_roles() is already used (Add Staff, Change Role) and
+// everywhere induction_member_roles() builds on it (the Module Edit screen's
+// Assigned Roles picker, the staff list, reporting) with no further wiring. The
 // induction_custom_roles option is what lets induction_assignable_roles()
 // tell "a role this plugin created" apart from any other role that happens
 // to exist on the site.
@@ -2129,7 +2234,7 @@ function induction_delete_staff_role( WP_REST_Request $request ): WP_REST_Respon
 }
 
 function induction_get_staff_list(): WP_REST_Response {
-    $roles = array_keys( induction_assignable_roles() );
+    $roles = array_keys( induction_member_roles() );
     if ( empty( $roles ) ) {
         return rest_ensure_response( [] );
     }
@@ -2245,9 +2350,9 @@ function induction_delete_staff( WP_REST_Request $request ): WP_REST_Response|WP
         return new WP_Error( 'no_users', 'No staff members selected.', [ 'status' => 400 ] );
     }
 
-    $current    = get_current_user_id();
-    $assignable = array_keys( induction_assignable_roles() );
-    $removed    = [];
+    $current = get_current_user_id();
+    $members = array_keys( induction_member_roles() );
+    $removed = [];
 
     foreach ( $ids as $id ) {
         if ( $id === $current ) {
@@ -2256,7 +2361,7 @@ function induction_delete_staff( WP_REST_Request $request ): WP_REST_Response|WP
         $user = get_user_by( 'id', $id );
         if ( ! $user
             || in_array( 'administrator', (array) $user->roles, true )
-            || ! array_intersect( $user->roles, $assignable ) ) {
+            || ! array_intersect( $user->roles, $members ) ) {
             continue;
         }
         if ( wp_delete_user( $id, $current ) ) {
@@ -2466,15 +2571,18 @@ function induction_get_media(): WP_REST_Response {
         if ( ! $att || $att->post_type !== 'attachment' ) continue;
         $mime = get_post_mime_type( $att_id ) ?: '';
         $file = get_attached_file( $att_id );
+        $category = induction_media_category( $att_id );
         $out[] = [
-            'id'         => $att_id,
-            'filename'   => $file ? wp_basename( $file ) : ( get_the_title( $att_id ) ?: 'file' ),
-            'url'        => wp_get_attachment_url( $att_id ),
-            'mime'       => $mime,
-            'type'       => induction_media_type( $mime ),
-            'size'       => ( $file && file_exists( $file ) ) ? (int) filesize( $file ) : 0,
-            'uploadedAt' => get_the_date( 'c', $att_id ),
-            'usage'      => $usage[ $att_id ] ?? [],
+            'id'            => $att_id,
+            'filename'      => $file ? wp_basename( $file ) : ( get_the_title( $att_id ) ?: 'file' ),
+            'url'           => wp_get_attachment_url( $att_id ),
+            'mime'          => $mime,
+            'type'          => induction_media_type( $mime ),
+            'size'          => ( $file && file_exists( $file ) ) ? (int) filesize( $file ) : 0,
+            'uploadedAt'    => get_the_date( 'c', $att_id ),
+            'usage'         => $usage[ $att_id ] ?? [],
+            'category'      => $category,
+            'categoryLabel' => induction_resource_category_label( $category ),
         ];
     }
 
@@ -2496,6 +2604,319 @@ function induction_delete_media( WP_REST_Request $request ): WP_REST_Response|WP
         return new WP_Error( 'delete_failed', 'Could not delete the file.', [ 'status' => 500 ] );
     }
     return rest_ensure_response( [ 'deleted' => $id ] );
+}
+
+// ─── Resource categories ─────────────────────────────────────────────────────
+// Uploaded files are grouped into admin-defined categories. The category is
+// stored as a slug on the attachment itself (`_induction_media_category`), so
+// every file in the library can carry one — not just the ones that happen to
+// have an induction_document record in front of them. A document's own
+// document_category meta is kept in step with its file's, in both directions,
+// so the admin library and the staff portal can never disagree about where a
+// file lives.
+
+// The category list, slug => label. The default bucket is always present even
+// if the option has never been written, so nothing has to special-case a fresh
+// install or an option someone deleted by hand.
+function induction_resource_categories(): array {
+    $stored = get_option( 'induction_resource_categories', [] );
+
+    $out = [];
+    foreach ( (array) $stored as $slug => $label ) {
+        $slug = sanitize_key( (string) $slug );
+        if ( '' !== $slug ) {
+            $out[ $slug ] = (string) $label;
+        }
+    }
+
+    if ( ! isset( $out[ INDUCTION_RESOURCE_CATEGORY_DEFAULT ] ) ) {
+        $out = [ INDUCTION_RESOURCE_CATEGORY_DEFAULT => INDUCTION_RESOURCE_CATEGORY_DEFAULT_LABEL ] + $out;
+    }
+
+    return $out;
+}
+
+function induction_save_resource_categories( array $categories ): void {
+    update_option( 'induction_resource_categories', $categories );
+}
+
+// Falls back to a readable rendering of the slug rather than an empty string:
+// an import can land a file in a category whose label has not arrived yet, and
+// a blank chip is worse than an approximate one.
+function induction_resource_category_label( string $slug ): string {
+    if ( '' === $slug ) {
+        return '';
+    }
+    $categories = induction_resource_categories();
+    return $categories[ $slug ] ?? ucwords( str_replace( [ '-', '_' ], ' ', $slug ) );
+}
+
+function induction_media_category( int $attachment_id ): string {
+    return sanitize_key( (string) get_post_meta( $attachment_id, '_induction_media_category', true ) );
+}
+
+function induction_set_media_category( int $attachment_id, string $slug ): void {
+    if ( $attachment_id <= 0 || get_post_type( $attachment_id ) !== 'attachment' ) {
+        return;
+    }
+    $slug = sanitize_key( $slug );
+    if ( '' === $slug ) {
+        delete_post_meta( $attachment_id, '_induction_media_category' );
+    } else {
+        update_post_meta( $attachment_id, '_induction_media_category', $slug );
+    }
+}
+
+// How many files sit in each category. Drives the counts in the manage dialog
+// and the "still in use" guard on deletion, so both read the same number.
+function induction_resource_category_counts(): array {
+    $counts = array_fill_keys( array_keys( induction_resource_categories() ), 0 );
+
+    $files = get_posts( [
+        'post_type'      => 'attachment',
+        'post_status'    => 'inherit',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+        'meta_key'       => '_induction_media_category',
+    ] );
+
+    foreach ( $files as $id ) {
+        $slug = induction_media_category( (int) $id );
+        if ( '' !== $slug ) {
+            $counts[ $slug ] = ( $counts[ $slug ] ?? 0 ) + 1;
+        }
+    }
+
+    return $counts;
+}
+
+// Document meta changed → stamp its file. Either meta key can arrive first
+// (the REST controller writes them in payload order), so this re-reads the
+// pair rather than trusting the value it was handed.
+function induction_mirror_document_category( $meta_id, $object_id, $meta_key ): void {
+    if ( ! in_array( $meta_key, [ 'document_category', 'document_file_id' ], true ) ) {
+        return;
+    }
+    if ( get_post_type( $object_id ) !== 'induction_document' ) {
+        return;
+    }
+    $file = (int) get_post_meta( $object_id, 'document_file_id', true );
+    if ( $file ) {
+        induction_set_media_category( $file, (string) get_post_meta( $object_id, 'document_category', true ) );
+    }
+}
+
+// Documents pointing at one file. Used when the category is changed from the
+// library side, so the document record follows its file.
+function induction_documents_for_file( int $attachment_id ): array {
+    if ( $attachment_id <= 0 ) {
+        return [];
+    }
+    return array_map( 'intval', get_posts( [
+        'post_type'      => 'induction_document',
+        'post_status'    => 'any',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+        'meta_key'       => 'document_file_id',
+        'meta_value'     => $attachment_id,
+    ] ) );
+}
+
+// One-off: everything already in the library becomes "Module Resources".
+// Categories did not exist before this version — document_category was free
+// text nobody was ever offered a list for — so there is no vocabulary worth
+// preserving, and one honest starting bucket beats forty spellings of "misc".
+function induction_migrate_resource_categories(): void {
+    if ( get_option( 'induction_resource_categories_migrated' ) ) {
+        return;
+    }
+
+    induction_save_resource_categories( induction_resource_categories() );
+    $default = INDUCTION_RESOURCE_CATEGORY_DEFAULT;
+
+    // Documents first: each write mirrors onto the file behind it.
+    foreach ( get_posts( [
+        'post_type'      => 'induction_document',
+        'post_status'    => 'any',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+    ] ) as $doc_id ) {
+        update_post_meta( (int) $doc_id, 'document_category', $default );
+    }
+
+    // Then every file the library shows. Tagged attachments cover anything a
+    // previous /media call has already seen; the module sweep catches the
+    // rest, so a site that upgrades and opens its library finds it sorted
+    // rather than half sorted.
+    $file_ids = array_map( 'intval', get_posts( [
+        'post_type'      => 'attachment',
+        'post_status'    => 'inherit',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+        'meta_key'       => '_induction_media',
+    ] ) );
+
+    foreach ( get_posts( [
+        'post_type'      => 'induction_module',
+        'post_status'    => 'any',
+        'posts_per_page' => -1,
+    ] ) as $module ) {
+        $hero = (int) get_post_meta( $module->ID, 'module_hero_image', true );
+        if ( $hero ) {
+            $file_ids[] = $hero;
+        }
+        $blocks_json = (string) ( get_post_meta( $module->ID, 'module_blocks', true ) ?: '[]' );
+        $sections    = induction_normalize_sections( json_decode( $blocks_json, true ) );
+        $file_ids    = array_merge(
+            $file_ids,
+            induction_media_ids_in_sections( $sections ),
+            induction_media_ids_in_html( $module->post_content )
+        );
+    }
+
+    foreach ( array_unique( array_filter( $file_ids ) ) as $file_id ) {
+        induction_set_media_category( (int) $file_id, $default );
+    }
+
+    update_option( 'induction_resource_categories_migrated', 1 );
+}
+
+function induction_get_resource_categories(): WP_REST_Response {
+    $counts = induction_resource_category_counts();
+
+    $out = [];
+    foreach ( induction_resource_categories() as $slug => $label ) {
+        $out[] = [
+            'value'     => $slug,
+            'label'     => $label,
+            'count'     => (int) ( $counts[ $slug ] ?? 0 ),
+            // The default bucket is where an upload lands when the admin picks
+            // nothing, so the UI protects it the way the server already does.
+            'protected' => $slug === INDUCTION_RESOURCE_CATEGORY_DEFAULT,
+        ];
+    }
+
+    return rest_ensure_response( $out );
+}
+
+function induction_create_resource_category( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $name = trim( sanitize_text_field( (string) $request->get_param( 'name' ) ) );
+    if ( '' === $name ) {
+        return new WP_Error( 'invalid_name', 'Please enter a category name.', [ 'status' => 400 ] );
+    }
+    $name = mb_substr( $name, 0, INDUCTION_RESOURCE_CATEGORY_LABEL_MAX_LENGTH );
+
+    // sanitize_title, not sanitize_key: a two-word name should slug as
+    // "site-safety" rather than collapse into "sitesafety".
+    $slug = sanitize_key( sanitize_title( $name ) );
+    if ( '' === $slug ) {
+        return new WP_Error( 'invalid_name', 'Please use letters or numbers in the category name.', [ 'status' => 400 ] );
+    }
+
+    $categories = induction_resource_categories();
+    if ( isset( $categories[ $slug ] ) ) {
+        return new WP_Error( 'category_exists', 'A category with that name already exists.', [ 'status' => 409 ] );
+    }
+    if ( count( $categories ) >= INDUCTION_RESOURCE_CATEGORY_MAX ) {
+        return new WP_Error(
+            'too_many_categories',
+            sprintf( 'You can have at most %d categories.', INDUCTION_RESOURCE_CATEGORY_MAX ),
+            [ 'status' => 400 ]
+        );
+    }
+
+    $categories[ $slug ] = $name;
+    induction_save_resource_categories( $categories );
+
+    return rest_ensure_response( [ 'value' => $slug, 'label' => $name, 'count' => 0, 'protected' => false ] );
+}
+
+// Renaming changes the label only. The slug is what every file stores, so
+// leaving it alone is what makes a rename free rather than a re-stamp of the
+// whole library.
+function induction_rename_resource_category( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $slug = sanitize_key( (string) $request['slug'] );
+    $name = trim( sanitize_text_field( (string) $request->get_param( 'name' ) ) );
+
+    $categories = induction_resource_categories();
+    if ( ! isset( $categories[ $slug ] ) ) {
+        return new WP_Error( 'not_found', 'Category not found.', [ 'status' => 404 ] );
+    }
+    if ( '' === $name ) {
+        return new WP_Error( 'invalid_name', 'Please enter a category name.', [ 'status' => 400 ] );
+    }
+
+    $categories[ $slug ] = mb_substr( $name, 0, INDUCTION_RESOURCE_CATEGORY_LABEL_MAX_LENGTH );
+    induction_save_resource_categories( $categories );
+
+    $counts = induction_resource_category_counts();
+    return rest_ensure_response( [
+        'value'     => $slug,
+        'label'     => $categories[ $slug ],
+        'count'     => (int) ( $counts[ $slug ] ?? 0 ),
+        'protected' => $slug === INDUCTION_RESOURCE_CATEGORY_DEFAULT,
+    ] );
+}
+
+function induction_delete_resource_category( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $slug = sanitize_key( (string) $request['slug'] );
+
+    if ( $slug === INDUCTION_RESOURCE_CATEGORY_DEFAULT ) {
+        return new WP_Error(
+            'protected_category',
+            'This category is built into the plugin and cannot be deleted.',
+            [ 'status' => 400 ]
+        );
+    }
+
+    $categories = induction_resource_categories();
+    if ( ! isset( $categories[ $slug ] ) ) {
+        return new WP_Error( 'not_found', 'Category not found.', [ 'status' => 404 ] );
+    }
+
+    $counts = induction_resource_category_counts();
+    if ( ! empty( $counts[ $slug ] ) ) {
+        return new WP_Error(
+            'category_in_use',
+            'This category still has files in it — move them somewhere else first.',
+            [ 'status' => 409 ]
+        );
+    }
+
+    unset( $categories[ $slug ] );
+    induction_save_resource_categories( $categories );
+
+    return rest_ensure_response( [ 'removed' => $slug ] );
+}
+
+// Moves one file between categories. An empty category means "uncategorised",
+// which is a real state: a file can outlive the category it was filed under.
+function induction_update_media_category( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id   = (int) $request['id'];
+    $slug = sanitize_key( (string) $request->get_param( 'category' ) );
+
+    if ( get_post_type( $id ) !== 'attachment' ) {
+        return new WP_Error( 'not_found', 'File not found.', [ 'status' => 404 ] );
+    }
+    if ( '' !== $slug && ! isset( induction_resource_categories()[ $slug ] ) ) {
+        return new WP_Error( 'unknown_category', 'That category does not exist.', [ 'status' => 400 ] );
+    }
+
+    induction_set_media_category( $id, $slug );
+
+    // Any document record in front of this file follows it, so the staff
+    // portal never shows a category the library has moved on from. The mirror
+    // hook turns this back around harmlessly: it writes the slug the file
+    // already has.
+    foreach ( induction_documents_for_file( $id ) as $doc_id ) {
+        update_post_meta( $doc_id, 'document_category', $slug );
+    }
+
+    return rest_ensure_response( [
+        'id'            => $id,
+        'category'      => $slug,
+        'categoryLabel' => induction_resource_category_label( $slug ),
+    ] );
 }
 
 function induction_get_staff_member( WP_REST_Request $request ): WP_REST_Response|WP_Error {
@@ -3063,6 +3484,7 @@ function induction_export_site(): WP_REST_Response {
         'modules'        => $modules,
         'locations'      => $locations,
         'documents'      => $documents,
+        'resource_categories' => induction_resource_categories(),
         'media'          => $media,
         'records'        => [
             'progress'       => $progress,
@@ -3271,6 +3693,26 @@ function induction_import_site( WP_REST_Request $request ): WP_REST_Response|WP_
     }
 
     // ── Documents ──
+    // Categories before documents: a document references its category by slug,
+    // and an import that landed the slug without its label would leave the
+    // library filtering on a category nobody can name.
+    $incoming_categories = (array) ( $payload['resource_categories'] ?? [] );
+    if ( $incoming_categories ) {
+        $merged = induction_resource_categories();
+        foreach ( $incoming_categories as $slug => $label ) {
+            $slug = sanitize_key( (string) $slug );
+            // Never overwrite a label this site has already chosen for a slug.
+            if ( '' !== $slug && ! isset( $merged[ $slug ] ) ) {
+                $merged[ $slug ] = mb_substr(
+                    sanitize_text_field( (string) $label ),
+                    0,
+                    INDUCTION_RESOURCE_CATEGORY_LABEL_MAX_LENGTH
+                );
+            }
+        }
+        induction_save_resource_categories( $merged );
+    }
+
     foreach ( (array) ( $payload['documents'] ?? [] ) as $doc ) {
         if ( ! is_array( $doc ) ) {
             continue;
@@ -3882,6 +4324,71 @@ function induction_send_account_setup_email( WP_User $user ): bool {
         $body,
         [ 'Content-Type: text/html; charset=UTF-8' ]
     );
+}
+
+// Deep link to one submission's grading screen. The SPA is hash-routed and
+// mounted on the portal page, so every admin route hangs off that page's URL.
+function induction_quiz_review_url( int $user_id, int $module_id ): string {
+    return induction_portal_page_url() . '#/quiz-reviews/' . $user_id . '/' . $module_id;
+}
+
+// Everyone who can actually grade a submission. Resolved from the capability
+// rather than a hard-coded role list, so a site that has handed
+// manage_induction to a role of its own still gets told.
+function induction_quiz_review_recipients(): array {
+    $users = get_users( [
+        'capability' => 'manage_induction',
+        'number'     => INDUCTION_QUIZ_REVIEW_NOTIFY_MAX,
+        'fields'     => [ 'user_email' ],
+    ] );
+
+    $emails = [];
+    foreach ( $users as $user ) {
+        if ( is_email( $user->user_email ) ) {
+            // Keyed by the lowercased address: two accounts sharing a mailbox
+            // should produce one email, not two identical ones.
+            $emails[ strtolower( $user->user_email ) ] = $user->user_email;
+        }
+    }
+
+    return array_values( $emails );
+}
+
+// Tells the graders that a module-level quiz is waiting on them. Without this
+// the only signal is the sidebar badge, which nobody sees until they happen to
+// open the admin app — so a submission could sit unmarked for days.
+//
+// Returns how many graders were successfully mailed. Deliberately total: a
+// site with no working mail transport must still be able to take submissions.
+function induction_send_quiz_review_notification( WP_User $student, int $module_id ): int {
+    $recipients = induction_quiz_review_recipients();
+    if ( empty( $recipients ) ) {
+        return 0;
+    }
+
+    $site   = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
+    $module = get_the_title( $module_id ) ?: '(Untitled module)';
+
+    $subject = sprintf( '[%s] %s submitted a quiz for review', $site, $student->display_name );
+    $body    = sprintf(
+        '<p>%1$s has submitted the module-level quiz for <strong>%2$s</strong> ' .
+        'and it is waiting to be graded.</p>' .
+        '<p><a href="%3$s">Grade this submission</a></p>' .
+        '<p>— %4$s</p>',
+        esc_html( $student->display_name ),
+        esc_html( $module ),
+        esc_url( induction_quiz_review_url( $student->ID, $module_id ) ),
+        esc_html( $site )
+    );
+
+    $sent = 0;
+    foreach ( $recipients as $email ) {
+        if ( wp_mail( $email, $subject, $body, [ 'Content-Type: text/html; charset=UTF-8' ] ) ) {
+            $sent++;
+        }
+    }
+
+    return $sent;
 }
 
 // Sends the subject and body the admin composed and edited in the SPA. This

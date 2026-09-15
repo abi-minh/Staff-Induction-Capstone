@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  Alert, Box, Button, Card, CardContent, CircularProgress,
+  Alert, Box, Button, Card, CardContent, Chip, CircularProgress,
   InputAdornment, TextField, ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
@@ -13,6 +13,7 @@ import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutl
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
 import { usePortalDocuments, useAssignedModules } from '../../hooks/usePortal';
+import { useResourceCategories } from '../../hooks/useResourceCategories';
 import { materialsFromModules } from '../../util/moduleMaterials';
 import type { MediaType } from '../../types';
 
@@ -74,9 +75,11 @@ function SectionHeading({ icon, label }: { icon: ReactNode; label: string }) {
 export default function StaffLibraryPage() {
   const [search, setSearch] = useState('');
   const [view, setView] = useState<'all' | 'materials' | 'documents'>('all');
+  const [category, setCategory] = useState<string | null>(null);
 
   const { data: documents, isLoading: docsLoading, error: docsError } = usePortalDocuments();
   const { data: modules, isLoading: modsLoading } = useAssignedModules();
+  const { data: categories = [] } = useResourceCategories();
 
   const materials = useMemo(() => materialsFromModules(modules ?? []), [modules]);
 
@@ -87,12 +90,33 @@ export default function StaffLibraryPage() {
       || m.moduleTitle.toLowerCase().includes(needle)),
     [materials, needle],
   );
-  const filteredDocs = useMemo(
-    () => (documents ?? []).filter((d) => !needle
-      || d.title.toLowerCase().includes(needle)
-      || (d.meta.document_category || '').toLowerCase().includes(needle)),
-    [documents, needle],
+  const categoryLabels = useMemo(
+    () => Object.fromEntries(categories.map((c) => [c.value, c.label])),
+    [categories],
   );
+
+  function docCategoryLabel(slug: string): string {
+    return slug ? (categoryLabels[slug] ?? slug) : 'General';
+  }
+
+  const filteredDocs = useMemo(
+    () => (documents ?? []).filter((d) => {
+      const slug = d.meta.document_category || '';
+      if (category !== null && slug !== category) return false;
+      if (!needle) return true;
+      return d.title.toLowerCase().includes(needle)
+        || docCategoryLabel(slug).toLowerCase().includes(needle);
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [documents, needle, category, categoryLabels],
+  );
+
+  // Only the categories that actually have something in them, so the strip
+  // never offers a filter that lands the staff member on an empty list.
+  const docCategories = useMemo(() => {
+    const present = new Set((documents ?? []).map((d) => d.meta.document_category || ''));
+    return categories.filter((c) => present.has(c.value));
+  }, [documents, categories]);
 
   const isLoading = docsLoading || modsLoading;
   const showMaterials = view === 'all' || view === 'materials';
@@ -152,6 +176,28 @@ export default function StaffLibraryPage() {
         <ToggleButton value="documents">Documents</ToggleButton>
       </ToggleButtonGroup>
 
+      {showDocuments && docCategories.length > 1 && (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+          <Chip
+            label="All categories"
+            onClick={() => setCategory(null)}
+            color={category === null ? 'primary' : 'default'}
+            variant={category === null ? 'filled' : 'outlined'}
+            sx={{ borderRadius: 999 }}
+          />
+          {docCategories.map((c) => (
+            <Chip
+              key={c.value}
+              label={c.label}
+              onClick={() => setCategory(c.value)}
+              color={category === c.value ? 'primary' : 'default'}
+              variant={category === c.value ? 'filled' : 'outlined'}
+              sx={{ borderRadius: 999 }}
+            />
+          ))}
+        </Box>
+      )}
+
       {isLoading && (
         <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4 }}>
           <CircularProgress />
@@ -189,7 +235,9 @@ export default function StaffLibraryPage() {
               <SectionHeading icon={<DescriptionOutlinedIcon />} label="Documents" />
               {filteredDocs.length === 0 ? (
                 <Typography color="text.secondary">
-                  {search ? 'No documents match your search.' : 'No documents available.'}
+                  {search || category
+                    ? 'No documents match your search.'
+                    : 'No documents available.'}
                 </Typography>
               ) : (
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
@@ -198,7 +246,7 @@ export default function StaffLibraryPage() {
                       key={d.id}
                       icon={<DescriptionOutlinedIcon sx={{ color: 'primary.main', flexShrink: 0 }} />}
                       title={d.title}
-                      subtitle={d.meta.document_category || 'General'}
+                      subtitle={docCategoryLabel(d.meta.document_category || '')}
                       url={d.fileUrl}
                     />
                   ))}

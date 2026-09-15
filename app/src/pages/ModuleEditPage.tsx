@@ -16,6 +16,7 @@ import { useStaff, useBulkAssign, useUnassign, useRoles, useAssignRole, useUnass
 import { createSection, parseSections } from '../blocks/utils';
 import { ICON_OPTIONS, getIconByKey } from '../components/iconLibrary';
 import ModuleHistoryDialog from '../components/ModuleHistoryDialog';
+import { stickyActionBarSx } from '../theme';
 import type { ModuleFormValues, Section } from '../types';
 
 const empty: ModuleFormValues = {
@@ -250,8 +251,9 @@ export default function ModuleEditPage() {
 
   return (
     <Box>
-      {/* Top action bar */}
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, flexWrap: 'wrap', mb: 2 }}>
+      {/* Top action bar — sticky on desktop, same reasoning as the
+          section editor: Save and Publish must not scroll away. */}
+      <Box sx={{ ...stickyActionBarSx, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2, flexWrap: 'wrap', mb: 2 }}>
         <Button variant="text" onClick={handleBackToModules} sx={roundedButtonSx}>
           ← Back to Modules
         </Button>

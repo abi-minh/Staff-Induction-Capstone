@@ -76,3 +76,22 @@ export const theme = createTheme({
     },
   },
 });
+
+// An editor's top action bar. The module and section editors are long enough
+// that the save button scrolls out of reach, and scrolling back up to save is
+// the kind of friction that turns into unsaved work. On desktop the bar sticks
+// under the app bar instead; on mobile it scrolls away as before, where the
+// viewport is short enough that a permanently pinned bar costs more room than
+// it earns. The negative margin cancels the main content padding so the bar's
+// background spans the full width as the page scrolls beneath it.
+export const stickyActionBarSx = {
+  position: { xs: 'static' as const, md: 'sticky' as const },
+  top: { md: 64 },
+  zIndex: (t: { zIndex: { appBar: number } }) => t.zIndex.appBar - 1,
+  bgcolor: 'background.default',
+  mx: { md: -4 },
+  px: { md: 4 },
+  py: { md: 1.5 },
+  borderBottom: { md: '1px solid' },
+  borderColor: { md: 'divider' },
+};

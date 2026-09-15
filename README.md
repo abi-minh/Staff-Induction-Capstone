@@ -98,6 +98,35 @@ Output goes to `wp-plugin/assets/app/`. Commit the built files — WordPress enq
 | `induction_admin` | Induction management only (no wp-admin access) |
 | `staff` | Portal view only (no wp-admin access) |
 
+A WordPress `administrator` is an induction admin by default: they hold
+`manage_induction`, appear in the staff list and reporting, and a module can be
+targeted at them. `administrator` is never offered as a role the app can
+*grant*, so an `induction_admin` — who is not a full administrator — cannot
+create or promote one through Add Staff or Change Role.
+
+## Resource categories
+
+Every file in the induction media library is filed under a category from a
+managed list (`Documents → Manage Categories`). "Module Resources" ships with
+the plugin and cannot be deleted; a category can only be deleted once it is
+empty, and renaming one re-labels it without moving any file. The category is
+stored on the attachment, and any `induction_document` record in front of a
+file is kept in step with it in both directions.
+
+Sites upgrading from before this feature have every existing file and document
+moved into "Module Resources" once, on the first request after the upgrade.
+
+## Notifications
+
+| When | Who is emailed |
+|------|----------------|
+| A staff member submits a module quiz for review | Everyone with `manage_induction` |
+| An admin creates a staff account | The new staff member (opt-out at creation) |
+| An admin sends a training reminder | The selected staff member(s) |
+
+Quiz review notifications fire once per submission: re-submitting while the
+same attempt is still pending does not mail the graders again.
+
 ---
 
 ## Linting
