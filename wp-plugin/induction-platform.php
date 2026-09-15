@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.3.0
+ * Version:     1.3.1
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.3.0' );
+define( 'INDUCTION_VERSION', '1.3.1' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -123,6 +123,16 @@ function induction_register_post_types(): void {
         'show_ui'      => current_user_can( 'manage_induction' ),
         'show_in_menu' => current_user_can( 'manage_induction' ),
         'capability_type' => 'post',
+        // map_meta_cap is false by default, and with capability_type 'post'
+        // that leaves cap->edit_post as the literal primitive 'edit_post' -
+        // singular, which no WordPress role holds; roles carry the plural
+        // 'edit_posts'. Every custom-field write goes through
+        // map_meta_cap('edit_post_meta'), which resolves 'edit_post' first, so
+        // without this every meta update returned "Sorry, you are not allowed
+        // to edit the <key> custom field" for everyone, administrators
+        // included. That was the location_lat 403, and the same 403 on
+        // document_category / document_file_id / document_role_targets.
+        'map_meta_cap' => true,
     ] );
 
     $induction_auth = '__return_true';
@@ -145,6 +155,16 @@ function induction_register_post_types(): void {
         'show_ui'      => current_user_can( 'manage_induction' ),
         'show_in_menu' => current_user_can( 'manage_induction' ),
         'capability_type' => 'post',
+        // map_meta_cap is false by default, and with capability_type 'post'
+        // that leaves cap->edit_post as the literal primitive 'edit_post' -
+        // singular, which no WordPress role holds; roles carry the plural
+        // 'edit_posts'. Every custom-field write goes through
+        // map_meta_cap('edit_post_meta'), which resolves 'edit_post' first, so
+        // without this every meta update returned "Sorry, you are not allowed
+        // to edit the <key> custom field" for everyone, administrators
+        // included. That was the location_lat 403, and the same 403 on
+        // document_category / document_file_id / document_role_targets.
+        'map_meta_cap' => true,
     ] );
 
     register_post_meta( 'induction_document', 'document_category',     [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',  'sanitize_callback' => 'sanitize_key', 'auth_callback' => $induction_auth ] );
@@ -164,6 +184,16 @@ function induction_register_post_types(): void {
         'show_ui'      => current_user_can( 'manage_induction' ),
         'show_in_menu' => current_user_can( 'manage_induction' ),
         'capability_type' => 'post',
+        // map_meta_cap is false by default, and with capability_type 'post'
+        // that leaves cap->edit_post as the literal primitive 'edit_post' -
+        // singular, which no WordPress role holds; roles carry the plural
+        // 'edit_posts'. Every custom-field write goes through
+        // map_meta_cap('edit_post_meta'), which resolves 'edit_post' first, so
+        // without this every meta update returned "Sorry, you are not allowed
+        // to edit the <key> custom field" for everyone, administrators
+        // included. That was the location_lat 403, and the same 403 on
+        // document_category / document_file_id / document_role_targets.
+        'map_meta_cap' => true,
     ] );
 
     register_post_meta( 'induction_location', 'location_address',      [ 'type' => 'string',  'single' => true, 'show_in_rest' => true, 'default' => '',   'sanitize_callback' => 'sanitize_text_field', 'auth_callback' => $induction_auth ] );
@@ -393,6 +423,14 @@ function induction_register_roles(): void {
         'read_private_posts',
         'delete_posts',
         'delete_others_posts',
+        // Required once map_meta_cap is on: editing or deleting a post that is
+        // already published resolves through these, not through edit_posts.
+        // Everything this plugin creates is published immediately, so without
+        // them an admin could create a module and then not edit it.
+        'edit_published_posts',
+        'delete_published_posts',
+        'edit_private_posts',
+        'delete_private_posts',
     ] as $cap ) {
         $induction_admin->add_cap( $cap );
     }
