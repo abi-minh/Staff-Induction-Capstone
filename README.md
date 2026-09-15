@@ -29,7 +29,10 @@ wp-plugin/    WordPress plugin (PHP)
 
 ## WordPress plugin setup
 
-Copy or symlink `wp-plugin/` to `wp-content/plugins/induction-platform/` on your WordPress site, then activate it from the WordPress admin.
+Build the front end first (`cd app && npm run build`) — `wp-plugin/assets/app/` is
+generated and is not in the repository. Then copy or symlink `wp-plugin/` to
+`wp-content/plugins/induction-platform/` on your WordPress site and activate it
+from the WordPress admin.
 
 The plugin registers:
 
@@ -86,7 +89,19 @@ cd app
 npm run build
 ```
 
-Output goes to `wp-plugin/assets/app/`. Commit the built files — WordPress enqueues them directly from the plugin's assets directory.
+Output goes to `wp-plugin/assets/app/`, which WordPress enqueues directly from the
+plugin's assets directory.
+
+**The build output is not committed.** `wp-plugin/assets/app/` and
+`wp-plugin/staff-portal.zip` are gitignored: vite wipes and rewrites that directory
+on every build, so a committed bundle conflicts on every branch that touches the
+front end, and the conflict can never be resolved by reading it — only by
+rebuilding. Build before you deploy or package, and rebuild rather than merge.
+
+To package an installable plugin zip, build first, then archive `wp-plugin/` with
+`staff-portal/` as the folder inside the archive — that name is the plugin's
+directory on the server, and changing it makes WordPress treat the upload as a
+separate plugin.
 
 ---
 
