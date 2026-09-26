@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clampRowColumns, createBlock, createSection, isQuizBlock, parseSections } from './utils';
+import { blockLayoutSx, clampRowColumns, createBlock, createSection, isQuizBlock, layoutOf, parseSections } from './utils';
 import { MAX_ROW_COLUMNS, MIN_ROW_COLUMNS } from '../types';
 import type { Block, PlacedBlock, RowChildBlock, Section } from '../types';
 
@@ -138,5 +138,74 @@ describe('block and section factories', () => {
     expect(isQuizBlock(createBlock('short_answer'))).toBe(true);
     expect(isQuizBlock(createBlock('text'))).toBe(false);
     expect(isQuizBlock(createBlock('row'))).toBe(false);
+  });
+});
+
+describe('layoutOf', () => {
+  it('returns a block\'s layout when it has one', () => {
+    const text: Block = { id: 't', type: 'text', data: { html: '<p>x</p>' }, layout: { align: 'right', width: 50 } };
+    expect(layoutOf(text)).toEqual({ align: 'right', width: 50 });
+  });
+
+  it('returns undefined for a block type that carries no layout (a quiz block)', () => {
+    const quiz: Block = { id: 'q', type: 'true_false', data: { question: 'ok?', correctAnswer: true, explanation: '' } };
+    expect(layoutOf(quiz)).toBeUndefined();
+  });
+
+  it('folds a legacy image data.width into the layout when there is no layout.width', () => {
+    const legacy: Block = { id: 'i', type: 'image', data: { mediaId: 1, url: 'u', alt: '', caption: '', width: 60 } };
+    expect(layoutOf(legacy)).toEqual({ width: 60 });
+  });
+
+  it('prefers layout.width over the legacy image data.width', () => {
+    const img: Block = {
+      id: 'i', type: 'image',
+      data: { mediaId: 1, url: 'u', alt: '', caption: '', width: 60 },
+      layout: { align: 'center', width: 40 },
+    };
+    expect(layoutOf(img)).toEqual({ align: 'center', width: 40 });
+  });
+
+  it('keeps a set align while folding in the legacy width', () => {
+    const img: Block = {
+      id: 'i', type: 'image',
+      data: { mediaId: 1, url: 'u', alt: '', caption: '', width: 60 },
+      layout: { align: 'center' },
+    };
+    expect(layoutOf(img)).toEqual({ align: 'center', width: 60 });
+  });
+});
+
+describe('blockLayoutSx', () => {
+  it('defaults to left-aligned, full width', () => {
+    expect(blockLayoutSx()).toEqual({ marginLeft: 0, marginRight: 'auto' });
+  });
+
+  it('centres by pushing both margins to auto', () => {
+    expect(blockLayoutSx({ align: 'center' })).toEqual({ marginLeft: 'auto', marginRight: 'auto' });
+  });
+
+  it('right-aligns by pinning the right margin', () => {
+    expect(blockLayoutSx({ align: 'right' })).toEqual({ marginLeft: 'auto', marginRight: 0 });
+  });
+
+  it('constrains a sub-100 width, staying full-width on mobile', () => {
+    expect(blockLayoutSx({ width: 50 })).toEqual({
+      maxWidth: { xs: '100%', sm: '50%' },
+      marginLeft: 0,
+      marginRight: 'auto',
+    });
+  });
+
+  it('applies no max-width at full (100) width', () => {
+    expect(blockLayoutSx({ width: 100 })).toEqual({ marginLeft: 0, marginRight: 'auto' });
+  });
+
+  it('combines a centred position with a set width', () => {
+    expect(blockLayoutSx({ align: 'center', width: 50 })).toEqual({
+      maxWidth: { xs: '100%', sm: '50%' },
+      marginLeft: 'auto',
+      marginRight: 'auto',
+    });
   });
 });
