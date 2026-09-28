@@ -15,6 +15,7 @@ import { useAuthStore }            from '../store/authStore';
 import { useAssignedModules }      from '../hooks/usePortal';
 import { getModuleIcon }           from '../components/moduleVisuals';
 import { stripHtml }               from '../util/strings';
+import BrandLogo                   from '../components/BrandLogo';
 
 const DRAWER_WIDTH = 200;
 
@@ -83,6 +84,12 @@ export default function StaffLayout() {
 
   const navContent = (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, px: 1.5 }}>
+      {/* Inside navContent so it appears in both the desktop sidebar and the
+          mobile Drawer, which render the same fragment. */}
+      <Box sx={{ display: 'flex', justifyContent: 'center', mb: 1.5 }}>
+        <BrandLogo size={88} />
+      </Box>
+
       {renderNavItem('Dashboard', '/portal', EditOutlinedIcon)}
 
       {modules?.map((m) => {

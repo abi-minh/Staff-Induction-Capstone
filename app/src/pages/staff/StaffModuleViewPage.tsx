@@ -624,7 +624,12 @@ export default function StaffModuleViewPage() {
                 fontWeight: 500,
                 fontSize: { xs: 12, sm: 13 },
                 whiteSpace: "nowrap",
-                color: "text.secondary",
+                // Scoped away from the selected pill. The group rule and each button's
+                // "&&.Mui-selected" both land on three classes, so the winner
+                // came down to emotion's insertion order — and the group won,
+                // painting slate text onto a solid primary fill. Excluding the
+                // selected state removes the race instead of out-specifying it.
+                "&:not(.Mui-selected)": { color: "text.secondary" },
                 "&:hover": { bgcolor: "action.hover" },
               },
             }}

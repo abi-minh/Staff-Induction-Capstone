@@ -13,7 +13,8 @@ declare module '@mui/material/styles' {
 
 export const theme = createTheme({
   palette: {
-    primary:    { main: '#2563EB' },
+    // The blue from the client's logo, so the UI and the mark agree.
+    primary:    { main: '#3259AD' },
     success:    { main: '#16A34A' },
     warning:    { main: '#F59E0B' },
     error:      { main: '#DC2626' },
@@ -49,13 +50,28 @@ export const theme = createTheme({
       },
     },
     MuiCard: {
+      // elevation stays 0 so MUI's own shadow ramp does not fight the one
+      // below; the border is kept as well, since the shadow alone is too soft
+      // to separate a white card from a white panel.
       defaultProps: { elevation: 0 },
       styleOverrides: {
         root: {
           borderRadius: 14,
           border: '1px solid #E2E8F0',
           backgroundColor: '#FFFFFF',
+          // Tinted with the palette's slate rather than pure black — a neutral
+          // black shadow reads as grubby against the blue-grey background.
+          boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.06)',
         },
+      },
+    },
+    MuiToggleButton: {
+      styleOverrides: {
+        // The filter pills on the dashboard, resources library and module view
+        // set no background of their own, so they used to show the page's
+        // blue-grey through. This fills them instead. Every page that styles a
+        // selected pill does so through `&&`, so those still win.
+        root: { backgroundColor: '#fbfbfb' },
       },
     },
     MuiChip: {

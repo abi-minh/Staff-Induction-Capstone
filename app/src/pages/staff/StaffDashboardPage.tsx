@@ -4,7 +4,8 @@ import {
 } from '@mui/material';
 import CheckCircleOutlined from '@mui/icons-material/CheckCircleOutlined';
 import ScheduleOutlined    from '@mui/icons-material/ScheduleOutlined';
-import { useAssignedModules, useUserProgress } from '../../hooks/usePortal';
+import { useAssignedModules, useMyAssignments, useUserProgress } from '../../hooks/usePortal';
+import { formatDueDate } from '../../util/dates';
 import { useAuthStore }  from '../../store/authStore';
 import ModuleCard        from '../../components/ModuleCard';
 
@@ -16,6 +17,12 @@ export default function StaffDashboardPage() {
 
   const { data: modules, isLoading, error } = useAssignedModules();
   const { data: progress = [] }             = useUserProgress();
+  const { data: assignments = [] }          = useMyAssignments();
+
+  // Due dates live on the assignment row, not the module: the module sets a
+  // duration and the date is fixed per person when they are assigned, so the
+  // same module can fall due on different days for different people.
+  const dueDates = new Map(assignments.map((a) => [a.moduleId, a.dueDate]));
 
   if (isLoading) {
     return (
@@ -37,7 +44,11 @@ export default function StaffDashboardPage() {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <Typography variant="h1">Welcome Back, {user?.name}</Typography>
+      {/* h1 is 700 by default; the greeting is dialled back so the name is the
+          part that carries weight. */}
+      <Typography variant="h1" sx={{ fontWeight: 400 }}>
+        Welcome Back, <Box component="span" sx={{ fontWeight: 700 }}>{user?.name}</Box>
+      </Typography>
 
       <ToggleButtonGroup
         value={view}
@@ -57,7 +68,12 @@ export default function StaffDashboardPage() {
             fontWeight: 500,
             fontSize: { xs: 13, sm: 14 },
             whiteSpace: 'nowrap',
-            color: 'text.secondary',
+            // Scoped away from the selected pill. The group rule and each button's
+            // '&&.Mui-selected' both land on three classes, so the winner came
+            // down to emotion's insertion order — and the group won, painting
+            // slate text onto a solid primary fill. Excluding the selected
+            // state removes the race instead of out-specifying it.
+            '&:not(.Mui-selected)': { color: 'text.secondary' },
             '&:hover': { bgcolor: 'action.hover' },
           },
         }}
@@ -124,13 +140,25 @@ export default function StaffDashboardPage() {
             gap: 4,
             gridTemplateColumns: 'repeat(auto-fill, minmax(min(360px, 100%), 1fr))',
             maxWidth: 1400,
-            mx: 'auto',
+            // Left-aligned, not centred: the cap only bites on a wide monitor,
+            // and centring there pushed the grid away from the page heading and
+            // the filter pills, which stay left.
+            mr: 'auto',
             width: '100%',
           }}
         >
           {filtered.map((m) => {
             const p = progress.find((r) => r.moduleId === m.id);
-            return <ModuleCard key={m.id} module={m} progress={p} dueDate="27/06/26" />;
+            // Empty string when the module has no duration set, which
+            // ModuleCard treats as "no deadline" and hides the chip.
+            return (
+              <ModuleCard
+                key={m.id}
+                module={m}
+                progress={p}
+                dueDate={formatDueDate(dueDates.get(m.id))}
+              />
+            );
           })}
         </Box>
       )}

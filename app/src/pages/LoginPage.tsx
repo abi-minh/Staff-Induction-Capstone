@@ -5,6 +5,7 @@ import {
 } from '@mui/material';
 import { login, fetchCurrentUser } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
+import BrandLogo from '../components/BrandLogo';
 
 function isAdminRole(roles: string[]): boolean {
   return roles.some((r) => ['administrator', 'induction_admin'].includes(r));
@@ -51,10 +52,11 @@ export default function LoginPage() {
       }}
     >
       <Card sx={{ width: '100%', maxWidth: 400, p: 4 }}>
-        <Box sx={{ mb: 3, textAlign: 'center' }}>
-          <Typography variant="h6" sx={{ fontWeight: 700, color: 'primary.main' }}>
-            2 BENT RODS
-          </Typography>
+        {/* Larger than in the sidebars: this is the first thing anyone sees,
+            and the card has the room for it. "Sign in to continue" stays —
+            it is instruction, not branding. */}
+        <Box sx={{ mb: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
+          <BrandLogo size={120} />
           <Typography variant="body2" sx={{ color: 'text.secondary' }}>
             Sign in to continue
           </Typography>

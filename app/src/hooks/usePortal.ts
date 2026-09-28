@@ -9,6 +9,7 @@ import {
   fetchPortalDocuments,
   fetchTeam,
 } from '../api/portal';
+import { fetchStaffAssignments } from '../api/staff';
 import type { ProgressRecord } from '../types';
 
 export function useAssignedModules() {
@@ -90,4 +91,21 @@ export function usePortalDocuments(search?: string) {
 
 export function useTeamMembers() {
   return useQuery({ queryKey: ['team'], queryFn: fetchTeam, staleTime: 1000 * 60 * 5 });
+}
+
+/**
+ * The signed-in staff member's own assignment rows, which is where due dates
+ * live — the module carries a duration, and the date is fixed per person when
+ * they are assigned, so two people can hold the same module with different
+ * deadlines. Reads through the same endpoint the admin uses; it is gated on
+ * induction_can_view_own_progress, so a staff member may fetch their own.
+ */
+export function useMyAssignments() {
+  const userId = useAuthStore((s) => s.user?.id ?? 0);
+  return useQuery({
+    queryKey: ['portal', 'assignments', userId],
+    queryFn: () => fetchStaffAssignments(userId),
+    enabled: userId > 0,
+    staleTime: 1000 * 60 * 5,
+  });
 }

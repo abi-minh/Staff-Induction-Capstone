@@ -17,6 +17,7 @@ import VisibilityOutlinedIcon  from '@mui/icons-material/VisibilityOutlined';
 import LogoutOutlinedIcon      from '@mui/icons-material/LogoutOutlined';
 import { useAuthStore }        from '../store/authStore';
 import { usePendingQuizReviews } from '../hooks/useQuizReviews';
+import BrandLogo               from '../components/BrandLogo';
 
 const DRAWER_WIDTH = 220;
 
@@ -55,11 +56,10 @@ export default function AdminLayout() {
 
   const navContent = (
     <>
-      <Box sx={{ px: 2.5, mb: 3 }}>
-        {/*REPLACE WITH LOGO*/}
-        <Typography variant="h6" sx={{ fontWeight: 700, color: 'primary.main', lineHeight: 1.2 }}>
-          2 BENT RODS
-        </Typography>
+      {/* The logo replaces the wordmark, not the "Admin Panel" line: that one
+          is what tells an admin which of the two portals they are looking at. */}
+      <Box sx={{ px: 2.5, mb: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0.5 }}>
+        <BrandLogo />
         <Typography variant="caption" sx={{ color: 'text.secondary' }}>
           Admin Panel
         </Typography>
