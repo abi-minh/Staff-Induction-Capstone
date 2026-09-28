@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.4.1
+ * Version:     1.4.2
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.4.1' );
+define( 'INDUCTION_VERSION', '1.4.2' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -70,13 +70,15 @@ define( 'INDUCTION_CONTACT_PHONE_MAX_LENGTH',    40 );
 // session's work, shallow enough that a large module's history stays bounded.
 define( 'INDUCTION_MODULE_VERSION_LIMIT', 30 );
 
-// Export/import. Files are embedded as base64, which inflates them by ~33% and
-// has to survive a POST back through PHP on the way in — so both a per-file and
-// a whole-export ceiling. Anything over the per-file cap is exported by URL
-// instead and sideloaded at import time, which degrades rather than fails.
-define( 'INDUCTION_EXPORT_FORMAT_VERSION',  1 );
-define( 'INDUCTION_EXPORT_MAX_FILE_BYTES',  8 * 1024 * 1024 );
-define( 'INDUCTION_EXPORT_MAX_TOTAL_BYTES', 64 * 1024 * 1024 );
+// Backup / migration. Bump the format version when the shape of content.json changes.
+define( 'INDUCTION_EXPORT_FORMAT',                'induction-platform-export' );
+define( 'INDUCTION_EXPORT_FORMAT_VERSION',        2 );
+define( 'INDUCTION_EXPORT_LINK_TTL',              10 * MINUTE_IN_SECONDS );
+define( 'INDUCTION_TRANSFER_DISK_MARGIN',         256 * 1024 * 1024 );
+define( 'INDUCTION_IMPORT_STEP_SECONDS',          15 );
+define( 'INDUCTION_IMPORT_URL_TIMEOUT',           30 );
+define( 'INDUCTION_IMPORT_KEEP_UNFINISHED_DAYS',  30 );
+define( 'INDUCTION_MEDIA_ID_KEYS',                [ 'mediaId', 'imageMediaId', 'heroImage' ] );
 
 // Location map markers. The colour list must stay in step with MARKER_COLORS
 // in app/src/components/LocationMap.tsx — it's the palette the admin can pick.
@@ -884,9 +886,51 @@ function induction_register_routes(): void {
     ] );
 
     // Backup / migration.
+    register_rest_route( $ns, '/transfer/export/prepare', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_export_prepare',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
     register_rest_route( $ns, '/transfer/export', [
         'methods'             => 'GET',
         'callback'            => 'induction_export_site',
+        'permission_callback' => 'induction_export_permission',
+    ] );
+
+    register_rest_route( $ns, '/transfer/import/chunk', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_import_chunk',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    register_rest_route( $ns, '/transfer/import/begin', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_import_begin',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    register_rest_route( $ns, '/transfer/import/select', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_import_select',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    register_rest_route( $ns, '/transfer/import/step', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_import_step',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    register_rest_route( $ns, '/transfer/import/status', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_import_status',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    register_rest_route( $ns, '/transfer/import/undo', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_import_undo',
         'permission_callback' => 'induction_is_admin_user',
     ] );
 
@@ -1594,14 +1638,14 @@ function induction_quiz_save( WP_REST_Request $request ): WP_REST_Response {
 // Returns true if $block_id belongs to the section flagged as the module-level
 // quiz. Legacy flat-format modules (no sections) have no such concept.
 function induction_is_module_quiz_block( string $blocks_json, string $block_id ): bool {
-    $parsed = json_decode( $blocks_json, true ) ?: [];
-    if ( empty( $parsed ) || ! array_key_exists( 'quizBlocks', $parsed[0] ) ) {
+    $parsed = (array) ( json_decode( $blocks_json, true ) ?: [] );
+    if ( empty( $parsed ) || ! induction_is_sections_format( $parsed ) ) {
         return false;
     }
     foreach ( $parsed as $section ) {
         if ( empty( $section['isModuleQuiz'] ) ) continue;
         foreach ( (array) ( $section['quizBlocks'] ?? [] ) as $b ) {
-            if ( $b['id'] === $block_id ) return true;
+            if ( ( $b['id'] ?? null ) === $block_id ) return true;
         }
     }
     return false;
@@ -1614,13 +1658,13 @@ function induction_is_module_quiz_block( string $blocks_json, string $block_id )
 // its quiz published. Legacy flat-format modules predate per-section status
 // and are always considered published.
 function induction_is_quiz_block_published( string $blocks_json, string $block_id ): bool {
-    $parsed = json_decode( $blocks_json, true ) ?: [];
-    if ( empty( $parsed ) || ! array_key_exists( 'quizBlocks', $parsed[0] ) ) {
+    $parsed = (array) ( json_decode( $blocks_json, true ) ?: [] );
+    if ( empty( $parsed ) || ! induction_is_sections_format( $parsed ) ) {
         return true;
     }
     foreach ( $parsed as $section ) {
         foreach ( (array) ( $section['quizBlocks'] ?? [] ) as $b ) {
-            if ( $b['id'] !== $block_id ) continue;
+            if ( ( $b['id'] ?? null ) !== $block_id ) continue;
             return ( $section['status'] ?? 'publish' ) === 'publish'
                 && ( $section['quizStatus'] ?? 'publish' ) === 'publish';
         }
@@ -1631,8 +1675,8 @@ function induction_is_quiz_block_published( string $blocks_json, string $block_i
 // Same idea, scoped to the module-level quiz specifically (used by
 // quiz/submit-for-review, which has no single block_id to check against).
 function induction_has_published_module_quiz( string $blocks_json ): bool {
-    $parsed = json_decode( $blocks_json, true ) ?: [];
-    if ( empty( $parsed ) || ! array_key_exists( 'quizBlocks', $parsed[0] ) ) {
+    $parsed = (array) ( json_decode( $blocks_json, true ) ?: [] );
+    if ( empty( $parsed ) || ! induction_is_sections_format( $parsed ) ) {
         return false;
     }
     foreach ( $parsed as $section ) {
@@ -1807,7 +1851,9 @@ function induction_quiz_review_detail( WP_REST_Request $request ): WP_REST_Respo
 
     $questions = [];
     foreach ( $quiz_blocks as $block_id => $block ) {
-        $resp = $answers_by_block[ $block_id ] ?? null;
+        $block['type'] = (string) ( $block['type'] ?? '' );
+        $block['data'] = is_array( $block['data'] ?? null ) ? $block['data'] : [];
+        $resp          = $answers_by_block[ $block_id ] ?? null;
         $questions[] = [
             'blockId'       => $block_id,
             'type'          => $block['type'],
@@ -1931,56 +1977,56 @@ function induction_strip_answers_from_blocks_json( string $blocks_json ): string
     if ( ! is_array( $parsed ) || empty( $parsed ) ) {
         return $blocks_json;
     }
-
-    if ( array_key_exists( 'quizBlocks', $parsed[0] ) ) {
-        // Section[] format
-        foreach ( $parsed as &$section ) {
-            foreach ( $section['quizBlocks'] as &$block ) {
-                if ( ( $block['type'] ?? '' ) === 'multiple_choice' ) {
-                    unset( $block['data']['correctIndex'] );
-                } elseif ( in_array( $block['type'] ?? '', [ 'true_false', 'short_answer' ], true ) ) {
-                    unset( $block['data']['correctAnswer'] );
-                }
-            }
-            unset( $block );
-        }
-        unset( $section );
-    } else {
-        // Flat Block[] format (legacy)
-        foreach ( $parsed as &$block ) {
-            if ( ( $block['type'] ?? '' ) === 'multiple_choice' ) {
-                unset( $block['data']['correctIndex'] );
-            } elseif ( in_array( $block['type'] ?? '', [ 'true_false', 'short_answer' ], true ) ) {
-                unset( $block['data']['correctAnswer'] );
-            }
-        }
-        unset( $block );
-    }
+    induction_strip_answer_keys( $parsed );
 
     // '[]' rather than the original on failure: showing staff nothing is a
     // display bug, handing them the un-stripped answers is a real one.
     return induction_encode_meta_json( $parsed ) ?? '[]';
 }
 
+// Strips answer keys at any depth, whatever the shape, so malformed data can't leak them.
+function induction_strip_answer_keys( array &$node ): void {
+    unset( $node['correctIndex'], $node['correctAnswer'] );
+    foreach ( $node as &$child ) {
+        if ( is_array( $child ) ) {
+            induction_strip_answer_keys( $child );
+        }
+    }
+    unset( $child );
+}
+
+// Judged by the first array element, so a junk first entry can't pass sections off as legacy.
+function induction_is_sections_format( array $parsed ): bool {
+    foreach ( $parsed as $item ) {
+        if ( is_array( $item ) ) {
+            return array_key_exists( 'quizBlocks', $item );
+        }
+    }
+    return false;
+}
+
 // $module_quiz_only = true restricts collection to the section flagged as the
 // module-level quiz (used for quiz/submit grading). false collects every
 // section's quiz blocks (used for quiz/check, which grades any single question).
 function induction_collect_quiz_blocks( string $blocks_json, bool $module_quiz_only = true ): array {
-    $parsed      = json_decode( $blocks_json, true ) ?: [];
+    $parsed      = (array) ( json_decode( $blocks_json, true ) ?: [] );
     $quiz_blocks = [];
 
-    if ( ! empty( $parsed ) && array_key_exists( 'quizBlocks', $parsed[0] ) ) {
+    if ( ! empty( $parsed ) && induction_is_sections_format( $parsed ) ) {
         // Section[] format
         foreach ( $parsed as $section ) {
             if ( $module_quiz_only && empty( $section['isModuleQuiz'] ) ) continue;
             foreach ( (array) ( $section['quizBlocks'] ?? [] ) as $b ) {
-                $quiz_blocks[ $b['id'] ] = $b;
+                // First occurrence, like induction_is_quiz_block_published().
+                if ( is_array( $b ) && isset( $b['id'] ) && ! isset( $quiz_blocks[ $b['id'] ] ) ) {
+                    $quiz_blocks[ $b['id'] ] = $b;
+                }
             }
         }
     } else {
         // Flat Block[] format (legacy)
         foreach ( $parsed as $b ) {
-            if ( in_array( $b['type'] ?? '', [ 'multiple_choice', 'true_false' ], true ) ) {
+            if ( is_array( $b ) && isset( $b['id'] ) && ! isset( $quiz_blocks[ $b['id'] ] ) && in_array( $b['type'] ?? '', [ 'multiple_choice', 'true_false' ], true ) ) {
                 $quiz_blocks[ $b['id'] ] = $b;
             }
         }
@@ -2031,12 +2077,16 @@ function induction_strip_unpublished_content( WP_REST_Response $response, WP_Pos
 
 function induction_strip_unpublished_sections_json( string $blocks_json ): string {
     $parsed = json_decode( $blocks_json, true );
-    if ( ! is_array( $parsed ) || empty( $parsed ) || ! array_key_exists( 'quizBlocks', $parsed[0] ) ) {
-        return $blocks_json; // legacy flat format predates per-section status
+    if ( ! is_array( $parsed ) || empty( $parsed ) ) {
+        return $blocks_json;
     }
 
+    // Per element, so a draft section among legacy blocks is still dropped.
     $visible = [];
     foreach ( $parsed as $section ) {
+        if ( ! is_array( $section ) ) {
+            continue;
+        }
         if ( ( $section['status'] ?? 'publish' ) !== 'publish' ) {
             continue; // drop draft sections entirely
         }
@@ -3288,16 +3338,103 @@ function induction_get_team(): WP_REST_Response {
 
 // ─── Backup / Migration ─────────────────────────────────────────────────────
 //
-// One JSON envelope carrying training content, the records staff have built up
-// against it, and the media both depend on. Staff ACCOUNTS are deliberately not
-// exported: creating or reconciling WordPress users on import is a different
-// and much riskier problem. Records instead carry a portable user reference
-// (login + email) and are matched to existing users at import; anything that
-// can't be matched is skipped and reported rather than guessed at.
-//
-// Attachment IDs are meaningless on another site, so every referenced file is
-// collected into a media manifest keyed by its ID here, and the importer builds
-// an old-ID -> new-ID map and rewrites the references inside the content.
+// Export is one zip: content.json plus the media it references. Records carry a
+// login/email user reference and are matched to existing users on import.
+
+// ── Scratch storage ─────────────────────────────────────────────────────────
+
+// Not the system temp dir: PHP can't list anything under C:\Windows\TEMP, and shared hosts
+// often give /tmp a small partition. Outside the web root where possible (personal data).
+function induction_transfer_dir(): string {
+    static $dir = null;
+    if ( null !== $dir ) {
+        return $dir;
+    }
+    if ( defined( 'INDUCTION_TRANSFER_DIR' ) ) {
+        $dir = trailingslashit( (string) INDUCTION_TRANSFER_DIR );
+    } else {
+        $saved = (string) get_option( 'induction_transfer_dir', '' );
+        $dir   = ( '' !== $saved && @is_dir( $saved ) ) ? $saved : induction_transfer_dir_choose();
+        if ( $dir !== $saved ) {
+            update_option( 'induction_transfer_dir', $dir, false );
+        }
+    }
+    if ( ! @is_dir( $dir ) ) {
+        wp_mkdir_p( $dir );
+    }
+    if ( ! file_exists( $dir . 'index.php' ) ) {
+        @file_put_contents( $dir . 'index.php', "<?php\n// Silence is golden.\n" );
+        @file_put_contents( $dir . '.htaccess', "Require all denied\n<IfModule !mod_authz_core.c>\nDeny from all\n</IfModule>\n" );
+        @file_put_contents( $dir . 'web.config', '<?xml version="1.0"?><configuration><system.webServer><authorization><deny users="*" /></authorization></system.webServer></configuration>' );
+    }
+    return $dir;
+}
+
+function induction_transfer_dir_choose(): string {
+    $docroot = isset( $_SERVER['DOCUMENT_ROOT'] ) ? trailingslashit( wp_normalize_path( (string) $_SERVER['DOCUMENT_ROOT'] ) ) : '';
+    $outside = trailingslashit( wp_normalize_path( dirname( untrailingslashit( ABSPATH ) ) ) ) . 'induction-transfer/';
+
+    // Not when WordPress sits in a subfolder of the web root.
+    $is_outside = '' !== $docroot && 0 !== strpos( $outside, $docroot );
+    if ( $is_outside && ( @is_dir( $outside ) || @wp_mkdir_p( $outside ) ) && @wp_is_writable( $outside ) ) {
+        return $outside;
+    }
+    return trailingslashit( wp_upload_dir( null, false )['basedir'] ) . 'induction-transfer/';
+}
+
+function induction_transfer_disk_shortfall( int $bytes ): string {
+    if ( ! function_exists( 'disk_free_space' ) ) {
+        return '';
+    }
+    $free = @disk_free_space( induction_transfer_dir() );
+    if ( false === $free ) {
+        return '';
+    }
+    $needed = $bytes + INDUCTION_TRANSFER_DISK_MARGIN;
+    if ( $free >= $needed ) {
+        return '';
+    }
+    return sprintf(
+        'Not enough free disk space on the server: this needs about %s, and %s is free.',
+        size_format( $needed ),
+        size_format( $free )
+    );
+}
+
+function induction_transfer_no_time_limit(): void {
+    if ( function_exists( 'set_time_limit' ) ) {
+        set_time_limit( 0 );
+    }
+}
+
+// '' for a path that climbs out of its folder (zip-slip).
+function induction_transfer_safe_rel( string $path ): string {
+    $rel = ltrim( str_replace( '\\', '/', $path ), '/' );
+    if ( false !== strpos( $rel, '..' ) || preg_match( '#^[a-zA-Z]:#', $rel ) ) {
+        return '';
+    }
+    return $rel;
+}
+
+// Warnings suppressed: in a REST callback they would print into the JSON body.
+function induction_rrmdir( string $dir ): void {
+    if ( '' === $dir || ! is_dir( $dir ) ) {
+        return;
+    }
+    try {
+        $items = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator( $dir, FilesystemIterator::SKIP_DOTS ),
+            RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ( $items as $item ) {
+            $item->isDir() ? @rmdir( $item->getPathname() ) : @unlink( $item->getPathname() );
+        }
+    } catch ( \Throwable $e ) {
+    }
+    @rmdir( $dir );
+}
+
+// ── Export ──────────────────────────────────────────────────────────────────
 
 function induction_export_collect_media( int $attachment_id, array &$media, array &$budget ): void {
     if ( ! $attachment_id || isset( $media[ $attachment_id ] ) ) {
@@ -3308,103 +3445,117 @@ function induction_export_collect_media( int $attachment_id, array &$media, arra
         return;
     }
 
-    $path = get_attached_file( $attachment_id );
-    $size = ( $path && file_exists( $path ) ) ? (int) filesize( $path ) : 0;
-
+    $path  = get_attached_file( $attachment_id );
     $entry = [
-        'filename' => $path ? basename( $path ) : ( $post->post_name . '' ),
+        'filename' => $path ? basename( $path ) : (string) $post->post_name,
         'mime'     => (string) get_post_mime_type( $attachment_id ),
         'title'    => $post->post_title,
         'url'      => (string) wp_get_attachment_url( $attachment_id ),
-        'size'     => $size,
-        'data'     => null,
-        'embedded' => false,
+        'size'     => ( $path && file_exists( $path ) ) ? (int) filesize( $path ) : 0,
     ];
 
-    $fits = $size > 0
-        && $size <= INDUCTION_EXPORT_MAX_FILE_BYTES
-        && ( $budget['used'] + $size ) <= INDUCTION_EXPORT_MAX_TOTAL_BYTES;
-
-    if ( $fits ) {
-        $contents = file_get_contents( $path );
-        if ( false !== $contents ) {
-            $entry['data']     = base64_encode( $contents );
-            $entry['embedded'] = true;
-            $budget['used']   += $size;
-        }
-    } else {
-        // Over budget: the URL is still recorded so import can try to fetch it.
-        $budget['skipped'][] = $entry['filename'];
+    if ( ! $path || ! is_readable( $path ) ) {
+        $budget['skipped'][]     = $entry['filename']; // exported by URL only
+        $media[ $attachment_id ] = $entry;
+        return;
     }
 
+    $ext             = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) ) ?: 'bin';
+    $entry['file']   = "media/{$attachment_id}.{$ext}";
+    $entry['path']   = $path;
+    $budget['used'] += $entry['size'];
+
+    // Thumbnails travel too, so import can restore them instead of regenerating them.
+    $meta = wp_get_attachment_metadata( $attachment_id );
+    if ( is_array( $meta ) && ! empty( $meta['width'] ) ) {
+        $entry['width']  = (int) $meta['width'];
+        $entry['height'] = (int) ( $meta['height'] ?? 0 );
+        $entry['sizes']  = [];
+        foreach ( (array) ( $meta['sizes'] ?? [] ) as $name => $info ) {
+            $thumb = dirname( $path ) . '/' . ( $info['file'] ?? '' );
+            if ( empty( $info['file'] ) || ! is_readable( $thumb ) ) {
+                continue;
+            }
+            $entry['sizes'][ $name ] = [
+                'file'   => "media/{$attachment_id}/" . $info['file'],
+                'width'  => (int) ( $info['width'] ?? 0 ),
+                'height' => (int) ( $info['height'] ?? 0 ),
+                'path'   => $thumb,
+            ];
+            $budget['used'] += (int) filesize( $thumb );
+        }
+    }
     $media[ $attachment_id ] = $entry;
 }
 
-// Walks a decoded section tree for attachment IDs. Row blocks nest their
-// children, so this recurses rather than assuming a flat list.
-function induction_export_media_ids_in_blocks( array $blocks, array &$ids ): void {
-    foreach ( $blocks as $block ) {
-        if ( ! is_array( $block ) ) {
-            continue;
+// Attachment ids a module's content uses: id fields, plus upload URLs in any text.
+function induction_media_ids_in_value( $value, array &$ids, callable $url_to_id ): void {
+    if ( is_string( $value ) ) {
+        foreach ( induction_upload_urls_in( $value ) as $url ) {
+            $ids[] = (int) $url_to_id( $url );
         }
-        $data = $block['data'] ?? [];
-        if ( is_array( $data ) ) {
-            if ( ! empty( $data['mediaId'] ) ) {
-                $ids[] = (int) $data['mediaId'];
-            }
-            if ( ! empty( $data['children'] ) && is_array( $data['children'] ) ) {
-                $children = array_column( $data['children'], 'block' );
-                induction_export_media_ids_in_blocks( array_filter( $children, 'is_array' ), $ids );
-            }
+        return;
+    }
+    if ( ! is_array( $value ) ) {
+        return;
+    }
+    foreach ( $value as $key => $child ) {
+        if ( in_array( $key, INDUCTION_MEDIA_ID_KEYS, true ) && is_numeric( $child ) ) {
+            $ids[] = (int) $child;
+        } else {
+            induction_media_ids_in_value( $child, $ids, $url_to_id );
         }
     }
 }
 
-function induction_export_site(): WP_REST_Response {
-    global $wpdb;
+function induction_upload_urls_in( string $text ): array {
+    if ( false === strpos( $text, '/uploads/' ) ) {
+        return [];
+    }
+    preg_match_all( '#https?://[^\s"\'<>(),]+/uploads/[^\s"\'<>(),]+#i', $text, $matches );
+    return array_unique( $matches[0] );
+}
 
-    $media  = [];
-    $budget = [ 'used' => 0, 'skipped' => [] ];
+// Thumbnail and "-scaled" URLs resolve to their original attachment.
+function induction_attachment_id_from_url( string $url ): int {
+    static $cache = [];
+    $url = strtok( $url, '?#' );
+    if ( ! isset( $cache[ $url ] ) ) {
+        $full          = preg_replace( '/-\d+x\d+(?=\.[a-z0-9]+$)/i', '', $url );
+        $cache[ $url ] = attachment_url_to_postid( $full ) ?: attachment_url_to_postid( preg_replace( '/(\.[a-z0-9]+)$/i', '-scaled$1', $full ) );
+    }
+    return (int) $cache[ $url ];
+}
 
-    // ── Modules ──
-    $module_posts = get_posts( [
-        'post_type'      => 'induction_module',
+function induction_export_posts( string $type ): array {
+    return get_posts( [
+        'post_type'      => $type,
         'post_status'    => [ 'publish', 'draft' ],
         'posts_per_page' => -1,
         'orderby'        => 'ID',
         'order'          => 'ASC',
     ] );
+}
 
-    $module_refs = [];
-    $modules     = [];
-    foreach ( $module_posts as $post ) {
-        $ref = 'module-' . $post->ID;
-        $module_refs[ $post->ID ] = $ref;
+// Returns [ modules, refs by post id ].
+function induction_export_modules( array &$media, array &$budget ): array {
+    $modules = [];
+    $refs    = [];
+    foreach ( induction_export_posts( 'induction_module' ) as $post ) {
+        $refs[ $post->ID ] = 'module-' . $post->ID;
 
-        $blocks_json = (string) ( get_post_meta( $post->ID, 'module_blocks', true ) ?: '[]' );
-        $blocks      = json_decode( $blocks_json, true );
-        $blocks      = is_array( $blocks ) ? $blocks : [];
+        $blocks = json_decode( (string) ( get_post_meta( $post->ID, 'module_blocks', true ) ?: '[]' ), true );
+        $blocks = is_array( $blocks ) ? $blocks : [];
+        $hero   = (int) get_post_meta( $post->ID, 'module_hero_image', true );
 
-        $ids = [];
-        foreach ( $blocks as $section ) {
-            if ( ! is_array( $section ) ) {
-                continue;
-            }
-            induction_export_media_ids_in_blocks( (array) ( $section['blocks'] ?? [] ), $ids );
-            if ( ! empty( $section['heroImage'] ) && is_numeric( $section['heroImage'] ) ) {
-                $ids[] = (int) $section['heroImage'];
-            }
-        }
-        $hero = (int) get_post_meta( $post->ID, 'module_hero_image', true );
-        if ( $hero ) {
-            $ids[] = $hero;
-        }
+        $ids = [ $hero ];
+        induction_media_ids_in_value( [ $blocks, $post->post_content ], $ids, 'induction_attachment_id_from_url' );
         foreach ( array_unique( $ids ) as $id ) {
             induction_export_collect_media( $id, $media, $budget );
         }
 
         $modules[] = [
-            'ref'     => $ref,
+            'ref'     => $refs[ $post->ID ],
             'title'   => $post->post_title,
             'content' => $post->post_content,
             'excerpt' => $post->post_excerpt,
@@ -3421,18 +3572,14 @@ function induction_export_site(): WP_REST_Response {
             'blocks'  => $blocks,
         ];
     }
+    return [ $modules, $refs ];
+}
 
-    // ── Locations ──
+function induction_export_locations( array &$media, array &$budget ): array {
     $locations = [];
-    foreach ( get_posts( [
-        'post_type'      => 'induction_location',
-        'post_status'    => [ 'publish', 'draft' ],
-        'posts_per_page' => -1,
-    ] ) as $post ) {
+    foreach ( induction_export_posts( 'induction_location' ) as $post ) {
         $thumb = (int) get_post_meta( $post->ID, 'location_thumbnail_id', true );
-        if ( $thumb ) {
-            induction_export_collect_media( $thumb, $media, $budget );
-        }
+        induction_export_collect_media( $thumb, $media, $budget );
         $locations[] = [
             'title'        => $post->post_title,
             'status'       => $post->post_status,
@@ -3446,18 +3593,14 @@ function induction_export_site(): WP_REST_Response {
             'paths'        => (string) ( get_post_meta( $post->ID, 'location_paths', true ) ?: '[]' ),
         ];
     }
+    return $locations;
+}
 
-    // ── Documents ──
+function induction_export_documents( array &$media, array &$budget ): array {
     $documents = [];
-    foreach ( get_posts( [
-        'post_type'      => 'induction_document',
-        'post_status'    => [ 'publish', 'draft' ],
-        'posts_per_page' => -1,
-    ] ) as $post ) {
+    foreach ( induction_export_posts( 'induction_document' ) as $post ) {
         $file_id = (int) get_post_meta( $post->ID, 'document_file_id', true );
-        if ( $file_id ) {
-            induction_export_collect_media( $file_id, $media, $budget );
-        }
+        induction_export_collect_media( $file_id, $media, $budget );
         $documents[] = [
             'title'                 => $post->post_title,
             'status'                => $post->post_status,
@@ -3466,353 +3609,1344 @@ function induction_export_site(): WP_REST_Response {
             'document_role_targets' => (array) ( get_post_meta( $post->ID, 'document_role_targets', true ) ?: [] ),
         ];
     }
+    return $documents;
+}
 
-    // ── Records ── keyed by portable user reference, not user_id.
-    $user_ref = function ( int $user_id ): ?array {
-        $u = get_userdata( $user_id );
-        return $u ? [ 'login' => $u->user_login, 'email' => $u->user_email ] : null;
-    };
+function induction_export_user_ref( int $user_id ): ?array {
+    $user = get_userdata( $user_id );
+    return $user ? [ 'login' => $user->user_login, 'email' => $user->user_email ] : null;
+}
 
-    $progress_rows = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}induction_progress", ARRAY_A ) ?? [];
-    $progress = [];
-    foreach ( $progress_rows as $row ) {
-        $ref = $module_refs[ (int) $row['module_id'] ] ?? null;
-        $usr = $user_ref( (int) $row['user_id'] );
-        if ( ! $ref || ! $usr ) {
-            continue; // orphaned row: module or user is gone
-        }
-        unset( $row['id'], $row['user_id'], $row['module_id'] );
-        $progress[] = array_merge( [ 'module_ref' => $ref, 'user' => $usr ], $row );
-    }
-
-    $assignment_rows = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}induction_assignments", ARRAY_A ) ?? [];
-    $assignments = [];
-    foreach ( $assignment_rows as $row ) {
-        $ref = $module_refs[ (int) $row['module_id'] ] ?? null;
-        $usr = $user_ref( (int) $row['user_id'] );
-        if ( ! $ref || ! $usr ) {
+// Keyed by module ref and user login/email instead of ids; orphaned rows are left out.
+function induction_export_rows( string $table, array $module_refs, array $drop = [] ): array {
+    global $wpdb;
+    $rows = [];
+    foreach ( $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}induction_{$table}", ARRAY_A ) ?? [] as $row ) {
+        $ref  = $module_refs[ (int) $row['module_id'] ] ?? null;
+        $user = induction_export_user_ref( (int) $row['user_id'] );
+        if ( ! $ref || ! $user ) {
             continue;
         }
-        unset( $row['id'], $row['user_id'], $row['module_id'], $row['assigned_by'] );
-        $assignments[] = array_merge( [ 'module_ref' => $ref, 'user' => $usr ], $row );
-    }
-
-    $quiz_rows = $wpdb->get_results( "SELECT * FROM {$wpdb->prefix}induction_quiz_responses", ARRAY_A ) ?? [];
-    $quiz = [];
-    foreach ( $quiz_rows as $row ) {
-        $ref = $module_refs[ (int) $row['module_id'] ] ?? null;
-        $usr = $user_ref( (int) $row['user_id'] );
-        if ( ! $ref || ! $usr ) {
-            continue;
+        foreach ( array_merge( [ 'id', 'user_id', 'module_id' ], $drop ) as $column ) {
+            unset( $row[ $column ] );
         }
-        unset( $row['id'], $row['user_id'], $row['module_id'] );
-        $quiz[] = array_merge( [ 'module_ref' => $ref, 'user' => $usr ], $row );
+        $rows[] = array_merge( [ 'module_ref' => $ref, 'user' => $user ], $row );
+    }
+    return $rows;
+}
+
+function induction_export_collect(): array {
+    $media  = [];
+    $budget = [ 'used' => 0, 'skipped' => [] ];
+
+    [ $modules, $module_refs ] = induction_export_modules( $media, $budget );
+    $locations = induction_export_locations( $media, $budget );
+    $documents = induction_export_documents( $media, $budget );
+
+    // Never leak absolute server paths into the archive.
+    $manifest = [];
+    foreach ( $media as $id => $entry ) {
+        unset( $entry['path'] );
+        foreach ( array_keys( $entry['sizes'] ?? [] ) as $name ) {
+            unset( $entry['sizes'][ $name ]['path'] );
+        }
+        $manifest[ $id ] = $entry;
     }
 
-    return rest_ensure_response( [
-        'format'         => 'induction-platform-export',
-        'format_version' => INDUCTION_EXPORT_FORMAT_VERSION,
-        'exported_at'    => current_time( 'mysql' ),
-        'site'           => [
+    $envelope = [
+        'format'              => INDUCTION_EXPORT_FORMAT,
+        'format_version'      => INDUCTION_EXPORT_FORMAT_VERSION,
+        'exported_at'         => current_time( 'mysql' ),
+        'site'                => [
             'name' => wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ),
             'url'  => home_url( '/' ),
         ],
-        'modules'        => $modules,
-        'locations'      => $locations,
-        'documents'      => $documents,
+        'modules'             => $modules,
+        'locations'           => $locations,
+        'documents'           => $documents,
         'resource_categories' => induction_resource_categories(),
-        'media'          => $media,
-        'records'        => [
-            'progress'       => $progress,
-            'assignments'    => $assignments,
-            'quiz_responses' => $quiz,
+        'media'               => $manifest,
+        'records'             => [
+            'progress'       => induction_export_rows( 'progress', $module_refs ),
+            'assignments'    => induction_export_rows( 'assignments', $module_refs, [ 'assigned_by' ] ),
+            'quiz_responses' => induction_export_rows( 'quiz_responses', $module_refs ),
         ],
-        'notes'          => [
-            'media_bytes_embedded' => $budget['used'],
-            'media_not_embedded'   => $budget['skipped'],
+        'notes'               => [
+            'media_bytes_included' => $budget['used'],
+            'media_not_included'   => $budget['skipped'],
         ],
+    ];
+
+    return [
+        'content' => wp_json_encode( $envelope ) ?: '',
+        'media'   => array_values( array_filter( $media, static fn( $entry ) => isset( $entry['path'] ) ) ),
+        'skipped' => count( $budget['skipped'] ),
+        'bytes'   => $budget['used'],
+    ];
+}
+
+// A short-lived token stands in for the auth header, so the browser downloads the zip itself.
+function induction_export_prepare(): WP_REST_Response|WP_Error {
+    $export = induction_export_collect();
+    if ( '' === $export['content'] ) {
+        return new WP_Error( 'induction_export_encode', 'The site content could not be encoded for export.', [ 'status' => 500 ] );
+    }
+    $token = bin2hex( random_bytes( 32 ) );
+    set_transient( 'induction_export_' . hash( 'sha256', $token ), get_current_user_id(), INDUCTION_EXPORT_LINK_TTL );
+
+    return rest_ensure_response( [
+        'token'        => $token,
+        'files'        => count( $export['media'] ),
+        'bytes'        => $export['bytes'],
+        'skippedMedia' => $export['skipped'],
     ] );
 }
 
-// ── Import ──────────────────────────────────────────────────────────────────
-
-// Recreates one attachment, preferring the embedded bytes and falling back to
-// fetching the recorded URL. Returns the new attachment ID, or 0.
-function induction_import_media_item( array $entry ): int {
-    require_once ABSPATH . 'wp-admin/includes/file.php';
-    require_once ABSPATH . 'wp-admin/includes/media.php';
-    require_once ABSPATH . 'wp-admin/includes/image.php';
-
-    $filename = sanitize_file_name( (string) ( $entry['filename'] ?? 'import' ) );
-
-    if ( ! empty( $entry['data'] ) ) {
-        $bytes = base64_decode( (string) $entry['data'], true );
-        if ( false === $bytes ) {
-            return 0;
-        }
-        $upload = wp_upload_bits( $filename, null, $bytes );
-        if ( ! empty( $upload['error'] ) ) {
-            return 0;
-        }
-        $path = $upload['file'];
-    } elseif ( ! empty( $entry['url'] ) ) {
-        $tmp = download_url( (string) $entry['url'] );
-        if ( is_wp_error( $tmp ) ) {
-            return 0;
-        }
-        $upload = wp_upload_bits( $filename, null, (string) file_get_contents( $tmp ) );
-        @unlink( $tmp );
-        if ( ! empty( $upload['error'] ) ) {
-            return 0;
-        }
-        $path = $upload['file'];
-    } else {
-        return 0;
+function induction_export_permission( WP_REST_Request $request ): bool {
+    if ( induction_is_admin_user() ) {
+        return true;
     }
-
-    $attachment_id = wp_insert_attachment( [
-        'post_mime_type' => (string) ( $entry['mime'] ?? 'application/octet-stream' ),
-        'post_title'     => (string) ( $entry['title'] ?? $filename ),
-        'post_status'    => 'inherit',
-    ], $path );
-
-    if ( is_wp_error( $attachment_id ) || ! $attachment_id ) {
-        return 0;
+    $token = (string) $request->get_param( 'token' );
+    if ( ! preg_match( '/^[a-f0-9]{64}$/', $token ) ) {
+        return false;
     }
-
-    wp_update_attachment_metadata( $attachment_id, wp_generate_attachment_metadata( $attachment_id, $path ) );
-    return (int) $attachment_id;
+    $key     = 'induction_export_' . hash( 'sha256', $token );
+    $user_id = (int) get_transient( $key );
+    if ( ! $user_id ) {
+        return false;
+    }
+    delete_transient( $key ); // single use: the URL may end up in history or access logs
+    wp_set_current_user( $user_id );
+    return induction_is_admin_user();
 }
 
-// Rewrites attachment IDs inside a section tree using the old->new map.
-function induction_import_remap_blocks( array $blocks, array $map ): array {
-    foreach ( $blocks as &$block ) {
-        if ( ! is_array( $block ) ) {
+function induction_export_site(): WP_REST_Response|WP_Error {
+    induction_transfer_no_time_limit();
+    if ( ! class_exists( 'ZipArchive' ) ) {
+        return new WP_Error( 'induction_no_zip', 'The server is missing the Zip extension needed to build an export.', [ 'status' => 500 ] );
+    }
+    $export = induction_export_collect();
+    if ( '' === $export['content'] ) {
+        return new WP_Error( 'induction_export_encode', 'The site content could not be encoded for export.', [ 'status' => 500 ] );
+    }
+    $shortfall = induction_transfer_disk_shortfall( $export['bytes'] );
+    if ( $shortfall ) {
+        return new WP_Error( 'induction_disk_full', $shortfall, [ 'status' => 507 ] );
+    }
+
+    $path = induction_transfer_dir() . 'induction-export-' . wp_generate_uuid4() . '.zip';
+    $zip  = new ZipArchive();
+    if ( true !== $zip->open( $path, ZipArchive::CREATE ) ) {
+        return new WP_Error( 'induction_zip_failed', 'Could not create the export archive.', [ 'status' => 500 ] );
+    }
+    $zip->addFromString( 'content.json', $export['content'] );
+    foreach ( $export['media'] as $entry ) {
+        foreach ( array_merge( [ $entry ], $entry['sizes'] ?? [] ) as $file ) {
+            $zip->addFile( $file['path'], $file['file'] );
+            // Stored, not deflated: media is already compressed.
+            $zip->setCompressionName( $file['file'], ZipArchive::CM_STORE );
+        }
+    }
+    if ( ! $zip->close() ) {
+        @unlink( $path );
+        return new WP_Error( 'induction_zip_failed', 'Could not write the export archive (the server may be out of disk space).', [ 'status' => 500 ] );
+    }
+
+    // Send the file and exit. Keep running if the browser disconnects, so the temp zip is deleted.
+    ignore_user_abort( true );
+    while ( ob_get_level() > 0 ) {
+        ob_end_clean();
+    }
+    nocache_headers();
+    header( 'Content-Type: application/zip' );
+    header( 'Content-Disposition: attachment; filename="induction-export-' . gmdate( 'Y-m-d' ) . '.zip"' );
+    header( 'Content-Length: ' . filesize( $path ) );
+    readfile( $path );
+    @unlink( $path );
+    exit;
+}
+
+// ── Import: upload ──────────────────────────────────────────────────────────
+
+function induction_import_id( $raw ): string {
+    return substr( (string) preg_replace( '/[^a-zA-Z0-9\-]/', '', (string) $raw ), 0, 64 );
+}
+
+function induction_import_request_id( WP_REST_Request $request, string $param ): string|WP_Error {
+    $id = induction_import_id( $request->get_param( $param ) );
+    if ( '' === $id ) {
+        return new WP_Error( 'induction_bad_' . ( 'uploadId' === $param ? 'upload_id' : 'session' ), "Missing or invalid {$param}.", [ 'status' => 400 ] );
+    }
+    return $id;
+}
+
+function induction_import_part_path( string $upload_id ): string {
+    return induction_transfer_dir() . 'induction-upload-' . $upload_id . '.zip.part';
+}
+
+// Removes abandoned scratch data: bulky files after a day, an unfinished session (the
+// undo record) after a month, and a lock only once its session is gone.
+function induction_import_sweep_stale(): void {
+    $dir         = induction_transfer_dir();
+    $day_ago     = time() - DAY_IN_SECONDS;
+    $unfinished  = time() - INDUCTION_IMPORT_KEEP_UNFINISHED_DAYS * DAY_IN_SECONDS;
+    $older_than  = static fn( string $path, int $cutoff ): bool => (int) @filemtime( $path ) < $cutoff;
+
+    foreach ( [ 'induction-upload-*.zip.part', 'induction-session-*.tmp', 'induction-export-*.zip' ] as $pattern ) {
+        foreach ( glob( $dir . $pattern ) ?: [] as $path ) {
+            if ( $older_than( $path, $day_ago ) ) {
+                @unlink( $path );
+            }
+        }
+    }
+    foreach ( glob( $dir . 'induction-session-*.json' ) ?: [] as $path ) {
+        $session = json_decode( (string) @file_get_contents( $path ), true );
+        $done    = is_array( $session ) && 'done' === ( $session['phase'] ?? '' );
+        if ( $older_than( $path, $done ? $day_ago : $unfinished ) ) {
+            @unlink( $path );
+        }
+    }
+    foreach ( glob( $dir . 'induction-import-*', GLOB_ONLYDIR ) ?: [] as $path ) {
+        $session = induction_import_session_path( substr( basename( $path ), strlen( 'induction-import-' ) ) );
+        if ( $older_than( file_exists( $session ) ? $session : $path, $day_ago ) ) {
+            induction_rrmdir( $path );
+        }
+    }
+    foreach ( glob( $dir . 'induction-session-*.lock' ) ?: [] as $path ) {
+        $has_session = file_exists( substr( $path, 0, -strlen( '.lock' ) ) . '.json' );
+        if ( ! $has_session && $older_than( $path, $day_ago ) ) {
+            @unlink( $path );
+        }
+    }
+}
+
+function induction_import_chunk( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $upload_id = induction_import_request_id( $request, 'uploadId' );
+    if ( is_wp_error( $upload_id ) ) {
+        return $upload_id;
+    }
+
+    $index  = (int) $request->get_param( 'index' );
+    $offset = null === $request->get_param( 'offset' ) ? null : (int) $request->get_param( 'offset' );
+    $body   = $request->get_body();
+    if ( '' === $body ) {
+        $body = (string) file_get_contents( 'php://input' );
+    }
+    if ( '' === $body ) {
+        return new WP_Error( 'induction_empty_chunk', 'Empty chunk.', [ 'status' => 400 ] );
+    }
+
+    if ( 0 === $index ) {
+        induction_import_sweep_stale();
+        // Peak disk use is the .part file plus its extracted copy.
+        $shortfall = induction_transfer_disk_shortfall( 2 * (int) $request->get_param( 'total' ) );
+        if ( $shortfall ) {
+            return new WP_Error( 'induction_disk_full', $shortfall, [ 'status' => 507 ] );
+        }
+    }
+
+    $part = induction_import_part_path( $upload_id );
+    if ( 0 !== $index && ! file_exists( $part ) ) {
+        return new WP_Error( 'induction_chunk_out_of_order', 'Upload session not found; start the import again.', [ 'status' => 409 ] );
+    }
+
+    $fh = fopen( $part, 'cb' );
+    if ( ! $fh || ! flock( $fh, LOCK_EX ) ) {
+        return new WP_Error( 'induction_chunk_write', 'Could not buffer the upload.', [ 'status' => 500 ] );
+    }
+    if ( 0 === $index ) {
+        ftruncate( $fh, 0 );
+    }
+    $current = (int) fstat( $fh )['size'];
+
+    // Offsets make chunks idempotent: a resent chunk is acknowledged, a gap rejected.
+    $result = null;
+    if ( null !== $offset && 0 !== $index ) {
+        if ( $current === $offset + strlen( $body ) ) {
+            $result = rest_ensure_response( [ 'received' => $index + 1, 'duplicate' => true ] );
+        } elseif ( $current !== $offset ) {
+            $result = new WP_Error( 'induction_chunk_gap', 'Part of the upload went missing; start the import again.', [ 'status' => 409 ] );
+        }
+    }
+    if ( null === $result ) {
+        fseek( $fh, $current );
+        fwrite( $fh, $body );
+        fflush( $fh );
+        $result = rest_ensure_response( [ 'received' => $index + 1 ] );
+    }
+    flock( $fh, LOCK_UN );
+    fclose( $fh );
+    return $result;
+}
+
+// Streams each entry: unzip_file() loads whole entries into memory and fatals on big videos.
+function induction_unzip_streaming( string $zip_path, string $dest_dir ): bool|WP_Error {
+    if ( ! class_exists( 'ZipArchive' ) ) {
+        return new WP_Error( 'induction_no_zip', 'The server is missing the Zip extension needed to read an export.', [ 'status' => 500 ] );
+    }
+    $zip = new ZipArchive();
+    if ( true !== $zip->open( $zip_path ) ) {
+        return new WP_Error( 'induction_bad_zip', 'That file could not be read as a zip archive.', [ 'status' => 400 ] );
+    }
+    if ( ! wp_mkdir_p( $dest_dir ) ) {
+        $zip->close();
+        return new WP_Error( 'induction_extract_dir', 'Could not create a working directory for the import.', [ 'status' => 500 ] );
+    }
+
+    for ( $i = 0; $i < $zip->numFiles; $i++ ) {
+        $name = (string) $zip->getNameIndex( $i );
+        $rel  = induction_transfer_safe_rel( $name );
+        if ( '' === $rel ) {
             continue;
         }
-        if ( isset( $block['data'] ) && is_array( $block['data'] ) ) {
-            if ( ! empty( $block['data']['mediaId'] ) ) {
-                $old = (int) $block['data']['mediaId'];
-                $block['data']['mediaId'] = $map[ $old ] ?? 0;
-                if ( isset( $block['data']['url'] ) && ! empty( $map[ $old ] ) ) {
-                    $block['data']['url'] = (string) wp_get_attachment_url( $map[ $old ] );
-                }
-            }
-            if ( ! empty( $block['data']['children'] ) && is_array( $block['data']['children'] ) ) {
-                foreach ( $block['data']['children'] as &$child ) {
-                    if ( isset( $child['block'] ) && is_array( $child['block'] ) ) {
-                        $remapped      = induction_import_remap_blocks( [ $child['block'] ], $map );
-                        $child['block'] = $remapped[0];
-                    }
-                }
-                unset( $child );
+        $target = rtrim( $dest_dir, '/\\' ) . '/' . $rel;
+        if ( '/' === substr( $name, -1 ) ) {
+            wp_mkdir_p( $target );
+            continue;
+        }
+        wp_mkdir_p( dirname( $target ) );
+        $in = $zip->getStream( $name );
+        if ( ! $in ) {
+            continue;
+        }
+        $out = fopen( $target, 'wb' );
+        if ( ! $out ) {
+            fclose( $in );
+            $zip->close();
+            return new WP_Error( 'induction_extract_write', 'Could not write an extracted file.', [ 'status' => 500 ] );
+        }
+        stream_copy_to_stream( $in, $out );
+        fclose( $in );
+        fclose( $out );
+    }
+    $zip->close();
+    return true;
+}
+
+// Not realpath(): it returns false under Windows temp dirs and rejected every file.
+function induction_import_safe_extracted_path( string $extract_dir, string $rel ): string {
+    $rel = induction_transfer_safe_rel( $rel );
+    if ( '' === $rel ) {
+        return '';
+    }
+    $path = rtrim( $extract_dir, '/\\' ) . '/' . $rel;
+    return is_file( $path ) ? $path : '';
+}
+
+function induction_import_read_payload( string $extract_dir ): ?array {
+    $path    = trailingslashit( $extract_dir ) . 'content.json';
+    $payload = file_exists( $path ) ? json_decode( (string) file_get_contents( $path ), true ) : null;
+    return is_array( $payload ) ? $payload : null;
+}
+
+function induction_import_check_format( ?array $payload ): ?WP_Error {
+    if ( null === $payload || ( $payload['format'] ?? '' ) !== INDUCTION_EXPORT_FORMAT ) {
+        return new WP_Error( 'induction_bad_export', 'That archive is not an induction platform export.', [ 'status' => 400 ] );
+    }
+    if ( (int) ( $payload['format_version'] ?? 0 ) > INDUCTION_EXPORT_FORMAT_VERSION ) {
+        return new WP_Error( 'induction_export_too_new', 'That export was made by a newer version of the plugin than this site is running.', [ 'status' => 400 ] );
+    }
+    return null;
+}
+
+// ── Import: session store ───────────────────────────────────────────────────
+
+final class Induction_Session_Save_Error extends RuntimeException {}
+
+function induction_import_session_path( string $id ): string {
+    return induction_transfer_dir() . 'induction-session-' . $id . '.json';
+}
+
+function induction_import_lock_path( string $id ): string {
+    return induction_transfer_dir() . 'induction-session-' . $id . '.lock';
+}
+
+function induction_import_session_load( string $id ): ?array {
+    $path = induction_import_session_path( $id );
+    if ( ! file_exists( $path ) ) {
+        return null;
+    }
+    $data = json_decode( (string) file_get_contents( $path ), true );
+    return is_array( $data ) ? $data : null;
+}
+
+// Temp file + rename, so a killed worker never leaves a truncated session.
+function induction_import_session_save( string $id, array $session ): bool {
+    $path = induction_import_session_path( $id );
+    $tmp  = $path . '.tmp';
+    $json = wp_json_encode( $session );
+    if ( ! $json || false === file_put_contents( $tmp, $json ) ) {
+        return false;
+    }
+    if ( @rename( $tmp, $path ) ) {
+        return true;
+    }
+    $copied = @copy( $tmp, $path );
+    @unlink( $tmp );
+    return $copied;
+}
+
+function induction_import_session_delete( string $id ): void {
+    @unlink( induction_import_session_path( $id ) );
+}
+
+function induction_import_new_session( string $extract_dir ): array {
+    return [
+        'extract_dir'     => $extract_dir,
+        'phase'           => 'media',
+        'cursor'          => 0,
+        'processed'       => 0,
+        'total'           => 0,
+        'media_map'       => [],
+        'module_ref_map'  => [],
+        'categories_done' => false,
+        'created'         => [ 'attachments' => [], 'modules' => [], 'posts' => [], 'categories' => [] ],
+        'summary'         => [
+            'modules'                      => 0,
+            'locations'                    => 0,
+            'documents'                    => 0,
+            'media'                        => 0,
+            'progress'                     => 0,
+            'assignments'                  => 0,
+            'quiz_responses'               => 0,
+            'media_failed'                 => 0,
+            'items_failed'                 => 0,
+            'records_skipped_unknown_user' => 0,
+        ],
+    ];
+}
+
+function induction_import_checkpoint( array $session ): void {
+    if ( ! empty( $session['id'] ) && ! induction_import_session_save( (string) $session['id'], $session ) ) {
+        throw new Induction_Session_Save_Error( 'Could not save import progress.' );
+    }
+}
+
+// Serialises requests per session: PHP keeps running after a client gives up and retries.
+function induction_import_with_lock( string $id, callable $fn ): WP_REST_Response|WP_Error {
+    $lock = @fopen( induction_import_lock_path( $id ), 'c' );
+    if ( ! $lock || ! flock( $lock, LOCK_EX ) ) {
+        return new WP_Error( 'induction_session_lock', 'Could not lock the import session.', [ 'status' => 500 ] );
+    }
+    try {
+        return $fn();
+    } finally {
+        flock( $lock, LOCK_UN );
+        fclose( $lock );
+    }
+}
+
+// ── Import: endpoints ───────────────────────────────────────────────────────
+
+function induction_import_begin( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id = induction_import_request_id( $request, 'uploadId' );
+    if ( is_wp_error( $id ) ) {
+        return $id;
+    }
+    return induction_import_with_lock( $id, fn() => induction_import_begin_locked( $id, (int) $request->get_param( 'size' ) ) );
+}
+
+function induction_import_begin_locked( string $id, int $expected_size ): WP_REST_Response|WP_Error {
+    // A retried /begin whose response was lost gets the existing session back.
+    $existing = induction_import_session_load( $id );
+    if ( is_array( $existing ) ) {
+        $payload = induction_import_read_payload( (string) ( $existing['extract_dir'] ?? '' ) ) ?? [];
+        return rest_ensure_response( [ 'sessionId' => $id, 'total' => (int) ( $existing['total'] ?? 0 ), 'contents' => induction_import_contents( $payload ) ] );
+    }
+
+    $part = induction_import_part_path( $id );
+    if ( ! file_exists( $part ) ) {
+        return new WP_Error( 'induction_no_upload', 'No uploaded data was found for that session.', [ 'status' => 400 ] );
+    }
+    if ( $expected_size > 0 && (int) filesize( $part ) !== $expected_size ) {
+        @unlink( $part );
+        return new WP_Error( 'induction_incomplete_upload', 'The upload was incomplete; please try again.', [ 'status' => 400 ] );
+    }
+
+    $extract_dir = induction_transfer_dir() . 'induction-import-' . $id;
+    induction_rrmdir( $extract_dir );
+    $unzipped = induction_unzip_streaming( $part, $extract_dir );
+    @unlink( $part );
+    if ( is_wp_error( $unzipped ) ) {
+        induction_rrmdir( $extract_dir );
+        return $unzipped;
+    }
+
+    $payload = induction_import_read_payload( $extract_dir );
+    $invalid = induction_import_check_format( $payload );
+    if ( $invalid ) {
+        induction_rrmdir( $extract_dir );
+        return $invalid;
+    }
+
+    $total = 0;
+    foreach ( array_keys( INDUCTION_IMPORT_NEXT_PHASE ) as $phase ) {
+        $total += count( induction_import_phase_items( $payload, $phase ) );
+    }
+
+    $session          = induction_import_new_session( $extract_dir );
+    $session['id']    = $id;
+    $session['total'] = $total;
+    induction_import_session_save( $id, $session );
+
+    return rest_ensure_response( [ 'sessionId' => $id, 'total' => $total, 'contents' => induction_import_contents( $payload ) ] );
+}
+
+// Items are keyed by their position in the backup.
+function induction_import_contents( array $payload ): array {
+    $contents = [];
+    foreach ( array_keys( INDUCTION_IMPORT_POST_TYPES ) as $phase ) {
+        $contents[ $phase ] = [];
+        foreach ( induction_import_phase_items( $payload, $phase ) as $index => $item ) {
+            if ( is_array( $item ) ) {
+                $contents[ $phase ][] = [
+                    'index'  => $index,
+                    'title'  => sanitize_text_field( (string) ( $item['title'] ?? '' ) ),
+                    'status' => 'publish' === ( $item['status'] ?? '' ) ? 'publish' : 'draft',
+                ];
             }
         }
     }
-    unset( $block );
-    return $blocks;
+    return $contents;
 }
 
-function induction_import_site( WP_REST_Request $request ): WP_REST_Response|WP_Error {
-    global $wpdb;
-
-    $payload = $request->get_json_params();
-    if ( ! is_array( $payload ) || ( $payload['format'] ?? '' ) !== 'induction-platform-export' ) {
-        return new WP_Error( 'induction_bad_export', 'That file is not an induction platform export.', [ 'status' => 400 ] );
+function induction_import_select( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id = induction_import_request_id( $request, 'sessionId' );
+    if ( is_wp_error( $id ) ) {
+        return $id;
     }
-    if ( (int) ( $payload['format_version'] ?? 0 ) > INDUCTION_EXPORT_FORMAT_VERSION ) {
+    $picked = [];
+    foreach ( array_keys( INDUCTION_IMPORT_POST_TYPES ) as $phase ) {
+        $picked[ $phase ] = array_values( array_unique( array_map( 'intval', (array) $request->get_param( $phase ) ) ) );
+    }
+    return induction_import_with_lock( $id, fn() => induction_import_select_locked( $id, $picked ) );
+}
+
+// Only before the import starts. Media and records follow the picked items.
+function induction_import_select_locked( string $id, array $picked ): WP_REST_Response|WP_Error {
+    $session = induction_import_session_load( $id );
+    if ( ! is_array( $session ) ) {
+        return new WP_Error( 'induction_no_session', 'Import session not found.', [ 'status' => 404 ] );
+    }
+    if ( 'media' !== $session['phase'] || $session['processed'] > 0 ) {
+        return new WP_Error( 'induction_import_started', 'This import has already started.', [ 'status' => 409 ] );
+    }
+    $payload = induction_import_read_payload( (string) ( $session['extract_dir'] ?? '' ) );
+    if ( null === $payload ) {
+        return new WP_Error( 'induction_session_lost', 'The uploaded export is no longer on the server.', [ 'status' => 410 ] );
+    }
+
+    $modules     = induction_import_phase_items( $payload, 'modules' );
+    $module_refs = [];
+    foreach ( $picked['modules'] as $index ) {
+        $module_refs[] = (string) ( $modules[ $index ]['ref'] ?? '' );
+    }
+    $session['selection'] = $picked + [
+        'media'       => induction_import_needed_media( $payload, $picked ),
+        'module_refs' => array_values( array_filter( $module_refs ) ),
+    ];
+    induction_import_session_save( $id, $session );
+    return rest_ensure_response( [ 'selected' => true ] );
+}
+
+function induction_import_needed_media( array $payload, array $picked ): array {
+    $ids       = [];
+    $modules   = induction_import_phase_items( $payload, 'modules' );
+    $locations = induction_import_phase_items( $payload, 'locations' );
+    $documents = induction_import_phase_items( $payload, 'documents' );
+
+    // URLs are matched against the backup's own media list: they point at the old site.
+    $known     = induction_import_backup_urls( $payload );
+    $url_to_id = static fn( string $url ): int => $known[ strtok( $url, '?#' ) ] ?? 0;
+    foreach ( $picked['modules'] as $index ) {
+        $module = $modules[ $index ] ?? null;
+        if ( is_array( $module ) ) {
+            $ids[] = (int) ( $module['meta']['module_hero_image'] ?? 0 );
+            induction_media_ids_in_value( [ $module['blocks'] ?? [], (string) ( $module['content'] ?? '' ) ], $ids, $url_to_id );
+        }
+    }
+    foreach ( $picked['locations'] as $index ) {
+        $ids[] = (int) ( $locations[ $index ]['thumbnail_id'] ?? 0 );
+    }
+    foreach ( $picked['documents'] as $index ) {
+        $ids[] = (int) ( $documents[ $index ]['document_file_id'] ?? 0 );
+    }
+    return array_values( array_unique( array_filter( $ids ) ) );
+}
+
+function induction_import_step( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    induction_transfer_no_time_limit();
+    $id = induction_import_request_id( $request, 'sessionId' );
+    if ( is_wp_error( $id ) ) {
+        return $id;
+    }
+    return induction_import_with_lock( $id, fn() => induction_import_step_locked( $id ) );
+}
+
+function induction_import_step_locked( string $id ): WP_REST_Response|WP_Error {
+    $session = induction_import_session_load( $id );
+    if ( ! is_array( $session ) ) {
+        return new WP_Error( 'induction_no_session', 'Import session not found; start the import again.', [ 'status' => 400 ] );
+    }
+    // Kept after finishing, so a retried final step gets the same summary.
+    if ( 'done' === $session['phase'] ) {
+        return rest_ensure_response( [ 'done' => true, 'summary' => $session['summary'] ] );
+    }
+    if ( 'undoing' === $session['phase'] ) {
+        return new WP_Error( 'induction_import_undoing', 'This import is being undone.', [ 'status' => 409 ] );
+    }
+
+    $extract_dir = (string) ( $session['extract_dir'] ?? '' );
+    $payload     = induction_import_read_payload( $extract_dir );
+    if ( null === $payload ) {
+        return new WP_Error( 'induction_session_lost', 'The uploaded export is no longer on the server, so this import cannot continue. You can undo what it added, then import again.', [ 'status' => 410 ] );
+    }
+
+    $deadline = microtime( true ) + INDUCTION_IMPORT_STEP_SECONDS;
+    try {
+        do {
+            induction_import_advance_one( $session, $payload );
+        } while ( 'done' !== $session['phase'] && microtime( true ) < $deadline );
+        $saved = induction_import_session_save( $id, $session );
+    } catch ( Induction_Session_Save_Error $e ) {
+        $saved = false;
+    }
+    if ( ! $saved ) {
+        return new WP_Error( 'induction_disk_full', 'The server could not save import progress (it may be out of disk space). Free some space, then resume.', [ 'status' => 507 ] );
+    }
+
+    if ( 'done' === $session['phase'] ) {
+        induction_rrmdir( $extract_dir ); // only now: the session is already saved as done
+        return rest_ensure_response( [ 'done' => true, 'summary' => $session['summary'] ] );
+    }
+    return rest_ensure_response( [
+        'done'      => false,
+        'processed' => (int) $session['processed'],
+        'total'     => (int) ( $session['total'] ?? 0 ),
+    ] );
+}
+
+function induction_import_status( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $id = induction_import_request_id( $request, 'sessionId' );
+    if ( is_wp_error( $id ) ) {
+        return $id;
+    }
+    return induction_import_with_lock( $id, fn() => induction_import_status_locked( $id ) );
+}
+
+function induction_import_status_locked( string $id ): WP_REST_Response|WP_Error {
+    $session = induction_import_session_load( $id );
+    if ( ! is_array( $session ) ) {
+        return new WP_Error( 'induction_no_session', 'Import session not found.', [ 'status' => 404 ] );
+    }
+    $running   = ! in_array( $session['phase'], [ 'done', 'undoing' ], true );
+    $resumable = $running && null !== induction_import_read_payload( (string) ( $session['extract_dir'] ?? '' ) );
+    return rest_ensure_response( [
+        'phase'     => (string) $session['phase'],
+        'done'      => 'done' === $session['phase'],
+        'resumable' => $resumable,
+        'processed' => (int) $session['processed'],
+        'total'     => (int) ( $session['total'] ?? 0 ),
+        'summary'   => $session['summary'],
+    ] );
+}
+
+function induction_import_undo( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    induction_transfer_no_time_limit();
+    $id = induction_import_request_id( $request, 'sessionId' );
+    if ( is_wp_error( $id ) ) {
+        return $id;
+    }
+    return induction_import_with_lock( $id, fn() => induction_import_undo_locked( $id ) );
+}
+
+// Removes exactly what one import created, in ~15s slices like /step.
+function induction_import_undo_locked( string $id ): WP_REST_Response|WP_Error {
+    global $wpdb;
+    $session = induction_import_session_load( $id );
+    if ( ! is_array( $session ) ) {
+        return new WP_Error( 'induction_no_session', 'Import session not found.', [ 'status' => 404 ] );
+    }
+
+    $session['phase']   = 'undoing'; // /step refuses from here on
+    $session['created'] = (array) ( $session['created'] ?? [] );
+    induction_import_discard_attempt( $session );
+    $session['removed'] = (array) ( $session['removed'] ?? [] ) + [ 'attachments' => 0, 'modules' => 0, 'posts' => 0, 'rows' => 0 ];
+    $created            = &$session['created'];
+    $removed            = &$session['removed'];
+
+    if ( empty( $session['rows_removed'] ) ) {
+        foreach ( array_chunk( array_map( 'intval', (array) ( $created['modules'] ?? [] ) ), 500 ) as $module_ids ) {
+            $in = implode( ',', $module_ids ); // ints only
+            foreach ( [ 'progress', 'assignments', 'quiz_responses', 'module_versions' ] as $table ) {
+                $removed['rows'] += (int) $wpdb->query( "DELETE FROM {$wpdb->prefix}induction_{$table} WHERE module_id IN ({$in})" );
+            }
+        }
+        if ( ! empty( $created['categories'] ) ) {
+            induction_save_resource_categories( array_diff_key( induction_resource_categories(), array_flip( (array) $created['categories'] ) ) );
+            $created['categories'] = [];
+        }
+        $session['rows_removed'] = true;
+        induction_import_session_save( $id, $session );
+    }
+
+    $deadline = microtime( true ) + INDUCTION_IMPORT_STEP_SECONDS;
+    foreach ( [ 'posts' => 'wp_delete_post', 'modules' => 'wp_delete_post', 'attachments' => 'wp_delete_attachment' ] as $key => $delete ) {
+        while ( ! empty( $created[ $key ] ) && microtime( true ) < $deadline ) {
+            $delete( (int) array_pop( $created[ $key ] ), true );
+            $removed[ $key ]++;
+            induction_import_session_save( $id, $session );
+        }
+    }
+
+    $remaining = count( $created['posts'] ?? [] ) + count( $created['modules'] ?? [] ) + count( $created['attachments'] ?? [] );
+    if ( $remaining > 0 ) {
+        return rest_ensure_response( [ 'done' => false, 'remaining' => $remaining, 'removed' => $removed ] );
+    }
+    induction_rrmdir( (string) ( $session['extract_dir'] ?? '' ) );
+    induction_import_session_delete( $id );
+    return rest_ensure_response( [ 'done' => true, 'removed' => $removed ] );
+}
+
+// One-shot import (multipart zip, or a v1 JSON body) for callers that don't chunk.
+function induction_import_site( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $file = $request->get_file_params()['file'] ?? null;
+
+    if ( is_array( $file ) && isset( $file['error'] ) && UPLOAD_ERR_OK !== (int) $file['error'] ) {
+        $too_big = in_array( (int) $file['error'], [ UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE ], true );
         return new WP_Error(
-            'induction_export_too_new',
-            'That export was made by a newer version of the plugin than this site is running.',
+            'induction_upload_error',
+            $too_big
+                ? 'That export is larger than this server accepts (upload_max_filesize / post_max_size). Raise those limits or reduce the export size.'
+                : 'The upload did not complete. Please try again.',
             [ 'status' => 400 ]
         );
     }
+    if ( is_array( $file ) && ! empty( $file['tmp_name'] ) && is_uploaded_file( $file['tmp_name'] ) ) {
+        return induction_import_zip_file( $file['tmp_name'] );
+    }
 
-    $summary = [
-        'modules' => 0, 'locations' => 0, 'documents' => 0, 'media' => 0,
-        'progress' => 0, 'assignments' => 0, 'quiz_responses' => 0,
-        'media_failed' => 0, 'records_skipped_unknown_user' => 0,
+    $payload = $request->get_json_params();
+    if ( is_array( $payload ) ) {
+        return induction_import_from_payload( $payload, '' );
+    }
+    return new WP_Error( 'induction_no_file', 'No export archive was uploaded.', [ 'status' => 400 ] );
+}
+
+function induction_import_zip_file( string $zip_path ): WP_REST_Response|WP_Error {
+    $extract_dir = induction_transfer_dir() . 'induction-import-' . wp_generate_uuid4();
+    try {
+        $unzipped = induction_unzip_streaming( $zip_path, $extract_dir );
+        if ( is_wp_error( $unzipped ) ) {
+            return $unzipped;
+        }
+        $payload = induction_import_read_payload( $extract_dir );
+        return null === $payload
+            ? induction_import_check_format( null )
+            : induction_import_from_payload( $payload, $extract_dir );
+    } finally {
+        induction_rrmdir( $extract_dir );
+    }
+}
+
+function induction_import_from_payload( array $payload, string $extract_dir ): WP_REST_Response|WP_Error {
+    induction_transfer_no_time_limit();
+    $invalid = induction_import_check_format( $payload );
+    if ( $invalid ) {
+        return $invalid;
+    }
+    $session = induction_import_new_session( $extract_dir );
+    while ( 'done' !== $session['phase'] ) {
+        induction_import_advance_one( $session, $payload );
+    }
+    return rest_ensure_response( [ 'imported' => true, 'summary' => $session['summary'] ] );
+}
+
+// ── Import: engine ──────────────────────────────────────────────────────────
+
+// Content references media by id, and records reference modules by ref.
+const INDUCTION_IMPORT_NEXT_PHASE = [
+    'media'          => 'modules',
+    'modules'        => 'locations',
+    'locations'      => 'documents',
+    'documents'      => 'progress',
+    'progress'       => 'assignments',
+    'assignments'    => 'quiz_responses',
+    'quiz_responses' => 'done',
+];
+
+const INDUCTION_IMPORT_POST_TYPES = [
+    'modules'   => 'induction_module',
+    'locations' => 'induction_location',
+    'documents' => 'induction_document',
+];
+
+// Cached: rebuilding the list for every item would make big imports quadratic.
+function induction_import_phase_items( array $payload, string $phase ): array {
+    static $cache = [];
+    if ( isset( $cache[ $phase ] ) ) {
+        return $cache[ $phase ];
+    }
+    if ( 'media' === $phase ) {
+        $items = [];
+        foreach ( (array) ( $payload['media'] ?? [] ) as $old_id => $entry ) {
+            $items[] = [ $old_id, $entry ];
+        }
+    } elseif ( isset( INDUCTION_IMPORT_POST_TYPES[ $phase ] ) ) {
+        $items = array_values( (array) ( $payload[ $phase ] ?? [] ) );
+    } else {
+        $items = array_values( (array) ( $payload['records'][ $phase ] ?? [] ) );
+    }
+    return $cache[ $phase ] = $items;
+}
+
+// One item. Media and posts are checkpointed, so a crash resumes at the right place. An item
+// that was mid-flight when PHP died is skipped, or one bad file would stall the import forever.
+function induction_import_advance_one( array &$session, array $payload ): void {
+    $phase = (string) $session['phase'];
+    if ( ! isset( INDUCTION_IMPORT_NEXT_PHASE[ $phase ] ) ) {
+        $session['phase'] = 'done';
+        return;
+    }
+    if ( 'documents' === $phase && empty( $session['categories_done'] ) ) {
+        $session['created']['categories'] = induction_import_categories( (array) ( $payload['resource_categories'] ?? [] ) );
+        $session['categories_done']       = true;
+        induction_import_checkpoint( $session );
+    }
+
+    $items = induction_import_phase_items( $payload, $phase );
+    $i     = (int) $session['cursor'];
+    if ( $i >= count( $items ) ) {
+        $session['phase']  = INDUCTION_IMPORT_NEXT_PHASE[ $phase ];
+        $session['cursor'] = 0;
+        return;
+    }
+
+    if ( ! induction_import_is_selected( $session, $phase, $i, $items[ $i ] ) ) {
+        $session['cursor'] = $i + 1;
+        $session['processed']++;
+        return;
+    }
+
+    $guarded  = 'media' === $phase || isset( INDUCTION_IMPORT_POST_TYPES[ $phase ] );
+    $marker   = "{$phase}:{$i}";
+    $fail_key = 'media' === $phase ? 'media_failed' : 'items_failed';
+
+    if ( $guarded && ( $session['attempt'] ?? '' ) === $marker ) {
+        $session['summary'][ $fail_key ]++;
+        induction_import_discard_attempt( $session );
+    } else {
+        if ( $guarded ) {
+            $session['attempt'] = $marker;
+            induction_import_checkpoint( $session );
+        }
+        try {
+            induction_import_one_item( $session, $payload, $phase, $items[ $i ] );
+        } catch ( Induction_Session_Save_Error $e ) {
+            throw $e;
+        } catch ( \Throwable $e ) {
+            // A TypeError on one malformed row fails that item, not the step.
+            $session['summary'][ $fail_key ]++;
+            induction_import_discard_attempt( $session );
+            error_log( "induction import: {$marker} failed: " . $e->getMessage() );
+        }
+    }
+
+    induction_import_clear_attempt( $session );
+    $session['cursor'] = $i + 1;
+    $session['processed']++;
+    if ( $guarded ) {
+        induction_import_checkpoint( $session );
+    }
+}
+
+// Everything is selected until /import/select narrows it. Records follow their module.
+function induction_import_is_selected( array $session, string $phase, int $index, $item ): bool {
+    $selection = $session['selection'] ?? null;
+    if ( null === $selection ) {
+        return true;
+    }
+    if ( 'media' === $phase ) {
+        return in_array( (int) $item[0], $selection['media'], true );
+    }
+    if ( isset( INDUCTION_IMPORT_POST_TYPES[ $phase ] ) ) {
+        return in_array( $index, $selection[ $phase ], true );
+    }
+    return is_array( $item ) && in_array( (string) ( $item['module_ref'] ?? '' ), $selection['module_refs'], true );
+}
+
+// Every upload URL in the backup (full size and thumbnails) -> its old attachment id.
+function induction_import_backup_urls( array $payload ): array {
+    $urls = [];
+    foreach ( induction_import_phase_items( $payload, 'media' ) as [ $old_id, $entry ] ) {
+        if ( ! is_array( $entry ) || empty( $entry['url'] ) ) {
+            continue;
+        }
+        $urls[ (string) $entry['url'] ] = (int) $old_id;
+        foreach ( (array) ( $entry['sizes'] ?? [] ) as $size ) {
+            if ( is_array( $size ) && ! empty( $size['file'] ) ) {
+                $urls[ dirname( (string) $entry['url'] ) . '/' . basename( (string) $size['file'] ) ] = (int) $old_id;
+            }
+        }
+    }
+    return $urls;
+}
+
+function induction_import_clear_attempt( array &$session ): void {
+    unset( $session['attempt'], $session['attempt_attachment'], $session['attempt_file'], $session['attempt_post'] );
+}
+
+function induction_import_discard_attempt( array &$session ): void {
+    global $wpdb;
+    $post       = (int) ( $session['attempt_post'] ?? 0 );
+    $attachment = (int) ( $session['attempt_attachment'] ?? 0 );
+    if ( $post ) {
+        wp_delete_post( $post, true );
+        $wpdb->delete( $wpdb->prefix . 'induction_module_versions', [ 'module_id' => $post ] );
+        induction_import_forget( $session, 'modules', $post );
+        induction_import_forget( $session, 'posts', $post );
+    } elseif ( $attachment ) {
+        wp_delete_attachment( $attachment, true );
+        induction_import_forget( $session, 'attachments', $attachment );
+    } elseif ( ! empty( $session['attempt_file'] ) && is_file( $session['attempt_file'] ) ) {
+        @unlink( $session['attempt_file'] );
+    }
+    induction_import_clear_attempt( $session );
+}
+
+function induction_import_forget( array &$session, string $key, int $id ): void {
+    $session['created'][ $key ] = array_values( array_diff( (array) ( $session['created'][ $key ] ?? [] ), [ $id ] ) );
+}
+
+function induction_import_one_item( array &$session, array $payload, string $phase, $item ): void {
+    if ( 'media' === $phase ) {
+        induction_import_one_media( $session, $item );
+        return;
+    }
+    if ( ! is_array( $item ) ) {
+        return;
+    }
+    if ( ! isset( INDUCTION_IMPORT_POST_TYPES[ $phase ] ) ) {
+        // Record rows: undo removes them by module_id, so they need no tracking.
+        $result = induction_import_one_record( $phase, $item, (array) $session['module_ref_map'] );
+        if ( 'imported' === $result ) {
+            $session['summary'][ $phase ]++;
+        } elseif ( 'skipped' === $result ) {
+            $session['summary']['records_skipped_unknown_user']++;
+        }
+        return;
+    }
+
+    if ( 'modules' === $phase ) {
+        $item = induction_import_remap_module( $item, $payload, (array) $session['media_map'] );
+    }
+    $id = induction_import_insert_post( INDUCTION_IMPORT_POST_TYPES[ $phase ], $item );
+    if ( ! $id ) {
+        return;
+    }
+    // Recorded before its meta is written, so undo and a crash retry can find it.
+    $list                            = 'modules' === $phase ? 'modules' : 'posts';
+    $session['attempt_post']         = $id;
+    $session['created'][ $list ][]   = $id;
+    induction_import_checkpoint( $session );
+
+    $media_map = (array) $session['media_map'];
+    if ( 'modules' === $phase ) {
+        induction_import_module_meta( $id, $item );
+        if ( ! empty( $item['ref'] ) ) {
+            $session['module_ref_map'][ (string) $item['ref'] ] = $id;
+        }
+    } elseif ( 'locations' === $phase ) {
+        induction_import_location_meta( $id, $item, $media_map );
+    } else {
+        induction_import_document_meta( $id, $item, $media_map );
+    }
+    $session['summary'][ $phase ]++;
+}
+
+function induction_import_one_media( array &$session, array $item ): void {
+    [ $old_id, $entry ] = $item;
+    if ( ! is_array( $entry ) ) {
+        return;
+    }
+    $file = induction_import_place_media( $entry, (string) $session['extract_dir'] );
+    if ( ! $file ) {
+        $session['summary']['media_failed']++;
+        return;
+    }
+    $session['attempt_file'] = $file['path'];
+    induction_import_checkpoint( $session );
+
+    $id = induction_import_insert_attachment( $entry, $file );
+    if ( ! $id ) {
+        @unlink( $file['path'] );
+        $session['summary']['media_failed']++;
+        return;
+    }
+    $session['attempt_attachment']        = $id;
+    $session['created']['attachments'][] = $id;
+    induction_import_checkpoint( $session );
+
+    $meta = induction_import_restore_sizes( $entry, $file, (string) $session['extract_dir'] );
+    if ( null === $meta ) {
+        // Slow, and the step most likely to kill PHP; everything above is already recorded.
+        require_once ABSPATH . 'wp-admin/includes/image.php';
+        $meta = wp_generate_attachment_metadata( $id, $file['path'] );
+    }
+    wp_update_attachment_metadata( $id, $meta );
+    $session['media_map'][ (int) $old_id ] = $id;
+    $session['summary']['media']++;
+}
+
+// ── Import: item helpers ────────────────────────────────────────────────────
+
+// From the zip (v2), embedded base64 (v1) or its URL. Returns [ path, name, type ] or null.
+function induction_import_place_media( array $entry, string $extract_dir ): ?array {
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+
+    $filename = sanitize_file_name( (string) ( $entry['filename'] ?? 'import' ) );
+    $src      = '';
+    $cleanup  = '';
+
+    if ( ! empty( $entry['file'] ) && '' !== $extract_dir ) {
+        $src = induction_import_safe_extracted_path( $extract_dir, (string) $entry['file'] );
+    }
+    if ( '' === $src && ! empty( $entry['data'] ) ) {
+        $bytes = base64_decode( (string) $entry['data'], true );
+        if ( false !== $bytes ) {
+            $src     = wp_tempnam( $filename );
+            $cleanup = $src;
+            if ( false === file_put_contents( $src, $bytes ) ) {
+                @unlink( $src );
+                return null;
+            }
+        }
+    }
+    if ( '' === $src && ! empty( $entry['url'] ) ) {
+        $tmp = download_url( (string) $entry['url'], INDUCTION_IMPORT_URL_TIMEOUT );
+        if ( ! is_wp_error( $tmp ) ) {
+            $src     = $tmp;
+            $cleanup = $tmp;
+        }
+    }
+    if ( '' === $src ) {
+        return null;
+    }
+
+    // Untrusted archive: same type check as a normal upload, or x.php could land in uploads.
+    $check = wp_check_filetype_and_ext( $src, $filename );
+    if ( ! empty( $check['proper_filename'] ) ) {
+        $filename = $check['proper_filename'];
+    }
+    $allowed    = $check['type'] || current_user_can( 'unfiltered_upload' );
+    $upload_dir = wp_upload_dir();
+    if ( ! $allowed || ! empty( $upload_dir['error'] ) ) {
+        if ( '' !== $cleanup ) {
+            @unlink( $cleanup );
+        }
+        return null;
+    }
+
+    $name  = induction_import_free_name( $upload_dir['path'], $filename, induction_import_size_suffixes( $entry ) );
+    $path  = trailingslashit( $upload_dir['path'] ) . $name;
+    $moved = @rename( $src, $path ) || @copy( $src, $path );
+    if ( '' !== $cleanup ) {
+        @unlink( $cleanup );
+    }
+    return $moved ? [ 'path' => $path, 'name' => $name, 'type' => $check['type'] ?: 'application/octet-stream' ] : null;
+}
+
+// Not wp_unique_filename(): it scans the whole upload folder on every call, which made
+// imports crawl. A name is free when neither it nor its thumbnail names exist yet.
+function induction_import_free_name( string $dir, string $filename, array $suffixes ): string {
+    $ext  = pathinfo( $filename, PATHINFO_EXTENSION );
+    $dot  = '' !== $ext ? ".{$ext}" : '';
+    $base = pathinfo( $filename, PATHINFO_FILENAME );
+    for ( $n = 0; ; $n++ ) {
+        $stem  = $n ? "{$base}-{$n}" : $base;
+        $taken = file_exists( "{$dir}/{$stem}{$dot}" );
+        foreach ( $suffixes as $suffix ) {
+            $taken = $taken || file_exists( "{$dir}/{$stem}-{$suffix}" );
+        }
+        if ( ! $taken ) {
+            return $stem . $dot;
+        }
+    }
+}
+
+function induction_import_size_suffix( array $size, string $ext ): string {
+    return sprintf( '%dx%d.%s', (int) ( $size['width'] ?? 0 ), (int) ( $size['height'] ?? 0 ), $ext );
+}
+
+function induction_import_size_suffixes( array $entry ): array {
+    $suffixes = [];
+    foreach ( (array) ( $entry['sizes'] ?? [] ) as $size ) {
+        if ( is_array( $size ) && ! empty( $size['file'] ) ) {
+            $suffixes[] = induction_import_size_suffix( $size, pathinfo( (string) $size['file'], PATHINFO_EXTENSION ) );
+        }
+    }
+    return $suffixes;
+}
+
+// Null when the export has no thumbnails (older exports, non-images): the caller regenerates.
+function induction_import_restore_sizes( array $entry, array $file, string $extract_dir ): ?array {
+    if ( ! isset( $entry['sizes'] ) || ! is_array( $entry['sizes'] ) || '' === $extract_dir ) {
+        return null;
+    }
+    if ( 0 !== strpos( $file['type'], 'image/' ) ) {
+        return null;
+    }
+
+    $dir   = dirname( $file['path'] );
+    $stem  = pathinfo( $file['name'], PATHINFO_FILENAME );
+    $sizes = [];
+    foreach ( $entry['sizes'] as $name => $size ) {
+        $src  = is_array( $size ) ? induction_import_safe_extracted_path( $extract_dir, (string) ( $size['file'] ?? '' ) ) : '';
+        $base = sanitize_file_name( basename( (string) ( $size['file'] ?? '' ) ) );
+        $type = '' !== $src ? wp_check_filetype_and_ext( $src, $base )['type'] : false;
+        if ( ! $type ) {
+            continue;
+        }
+        // Two sizes can share dimensions, and so a file.
+        $target = $stem . '-' . induction_import_size_suffix( $size, pathinfo( $base, PATHINFO_EXTENSION ) );
+        if ( file_exists( "{$dir}/{$target}" ) || @rename( $src, "{$dir}/{$target}" ) || @copy( $src, "{$dir}/{$target}" ) ) {
+            $sizes[ sanitize_key( (string) $name ) ] = [
+                'file'      => $target,
+                'width'     => (int) ( $size['width'] ?? 0 ),
+                'height'    => (int) ( $size['height'] ?? 0 ),
+                'mime-type' => $type,
+            ];
+        }
+    }
+
+    $dimensions = @getimagesize( $file['path'] );
+    return [
+        'width'      => (int) ( $dimensions[0] ?? $entry['width'] ?? 0 ),
+        'height'     => (int) ( $dimensions[1] ?? $entry['height'] ?? 0 ),
+        'file'       => _wp_relative_upload_path( $file['path'] ),
+        'filesize'   => (int) filesize( $file['path'] ),
+        'sizes'      => $sizes,
+        'image_meta' => [],
     ];
+}
 
-    // ── Media first: everything else references it ──
-    $media_map = [];
-    foreach ( (array) ( $payload['media'] ?? [] ) as $old_id => $entry ) {
-        if ( ! is_array( $entry ) ) {
-            continue;
-        }
-        $new_id = induction_import_media_item( $entry );
-        if ( $new_id ) {
-            $media_map[ (int) $old_id ] = $new_id;
-            $summary['media']++;
-        } else {
-            $summary['media_failed']++;
-        }
+function induction_import_insert_attachment( array $entry, array $file ): int {
+    $id = wp_insert_attachment( [
+        'post_mime_type' => $file['type'],
+        'post_title'     => (string) ( $entry['title'] ?? $file['name'] ),
+        'post_status'    => 'inherit',
+    ], $file['path'] );
+    return is_wp_error( $id ) ? 0 : (int) $id;
+}
+
+// Old upload URL -> new URL for everything imported so far, thumbnails included.
+function induction_import_url_map( array $payload, array $media_map ): array {
+    static $map   = [];
+    static $built = -1;
+    if ( count( $media_map ) === $built ) {
+        return $map;
     }
-
-    // ── Modules ── always created fresh; import never overwrites existing content.
-    $module_id_by_ref = [];
-    foreach ( (array) ( $payload['modules'] ?? [] ) as $module ) {
-        if ( ! is_array( $module ) ) {
+    $map = [];
+    foreach ( induction_import_phase_items( $payload, 'media' ) as [ $old_id, $entry ] ) {
+        $new_id = $media_map[ (int) $old_id ] ?? 0;
+        if ( ! $new_id || ! is_array( $entry ) || empty( $entry['url'] ) ) {
             continue;
         }
-        $new_id = wp_insert_post( [
-            'post_type'    => 'induction_module',
-            'post_title'   => sanitize_text_field( (string) ( $module['title'] ?? '' ) ),
-            'post_content' => wp_kses_post( (string) ( $module['content'] ?? '' ) ),
-            'post_excerpt' => sanitize_text_field( (string) ( $module['excerpt'] ?? '' ) ),
-            'post_status'  => 'publish' === ( $module['status'] ?? 'draft' ) ? 'publish' : 'draft',
-        ], true );
-        if ( is_wp_error( $new_id ) ) {
-            continue;
-        }
-
-        $meta   = (array) ( $module['meta'] ?? [] );
-        $blocks = induction_import_remap_blocks( (array) ( $module['blocks'] ?? [] ), $media_map );
-
-        // Sections carry their own hero image ID, remapped alongside the blocks.
-        foreach ( $blocks as &$section ) {
-            if ( is_array( $section ) && ! empty( $section['heroImage'] ) && is_numeric( $section['heroImage'] ) ) {
-                $section['heroImage'] = $media_map[ (int) $section['heroImage'] ] ?? '';
-            }
-            if ( is_array( $section ) && ! empty( $section['blocks'] ) ) {
-                $section['blocks'] = induction_import_remap_blocks( (array) $section['blocks'], $media_map );
+        $new_url                        = (string) wp_get_attachment_url( $new_id );
+        $map[ (string) $entry['url'] ] = $new_url;
+        $meta                           = wp_get_attachment_metadata( $new_id );
+        foreach ( (array) ( $entry['sizes'] ?? [] ) as $name => $size ) {
+            $new_file = $meta['sizes'][ sanitize_key( (string) $name ) ]['file'] ?? '';
+            if ( is_array( $size ) && ! empty( $size['file'] ) && '' !== $new_file ) {
+                $map[ dirname( (string) $entry['url'] ) . '/' . basename( (string) $size['file'] ) ] = dirname( $new_url ) . '/' . $new_file;
             }
         }
-        unset( $section );
-
-        $hero = (int) ( $meta['module_hero_image'] ?? 0 );
-        update_post_meta( $new_id, 'module_role_targets', (array) ( $meta['module_role_targets'] ?? [] ) );
-        update_post_meta( $new_id, 'module_estimated_minutes', (int) ( $meta['module_estimated_minutes'] ?? 0 ) );
-        update_post_meta( $new_id, 'module_order', (int) ( $meta['module_order'] ?? 0 ) );
-        update_post_meta( $new_id, 'module_duration_days', (int) ( $meta['module_duration_days'] ?? 0 ) );
-        update_post_meta( $new_id, 'module_icon', induction_slash_meta( sanitize_text_field( (string) ( $meta['module_icon'] ?? '' ) ) ) );
-        update_post_meta( $new_id, 'module_hero_image', $hero ? ( $media_map[ $hero ] ?? 0 ) : 0 );
-        update_post_meta( $new_id, 'quiz_pass_threshold', (int) ( $meta['quiz_pass_threshold'] ?? 70 ) );
-
-        $encoded = induction_encode_meta_json( $blocks );
-        if ( null !== $encoded ) {
-            update_post_meta( $new_id, 'module_blocks', induction_slash_meta( $encoded ) );
-            induction_snapshot_module_blocks( (int) $new_id, $encoded );
-        }
-
-        if ( ! empty( $module['ref'] ) ) {
-            $module_id_by_ref[ (string) $module['ref'] ] = (int) $new_id;
-        }
-        $summary['modules']++;
     }
+    $built = count( $media_map );
+    return $map;
+}
 
-    // ── Locations ──
-    foreach ( (array) ( $payload['locations'] ?? [] ) as $loc ) {
-        if ( ! is_array( $loc ) ) {
+// Points id fields, upload URLs and wp-image-N classes at the restored media.
+function induction_import_remap_content( $value, array $media_map, array $url_map ) {
+    if ( is_string( $value ) ) {
+        if ( false !== strpos( $value, '/uploads/' ) ) {
+            $value = strtr( $value, $url_map );
+        }
+        if ( false !== strpos( $value, 'wp-image-' ) ) {
+            $value = preg_replace_callback( '/wp-image-(\d+)/', static fn( $m ) => 'wp-image-' . ( $media_map[ (int) $m[1] ] ?? $m[1] ), $value );
+        }
+        return $value;
+    }
+    if ( ! is_array( $value ) ) {
+        return $value;
+    }
+    foreach ( $value as $key => $child ) {
+        $is_id         = in_array( $key, INDUCTION_MEDIA_ID_KEYS, true ) && is_numeric( $child ) && (int) $child > 0;
+        $value[ $key ] = $is_id ? ( $media_map[ (int) $child ] ?? 0 ) : induction_import_remap_content( $child, $media_map, $url_map );
+    }
+    if ( ! empty( $value['mediaId'] ) && isset( $value['url'] ) ) {
+        $value['url'] = (string) wp_get_attachment_url( (int) $value['mediaId'] );
+    }
+    return $value;
+}
+
+function induction_import_remap_module( array $module, array $payload, array $media_map ): array {
+    $url_map           = induction_import_url_map( $payload, $media_map );
+    $sections          = induction_import_clean_sections( induction_normalize_sections( (array) ( $module['blocks'] ?? [] ) ) );
+    $module['blocks']  = induction_import_remap_content( $sections, $media_map, $url_map );
+    $module['content'] = induction_import_remap_content( (string) ( $module['content'] ?? '' ), $media_map, $url_map );
+
+    $meta                      = (array) ( $module['meta'] ?? [] );
+    $hero                      = (int) ( $meta['module_hero_image'] ?? 0 );
+    $meta['module_hero_image'] = $hero ? ( $media_map[ $hero ] ?? 0 ) : 0;
+    $module['meta']            = $meta;
+    return $module;
+}
+
+// Import bypasses the editor, so drop malformed sections: every reader assumes arrays.
+function induction_import_clean_sections( array $sections ): array {
+    $clean = [];
+    foreach ( $sections as $section ) {
+        if ( ! is_array( $section ) ) {
             continue;
         }
-        $new_id = wp_insert_post( [
-            'post_type'   => 'induction_location',
-            'post_title'  => sanitize_text_field( (string) ( $loc['title'] ?? '' ) ),
-            'post_status' => 'publish' === ( $loc['status'] ?? 'draft' ) ? 'publish' : 'draft',
-        ], true );
-        if ( is_wp_error( $new_id ) ) {
-            continue;
-        }
-        $thumb = (int) ( $loc['thumbnail_id'] ?? 0 );
-        induction_save_location_meta( (int) $new_id, [
-            'address'      => (string) ( $loc['address'] ?? '' ),
-            'lat'          => (float) ( $loc['lat'] ?? 0 ),
-            'lng'          => (float) ( $loc['lng'] ?? 0 ),
-            'zoom'         => (int) ( $loc['zoom'] ?? 17 ),
-            'thumbnail_id' => $thumb ? ( $media_map[ $thumb ] ?? 0 ) : 0,
-            'notes'        => (string) ( $loc['notes'] ?? '' ),
-            'markers'      => (string) ( $loc['markers'] ?? '[]' ),
-            'paths'        => (string) ( $loc['paths'] ?? '[]' ),
-        ] );
-        $summary['locations']++;
+        $section['blocks']     = array_values( array_filter( (array) ( $section['blocks'] ?? [] ), 'is_array' ) );
+        $section['quizBlocks'] = array_values( array_filter( (array) ( $section['quizBlocks'] ?? [] ), 'is_array' ) );
+        $clean[]               = $section;
     }
+    return $clean;
+}
 
-    // ── Documents ──
-    // Categories before documents: a document references its category by slug,
-    // and an import that landed the slug without its label would leave the
-    // library filtering on a category nobody can name.
-    $incoming_categories = (array) ( $payload['resource_categories'] ?? [] );
-    if ( $incoming_categories ) {
-        $merged = induction_resource_categories();
-        foreach ( $incoming_categories as $slug => $label ) {
-            $slug = sanitize_key( (string) $slug );
-            // Never overwrite a label this site has already chosen for a slug.
-            if ( '' !== $slug && ! isset( $merged[ $slug ] ) ) {
-                $merged[ $slug ] = mb_substr(
-                    sanitize_text_field( (string) $label ),
-                    0,
-                    INDUCTION_RESOURCE_CATEGORY_LABEL_MAX_LENGTH
-                );
-            }
-        }
-        induction_save_resource_categories( $merged );
+// Always created fresh; import never overwrites. Returns the new id, or 0.
+function induction_import_insert_post( string $type, array $item ): int {
+    global $wpdb;
+    $title = sanitize_text_field( (string) ( $item['title'] ?? '' ) );
+    // A copy beside a current version is labelled and starts as a draft, for review.
+    $taken = '' !== $title && $wpdb->get_var( $wpdb->prepare(
+        "SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND post_title = %s AND post_status IN ('publish', 'draft') LIMIT 1",
+        $type,
+        $title
+    ) );
+    $status = 'publish' === ( $item['status'] ?? 'draft' ) ? 'publish' : 'draft';
+    if ( $taken ) {
+        $title .= ' (restored ' . wp_date( 'j M' ) . ')';
+        $status = 'draft';
     }
-
-    foreach ( (array) ( $payload['documents'] ?? [] ) as $doc ) {
-        if ( ! is_array( $doc ) ) {
-            continue;
-        }
-        $new_id = wp_insert_post( [
-            'post_type'   => 'induction_document',
-            'post_title'  => sanitize_text_field( (string) ( $doc['title'] ?? '' ) ),
-            'post_status' => 'publish' === ( $doc['status'] ?? 'draft' ) ? 'publish' : 'draft',
-        ], true );
-        if ( is_wp_error( $new_id ) ) {
-            continue;
-        }
-        $file = (int) ( $doc['document_file_id'] ?? 0 );
-        update_post_meta( $new_id, 'document_category', induction_slash_meta( sanitize_text_field( (string) ( $doc['document_category'] ?? '' ) ) ) );
-        update_post_meta( $new_id, 'document_file_id', $file ? ( $media_map[ $file ] ?? 0 ) : 0 );
-        update_post_meta( $new_id, 'document_role_targets', (array) ( $doc['document_role_targets'] ?? [] ) );
-        $summary['documents']++;
-    }
-
-    // ── Records ── matched to users that already exist here; never created.
-    $resolve_user = function ( $ref ) {
-        if ( ! is_array( $ref ) ) {
-            return 0;
-        }
-        $by_login = ! empty( $ref['login'] ) ? get_user_by( 'login', $ref['login'] ) : false;
-        if ( $by_login ) {
-            return (int) $by_login->ID;
-        }
-        $by_email = ! empty( $ref['email'] ) ? get_user_by( 'email', $ref['email'] ) : false;
-        return $by_email ? (int) $by_email->ID : 0;
-    };
-
-    $record_sets = [
-        'progress'       => $wpdb->prefix . 'induction_progress',
-        'assignments'    => $wpdb->prefix . 'induction_assignments',
-        'quiz_responses' => $wpdb->prefix . 'induction_quiz_responses',
+    $post = [
+        'post_type'   => $type,
+        'post_title'  => $title,
+        'post_status' => $status,
     ];
+    if ( 'induction_module' === $type ) {
+        $post['post_content'] = wp_kses_post( (string) ( $item['content'] ?? '' ) );
+        $post['post_excerpt'] = sanitize_text_field( (string) ( $item['excerpt'] ?? '' ) );
+    }
+    $id = wp_insert_post( $post, true );
+    return is_wp_error( $id ) ? 0 : (int) $id;
+}
 
-    foreach ( $record_sets as $key => $table ) {
-        foreach ( (array) ( $payload['records'][ $key ] ?? [] ) as $row ) {
-            if ( ! is_array( $row ) ) {
-                continue;
-            }
-            $user_id   = $resolve_user( $row['user'] ?? null );
-            $module_id = $module_id_by_ref[ (string) ( $row['module_ref'] ?? '' ) ] ?? 0;
-            if ( ! $user_id || ! $module_id ) {
-                $summary['records_skipped_unknown_user']++;
-                continue;
-            }
-            unset( $row['user'], $row['module_ref'] );
-            $row['user_id']   = $user_id;
-            $row['module_id'] = $module_id;
-            if ( 'assignments' === $key ) {
-                $row['assigned_by'] = get_current_user_id();
-            }
-            // Duplicate (user, module[, block]) rows are rejected by the unique
-            // keys; that is the intended behaviour on a re-import.
-            if ( $wpdb->insert( $table, $row ) ) {
-                $summary[ $key ]++;
+// $module has already been through induction_import_remap_module().
+function induction_import_module_meta( int $id, array $module ): void {
+    $meta     = (array) ( $module['meta'] ?? [] );
+    $sections = (array) ( $module['blocks'] ?? [] );
+    update_post_meta( $id, 'module_role_targets', (array) ( $meta['module_role_targets'] ?? [] ) );
+    update_post_meta( $id, 'module_estimated_minutes', (int) ( $meta['module_estimated_minutes'] ?? 0 ) );
+    update_post_meta( $id, 'module_order', (int) ( $meta['module_order'] ?? 0 ) );
+    update_post_meta( $id, 'module_duration_days', (int) ( $meta['module_duration_days'] ?? 0 ) );
+    update_post_meta( $id, 'module_icon', induction_slash_meta( sanitize_text_field( (string) ( $meta['module_icon'] ?? '' ) ) ) );
+    update_post_meta( $id, 'module_hero_image', (int) ( $meta['module_hero_image'] ?? 0 ) );
+    update_post_meta( $id, 'quiz_pass_threshold', (int) ( $meta['quiz_pass_threshold'] ?? 70 ) );
+
+    $encoded = induction_encode_meta_json( $sections );
+    if ( null !== $encoded ) {
+        update_post_meta( $id, 'module_blocks', induction_slash_meta( $encoded ) );
+        induction_snapshot_module_blocks( $id, $encoded );
+    }
+}
+
+function induction_import_location_meta( int $id, array $loc, array $media_map ): void {
+    $thumb = (int) ( $loc['thumbnail_id'] ?? 0 );
+    induction_save_location_meta( $id, [
+        'address'      => (string) ( $loc['address'] ?? '' ),
+        'lat'          => (float) ( $loc['lat'] ?? 0 ),
+        'lng'          => (float) ( $loc['lng'] ?? 0 ),
+        'zoom'         => (int) ( $loc['zoom'] ?? 17 ),
+        'thumbnail_id' => $thumb ? ( $media_map[ $thumb ] ?? 0 ) : 0,
+        'notes'        => (string) ( $loc['notes'] ?? '' ),
+        'markers'      => (string) ( $loc['markers'] ?? '[]' ),
+        'paths'        => (string) ( $loc['paths'] ?? '[]' ),
+    ] );
+}
+
+function induction_import_document_meta( int $id, array $doc, array $media_map ): void {
+    $file = (int) ( $doc['document_file_id'] ?? 0 );
+    update_post_meta( $id, 'document_category', induction_slash_meta( sanitize_text_field( (string) ( $doc['document_category'] ?? '' ) ) ) );
+    update_post_meta( $id, 'document_file_id', $file ? ( $media_map[ $file ] ?? 0 ) : 0 );
+    update_post_meta( $id, 'document_role_targets', (array) ( $doc['document_role_targets'] ?? [] ) );
+}
+
+// Never overwrites an existing label. Returns the slugs it added, for undo.
+function induction_import_categories( array $incoming ): array {
+    if ( ! $incoming ) {
+        return [];
+    }
+    $merged = induction_resource_categories();
+    $added  = [];
+    foreach ( $incoming as $slug => $label ) {
+        if ( count( $merged ) >= INDUCTION_RESOURCE_CATEGORY_MAX ) {
+            break;
+        }
+        $slug  = sanitize_key( (string) $slug );
+        $label = mb_substr( sanitize_text_field( is_scalar( $label ) ? (string) $label : '' ), 0, INDUCTION_RESOURCE_CATEGORY_LABEL_MAX_LENGTH );
+        if ( '' !== $slug && '' !== $label && ! isset( $merged[ $slug ] ) ) {
+            $merged[ $slug ] = $label;
+            $added[]         = $slug;
+        }
+    }
+    induction_save_resource_categories( $merged );
+    return $added;
+}
+
+function induction_import_resolve_user( array $ref ): int {
+    foreach ( [ 'login', 'email' ] as $field ) {
+        if ( ! empty( $ref[ $field ] ) && is_string( $ref[ $field ] ) ) {
+            $user = get_user_by( $field, $ref[ $field ] );
+            if ( $user ) {
+                return (int) $user->ID;
             }
         }
     }
+    return 0;
+}
 
-    return rest_ensure_response( [ 'imported' => true, 'summary' => $summary ] );
+// Returns 'imported', 'skipped' (no matching user or module) or 'duplicate'.
+function induction_import_one_record( string $table, array $row, array $module_ref_map ): string {
+    global $wpdb;
+    $user_id   = induction_import_resolve_user( (array) ( $row['user'] ?? [] ) );
+    $module_id = $module_ref_map[ (string) ( $row['module_ref'] ?? '' ) ] ?? 0;
+    if ( ! $user_id || ! $module_id ) {
+        return 'skipped';
+    }
+    unset( $row['user'], $row['module_ref'] );
+    $row['user_id']   = $user_id;
+    $row['module_id'] = (int) $module_id;
+    if ( 'assignments' === $table ) {
+        $row['assigned_by'] = get_current_user_id();
+    }
+
+    // Only columns this table has: one unknown column (from a newer export) fails the insert.
+    static $columns = [];
+    $table_name     = $wpdb->prefix . 'induction_' . $table;
+    if ( ! isset( $columns[ $table_name ] ) ) {
+        $columns[ $table_name ] = array_flip( (array) $wpdb->get_col( "SHOW COLUMNS FROM `{$table_name}`" ) );
+    }
+    $row = array_filter(
+        array_intersect_key( $row, $columns[ $table_name ] ),
+        static fn( $value ) => null === $value || is_scalar( $value )
+    );
+    unset( $row['id'] );
+    // A duplicate row hits a unique key: the intended no-op on re-import.
+    return $wpdb->insert( $table_name, $row ) ? 'imported' : 'duplicate';
 }
 
 // ─── Module Content History ─────────────────────────────────────────────────
@@ -4637,6 +5771,15 @@ function induction_get_module( WP_REST_Request $request ): WP_REST_Response|WP_E
     $post = get_post( (int) $request['id'] );
     if ( ! $post || $post->post_type !== 'induction_module' ) {
         return new WP_Error( 'not_found', 'Module not found.', [ 'status' => 404 ] );
+    }
+    // Staff get what wp/v2 gives them: published modules, without draft sections.
+    if ( ! current_user_can( 'manage_induction' ) ) {
+        if ( 'publish' !== $post->post_status ) {
+            return new WP_Error( 'not_found', 'Module not found.', [ 'status' => 404 ] );
+        }
+        $data = induction_format_module( $post );
+        $data['meta']['module_blocks'] = induction_strip_unpublished_sections_json( (string) $data['meta']['module_blocks'] );
+        return rest_ensure_response( $data );
     }
     return rest_ensure_response( induction_format_module( $post ) );
 }
