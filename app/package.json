@@ -19,6 +19,9 @@
     "test:e2e": "cypress run --spec \"cypress/e2e/lifecycle/**/*.cy.ts\"",
     "test:open": "cypress open"
   },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "dependencies": {
     "@dnd-kit/helpers": "^0.4.0",
     "@dnd-kit/react": "^0.4.0",
