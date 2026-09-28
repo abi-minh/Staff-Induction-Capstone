@@ -10,10 +10,12 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import PublishIcon from '@mui/icons-material/SendOutlined';
 import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined';
 import HistoryIcon from '@mui/icons-material/History';
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { useCreateModule, useModule, useUpdateModule } from '../hooks/useModules';
 import { useUploadMedia } from '../hooks/useDocuments';
 import { useStaff, useBulkAssign, useUnassign, useRoles, useAssignRole, useUnassignRole } from '../hooks/useStaff';
-import { createSection, parseSections } from '../blocks/utils';
+import { createSection, moveItem, parseSections } from '../blocks/utils';
 import { ICON_OPTIONS, getIconByKey } from '../components/iconLibrary';
 import ModuleHistoryDialog from '../components/ModuleHistoryDialog';
 import { stickyActionBarSx } from '../theme';
@@ -219,6 +221,15 @@ export default function ModuleEditPage() {
     setInitialSnapshot(createEditorSnapshot(form, sections, assignedUserIds, assignedRoles));
     setInitialAssignedUserIds(assignedUserIds);
     setInitialAssignedRoles(assignedRoles);
+  }
+
+  // Order is the array order — there is no per-section order field — so moving
+  // a section is just moving it in state. Persisted by Save like every other
+  // section edit, rather than written immediately: an author reordering three
+  // sections should not fire three writes, and Back already warns on unsaved
+  // changes because the dirty snapshot serialises `sections`.
+  function handleMoveSection(from: number, to: number) {
+    setSections((current) => moveItem(current, from, to));
   }
 
   async function handleAddSection() {
@@ -498,6 +509,30 @@ export default function ModuleEditPage() {
                     <Typography variant="body2" color="text.secondary">
                       {section.blocks.length} block{section.blocks.length !== 1 ? 's' : ''} · {section.quizBlocks.length} question{section.quizBlocks.length !== 1 ? 's' : ''}
                     </Typography>
+                  </Box>
+                  {/* Buttons rather than a drag handle. Sections are few and
+                      the list is short, so a nudge is no slower; unlike a drag
+                      gesture it works from the keyboard and on a phone, it can
+                      be covered by the Cypress suite, and it does not add a
+                      second dnd-kit surface while the block editor's
+                      "Invalid instance type" crash is still unresolved. */}
+                  <Box sx={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+                    <IconButton
+                      size="small"
+                      aria-label={`Move "${section.title || 'Untitled section'}" up`}
+                      disabled={index === 0}
+                      onClick={() => handleMoveSection(index, index - 1)}
+                    >
+                      <ArrowUpwardIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                    <IconButton
+                      size="small"
+                      aria-label={`Move "${section.title || 'Untitled section'}" down`}
+                      disabled={index === sections.length - 1}
+                      onClick={() => handleMoveSection(index, index + 1)}
+                    >
+                      <ArrowDownwardIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
                   </Box>
                   <Button
                     variant="outlined"

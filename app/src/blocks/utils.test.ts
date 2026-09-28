@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clampRowColumns, createBlock, createSection, isQuizBlock, parseSections } from './utils';
+import { clampRowColumns, createBlock, createSection, isQuizBlock, moveItem, parseSections } from './utils';
 import { MAX_ROW_COLUMNS, MIN_ROW_COLUMNS } from '../types';
 import type { Block, PlacedBlock, RowChildBlock, Section } from '../types';
 
@@ -138,5 +138,52 @@ describe('block and section factories', () => {
     expect(isQuizBlock(createBlock('short_answer'))).toBe(true);
     expect(isQuizBlock(createBlock('text'))).toBe(false);
     expect(isQuizBlock(createBlock('row'))).toBe(false);
+  });
+});
+
+// Reordering sections in the module editor. The editor's dirty check compares a
+// serialised snapshot of `sections`, so identity matters as much as contents:
+// a move that changes nothing must hand back the same array, or an untouched
+// module starts claiming it has unsaved changes.
+describe('moveItem', () => {
+  const list = ['a', 'b', 'c', 'd'];
+
+  it('moves an item later in the list', () => {
+    expect(moveItem(list, 0, 2)).to.deep.eq(['b', 'c', 'a', 'd']);
+  });
+
+  it('moves an item earlier in the list', () => {
+    expect(moveItem(list, 3, 1)).to.deep.eq(['a', 'd', 'b', 'c']);
+  });
+
+  it('nudges by one in both directions', () => {
+    expect(moveItem(list, 1, 0)).to.deep.eq(['b', 'a', 'c', 'd']);
+    expect(moveItem(list, 1, 2)).to.deep.eq(['a', 'c', 'b', 'd']);
+  });
+
+  it('does not mutate the array it was given', () => {
+    const original = [...list];
+    moveItem(list, 0, 3);
+    expect(list).to.deep.eq(original);
+  });
+
+  // The controls at the ends of the list are disabled, but a keyboard repeat or
+  // a future drag can still ask for an out-of-range move.
+  it('returns the same array for a no-op or out-of-range move', () => {
+    expect(moveItem(list, 2, 2)).to.eq(list);
+    expect(moveItem(list, -1, 1)).to.eq(list);
+    expect(moveItem(list, 0, 4)).to.eq(list);
+    expect(moveItem(list, 9, 0)).to.eq(list);
+  });
+
+  it('handles empty and single-item lists', () => {
+    expect(moveItem([], 0, 0)).to.deep.eq([]);
+    expect(moveItem(['only'], 0, 1)).to.deep.eq(['only']);
+  });
+
+  it('reorders sections, which is what it exists for', () => {
+    const sections = [section({ id: 's1' }), section({ id: 's2' }), section({ id: 's3' })];
+    const moved = moveItem(sections, 2, 0);
+    expect(moved.map((s) => s.id)).to.deep.eq(['s3', 's1', 's2']);
   });
 });

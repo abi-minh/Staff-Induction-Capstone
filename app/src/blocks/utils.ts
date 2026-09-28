@@ -101,6 +101,29 @@ export function parseSections(raw: string | undefined): Section[] {
   }
 }
 
+/**
+ * Move one item to a new index, returning a new array.
+ *
+ * Splice rather than swap, so the same function serves a single-step nudge and
+ * a drag across several positions. Any move that would fall outside the list
+ * returns the original array untouched: the callers are controls at the ends of
+ * a list, where doing nothing is the correct answer rather than an error.
+ *
+ * Returning the input array unchanged also matters for the editor's dirty
+ * check, which compares a serialised snapshot — a no-op move must not make an
+ * unmodified module look edited.
+ */
+export function moveItem<T>(items: T[], from: number, to: number): T[] {
+  if (from === to) return items;
+  if (from < 0 || from >= items.length) return items;
+  if (to < 0 || to >= items.length) return items;
+
+  const next = [...items];
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+}
+
 export function createSection(): Section {
   return {
     id: `section-${Date.now()}-${sectionCounter++}`,
