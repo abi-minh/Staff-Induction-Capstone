@@ -15,6 +15,7 @@ import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import GroupsOutlinedIcon from '@mui/icons-material/GroupsOutlined';
 import DonutLargeOutlinedIcon from '@mui/icons-material/DonutLargeOutlined';
 import { useReports } from '../hooks/useReports';
+import { buildReportCsv } from '../util/reportCsv';
 import type { ModuleCompletionReport, ProgressStatus } from '../types';
 
 const ROLE_LABELS: Record<string, string> = {
@@ -120,13 +121,7 @@ export default function ReportsPage() {
   }
 
   function exportCsv() {
-    const rows = [
-      ['Module', 'Assigned', 'Completed', '% Complete'],
-      ...(reports?.moduleReports ?? []).map((r) => [
-        r.moduleTitle, r.totalAssigned, r.totalCompleted, `${r.completionPct}%`,
-      ]),
-    ];
-    const csv = rows.map((r) => r.join(',')).join('\n');
+    const csv = buildReportCsv(reports?.moduleReports ?? []);
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
