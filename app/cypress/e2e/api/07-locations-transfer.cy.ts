@@ -93,43 +93,23 @@ describe('Locations', () => {
 });
 
 describe('Backup and migration', () => {
-  it('exports an envelope with the documented shape', () => {
-    cy.api('GET', 'induction/v1/transfer/export').then(({ status, body }) => {
-      // The body is in the assertion message on purpose: a bare "expected 500
-      // to equal 200" says nothing, and export is the one route that can fail
-      // for environmental reasons (it base64-embeds up to 64MB of media into a
-      // single JSON response, so PHP's memory_limit is in play).
-      expect(status, `export failed — server said: ${serverMessage(body)}`).to.eq(200);
-      expect(body.format).to.eq('induction-platform-export');
-      expect(body.format_version).to.be.a('number');
-      expect(body).to.include.keys(['modules', 'locations', 'documents', 'media', 'records']);
-      expect(body.records).to.include.keys(['progress', 'assignments', 'quiz_responses']);
+  // The export body itself isn't downloaded here: a whole-site zip can exceed
+  // Cypress's string limit. The import checks use the JSON back-compat path.
+
+  it('prepares an export download link sized to the archive', () => {
+    cy.api('POST', 'induction/v1/transfer/export/prepare').then(({ status, body }) => {
+      expect(status, `prepare failed, server said: ${serverMessage(body)}`).to.eq(200);
+      expect(body.token).to.match(/^[a-f0-9]{64}$/);
+      expect(body.bytes).to.be.greaterThan(0);
+      expect(body.files).to.be.a('number');
     });
   });
 
-  it('gives every module a ref that its records point at', () => {
-    cy.api('GET', 'induction/v1/transfer/export').then(({ status, body }) => {
-      // Fail on the cause, not on a TypeError three lines later.
-      expect(status, `export failed — server said: ${serverMessage(body)}`).to.eq(200);
-
-      const refs = body.modules.map((m: { ref: string }) => m.ref);
-      expect(new Set(refs).size, 'refs are unique').to.eq(refs.length);
-
-      [...body.records.progress, ...body.records.assignments].forEach(
-        (row: { module_ref: string }) => expect(refs).to.include(row.module_ref),
-      );
-    });
-  });
-
-  it('never exports a raw user_id in place of a portable reference', () => {
-    cy.api('GET', 'induction/v1/transfer/export').then(({ status, body }) => {
-      expect(status, `export failed — server said: ${serverMessage(body)}`).to.eq(200);
-
-      body.records.progress.forEach((row: Record<string, unknown>) => {
-        expect(row).to.not.have.property('user_id');
-        expect(row.user).to.include.keys(['login', 'email']);
-      });
-    });
+  it('rejects an export link with a made-up token', () => {
+    cy.request({
+      url: `${testEnv().wpUrl}/wp-json/induction/v1/transfer/export?token=${'0'.repeat(64)}`,
+      failOnStatusCode: false,
+    }).its('status').should('be.oneOf', [401, 403]);
   });
 
   it('rejects a file that is not one of our exports', () => {
