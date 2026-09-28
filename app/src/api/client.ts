@@ -1,5 +1,6 @@
 import axios, { AxiosError } from 'axios';
 import { useAuthStore } from '../store/authStore';
+import { isTokenExpired } from '../util/jwt';
 
 const BASE_URL =
   window.InductionApp?.restUrl ??
@@ -12,11 +13,22 @@ export const client = axios.create({
 });
 
 // Attach JWT from localStorage on every request.
+//
+// An expired token is not sent at all: the session ends here and the request is
+// rejected locally. The 401 handler below would reach the same end state, but
+// only after a round trip, and on a page that fires several queries at once
+// that means several pointless authenticated requests against a WAF that counts
+// them.
 client.interceptors.request.use((config) => {
   const token = localStorage.getItem('induction_token');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+  if (!token) return config;
+
+  if (isTokenExpired(token)) {
+    useAuthStore.getState().expireSession();
+    return Promise.reject(new Error('Your session ended. Please sign in again.'));
   }
+
+  config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 

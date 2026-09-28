@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { client } from './client';
 import { useAuthStore } from '../store/authStore';
 import type { AdminUser } from '../types';
+import { tokenExpiringIn } from '../util/jwt.fixtures';
 
 // The 401 response interceptor. This exists as a regression test because the
 // original implementation called window.location.reload() here, which turned a
@@ -93,5 +94,50 @@ describe('client 401 handling', () => {
       throw Object.assign(new Error('Network Error'), { isAxiosError: true });
     };
     await expect(client.get('induction/v1/modules')).rejects.toThrow('Network Error');
+  });
+});
+
+// The request interceptor. An expired token is not worth a round trip: the
+// session is ended locally and the request never leaves, which also keeps a
+// page that fires several queries at once from throwing a burst of doomed
+// authenticated requests at the WAF.
+describe('client expired-token handling', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAuthStore.setState({ token: null, user: null, isAuthenticated: false, sessionExpired: false });
+    // Any response at all: a request that reaches the adapter has already
+    // failed the point of these tests.
+    client.defaults.adapter = async (config) => ({
+      data: {}, status: 200, statusText: 'OK', headers: {}, config,
+    });
+  });
+
+  it('refuses to send an expired token and ends the session', async () => {
+    const token = tokenExpiringIn(-60);
+    useAuthStore.setState({ token, user: STAFF, isAuthenticated: true, sessionExpired: false });
+    localStorage.setItem('induction_token', token);
+
+    await expect(client.get('induction/v1/me')).rejects.toThrow(/session ended/i);
+
+    const s = useAuthStore.getState();
+    expect(s.isAuthenticated).to.eq(false);
+    expect(s.sessionExpired).to.eq(true);
+    expect(localStorage.getItem('induction_token')).to.eq(null);
+  });
+
+  it('still sends a token that has time left', async () => {
+    const token = tokenExpiringIn(3600);
+    useAuthStore.setState({ token, user: STAFF, isAuthenticated: true, sessionExpired: false });
+    localStorage.setItem('induction_token', token);
+
+    await expect(client.get('induction/v1/me')).resolves.toMatchObject({ status: 200 });
+    expect(useAuthStore.getState().isAuthenticated).to.eq(true);
+  });
+
+  // An opaque token is the server's call, not ours.
+  it('sends a token whose expiry cannot be read', async () => {
+    localStorage.setItem('induction_token', 'opaque-token');
+    await expect(client.get('induction/v1/me')).resolves.toMatchObject({ status: 200 });
+    expect(useAuthStore.getState().sessionExpired).to.eq(false);
   });
 });
