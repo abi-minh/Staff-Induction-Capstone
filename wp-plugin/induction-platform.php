@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.4.2
+ * Version:     1.5.1
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.4.2' );
+define( 'INDUCTION_VERSION', '1.5.1' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -1963,6 +1963,61 @@ function induction_attach_hero_image_url( WP_REST_Response $response, WP_Post $p
     $id   = (int) ( $data['meta']['module_hero_image'] ?? 0 );
     $url  = $id ? wp_get_attachment_url( $id ) : '';
     $data['hero_image_url'] = $url ?: '';
+    $response->set_data( $data );
+    return $response;
+}
+
+// ─── Responsive image sources ───────────────────────────────────────────────
+// Staff read modules on phones, and every image block stores WordPress's
+// full-size URL — so a 4MB photo is downloaded to be displayed in a 375px
+// column. This attaches the srcset WordPress already generated at upload time,
+// letting the browser fetch a variant that fits. The full-size file is still
+// what the image viewer opens, which is the one place it is wanted.
+//
+// Deliberately a sidecar map keyed by attachment ID rather than a srcset
+// injected into each block: module_blocks is the field that has twice been
+// emptied by a read/write round trip through this plugin, and nothing is worth
+// deserialising and re-serialising it on the read path for. The client matches
+// entries up by the mediaId the block already carries.
+//
+// wp_get_attachment_image_srcset() rather than assembling URLs by hand: it is
+// filtered, so CDN and media-offload plugins rewrite it correctly, and it emits
+// only the sizes that were actually generated.
+
+add_filter( 'rest_prepare_induction_module', 'induction_attach_image_sources', 10, 3 );
+
+function induction_attach_image_sources( WP_REST_Response $response, WP_Post $post, WP_REST_Request $request ): WP_REST_Response {
+    $data = $response->get_data();
+
+    // Read the blocks off the response, not the database: by the time this
+    // runs, unpublished sections have already been stripped for staff, and
+    // there is no reason to advertise sources for content they cannot see.
+    $blocks = json_decode( (string) ( $data['meta']['module_blocks'] ?? '[]' ), true );
+    $ids    = [];
+
+    if ( is_array( $blocks ) ) {
+        // One walk over the whole section tree. It picks up every key in
+        // INDUCTION_MEDIA_ID_KEYS - content images, quiz images and section
+        // heroes alike - and resolves upload URLs embedded in text back to
+        // attachment ids, which the block-by-block version it replaced did not.
+        induction_media_ids_in_value( $blocks, $ids, 'induction_attachment_id_from_url' );
+    }
+
+    $sources = [];
+    foreach ( array_unique( array_filter( $ids ) ) as $id ) {
+        $srcset = wp_get_attachment_image_srcset( (int) $id, 'large' );
+        if ( ! $srcset ) {
+            // One generated size, or none: the plain src is already the best
+            // available and an entry here would say nothing.
+            continue;
+        }
+        $sources[ (string) $id ] = [
+            'srcset' => $srcset,
+            'sizes'  => wp_get_attachment_image_sizes( (int) $id, 'large' ) ?: '100vw',
+        ];
+    }
+
+    $data['image_sources'] = (object) $sources;
     $response->set_data( $data );
     return $response;
 }

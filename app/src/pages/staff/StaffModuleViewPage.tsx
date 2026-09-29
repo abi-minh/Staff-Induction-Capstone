@@ -42,6 +42,11 @@ import {
 import { useAuthStore } from "../../store/authStore";
 import { useSpeech } from "../../hooks/useSpeech";
 import BlockRenderer from "../../components/BlockRenderer";
+import {
+  isSectionComplete as sectionIsComplete,
+  moduleProgressPercent,
+  sectionCompletionKey,
+} from "../../util/sectionProgress";
 import HeroBanner from "../../components/HeroBanner";
 import { parseSections, sectionToSpeechText } from "../../blocks/utils";
 import type { Section } from "../../types";
@@ -68,7 +73,7 @@ export default function StaffModuleViewPage() {
   const submitQuizReview = useSubmitQuizForReview();
   const speech = useSpeech();
 
-  const lsKey = `section-completions-${moduleId}`;
+  const lsKey = sectionCompletionKey(moduleId);
 
   const startTime = useRef(Date.now());
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(
@@ -182,9 +187,7 @@ export default function StaffModuleViewPage() {
   const quizLocked = quizPending || quizPassed === true;
 
   function isSectionComplete(section: Section): boolean {
-    return section.isModuleQuiz
-      ? quizPassed === true
-      : completedSectionIds.includes(section.id);
+    return sectionIsComplete(section, completedSectionIds, quizPassed);
   }
 
   // Every section other than the module-level quiz section itself must be completed.
@@ -268,11 +271,14 @@ export default function StaffModuleViewPage() {
     const prevSection = sectionIndex > 0 ? sections[sectionIndex - 1] : null;
     const nextSection =
       sectionIndex < sections.length - 1 ? sections[sectionIndex + 1] : null;
-    const completedCount = sections.filter(isSectionComplete).length;
-    const progressPct =
-      sections.length > 0
-        ? Math.round((completedCount / sections.length) * 100)
-        : 0;
+    // Shared with the dashboard card on purpose: two copies of this sum is how
+    // the two screens end up reporting different numbers for one module.
+    const progressPct = moduleProgressPercent(
+      sections,
+      completedSectionIds,
+      quizPassed,
+      progress?.status ?? 'not_started',
+    );
     const speechText = sectionToSpeechText(currentSection);
 
     return (
@@ -376,6 +382,7 @@ export default function StaffModuleViewPage() {
         {currentSection.blocks.length > 0 && (
           <Paper sx={{ p: { xs: 3, md: 4 } }}>
             <BlockRenderer
+              imageSources={module?.imageSources}
               blocks={currentSection.blocks}
               answers={answers}
               onAnswer={handleAnswer}
@@ -416,6 +423,7 @@ export default function StaffModuleViewPage() {
                     </Alert>
                   )}
                   <BlockRenderer
+                    imageSources={module?.imageSources}
                     blocks={currentSection.quizBlocks}
                     answers={answers}
                     onAnswer={handleAnswer}
@@ -437,6 +445,7 @@ export default function StaffModuleViewPage() {
             ) : (
               <>
                 <BlockRenderer
+                  imageSources={module?.imageSources}
                   blocks={currentSection.quizBlocks}
                   answers={answers}
                   onAnswer={handleAnswer}

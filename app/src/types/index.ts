@@ -36,6 +36,18 @@ export interface Module {
   modified: string;
   meta: ModuleMeta;
   heroImageUrl?: string;
+  /**
+   * Responsive sources for the images this module references, keyed by
+   * attachment id — the same id an image block stores as mediaId. Sent
+   * alongside the blocks rather than inside them, so nothing has to rewrite
+   * module_blocks to add them.
+   */
+  imageSources?: Record<string, ImageSource>;
+}
+
+export interface ImageSource {
+  srcset: string;
+  sizes: string;
 }
 
 export interface ModuleMeta {

@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 import { Box, List, ListItem, Typography } from '@mui/material';
 import type {
-  CalloutBlock, CalloutVariant, HeadingBlock, HeadingLevel, ImageBlock,
+  CalloutBlock, CalloutVariant, HeadingBlock, HeadingLevel, ImageBlock, ImageSource,
   ListBlock, RowBlock, RowChildBlock, TextBlock, VideoBlock,
 } from '../types';
+import ZoomableImage from '../components/ZoomableImage';
 import { blockLayoutSx, layoutOf } from './utils';
 
 export type PresentationalBlock =
@@ -21,10 +22,31 @@ const CALLOUT_COLORS: Record<CalloutVariant, { bg: string; fg: string; border: s
 };
 
 // Shared renderer for all content blocks (staff view + both editor previews).
+export interface RenderOptions {
+  /**
+   * Responsive sources keyed by attachment id, as sent by the API. Absent for
+   * an image uploaded before the field existed, or one whose only generated
+   * size is the original — both fall back to the plain src.
+   */
+  imageSources?: Record<string, ImageSource>;
+  /**
+   * Make images open full size when tapped on a phone. Off by default: this
+   * renderer is shared with the module editor, where a tap on an image has to
+   * select the block, not open a viewer.
+   */
+  zoomImages?: boolean;
+}
+
 export function renderBlockContent(
   block: PresentationalBlock,
-  renderChild: (child: RowChildBlock) => ReactNode = renderBlockContent,
+  renderChild?: (child: RowChildBlock) => ReactNode,
+  options: RenderOptions = {},
 ): ReactNode {
+  // Row children recurse through here too, so the options have to travel with
+  // them — otherwise an image inside a row column would be the one image on the
+  // page that does not open.
+  const child = renderChild ?? ((c: RowChildBlock) => renderBlockContent(c, undefined, options));
+
   switch (block.type) {
     case 'heading':
       return (
@@ -54,11 +76,19 @@ export function renderBlockContent(
       const width = layout?.width;
       return (
         <Box component="figure" sx={{ m: 0, textAlign: layout?.align ?? 'left' }}>
-          <Box
-            component="img"
+          <ZoomableImage
             src={block.data.url}
             alt={block.data.alt}
-            sx={{ display: 'inline-block', height: 'auto', maxWidth: '100%', borderRadius: 1.5, ...(width && width < 100 ? { width: { sm: `${width}%` } } : null) }}
+            srcSet={options.imageSources?.[String(block.data.mediaId)]?.srcset}
+            sizes={options.imageSources?.[String(block.data.mediaId)]?.sizes}
+            caption={block.data.caption}
+            enabled={options.zoomImages}
+            wrapperSx={{
+              display: 'inline-block',
+              maxWidth: '100%',
+              ...(width && width < 100 ? { width: { sm: `${width}%` } } : null),
+            }}
+            imgSx={{ borderRadius: 1.5 }}
           />
           {block.data.caption && (
             <Typography component="figcaption" variant="caption" color="text.secondary" sx={{ mt: 0.75, display: 'block' }}>
@@ -138,7 +168,7 @@ export function renderBlockContent(
               key={placed.block.id}
               sx={{ gridColumn: { xs: 'auto', sm: `${placed.colStart} / span ${placed.colSpan}` }, minWidth: 0 }}
             >
-              {renderChild(placed.block)}
+              {child(placed.block)}
             </Box>
           ))}
         </Box>

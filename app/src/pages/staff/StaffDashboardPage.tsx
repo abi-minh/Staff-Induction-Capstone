@@ -6,6 +6,8 @@ import CheckCircleOutlined from '@mui/icons-material/CheckCircleOutlined';
 import ScheduleOutlined    from '@mui/icons-material/ScheduleOutlined';
 import { useAssignedModules, useMyAssignments, useUserProgress } from '../../hooks/usePortal';
 import { formatDueDate } from '../../util/dates';
+import { parseSections } from '../../blocks/utils';
+import { moduleProgressPercent, readCompletedSectionIds } from '../../util/sectionProgress';
 import { useAuthStore }  from '../../store/authStore';
 import ModuleCard        from '../../components/ModuleCard';
 
@@ -151,11 +153,21 @@ export default function StaffDashboardPage() {
             const p = progress.find((r) => r.moduleId === m.id);
             // Empty string when the module has no duration set, which
             // ModuleCard treats as "no deadline" and hides the chip.
+            // Read from the same place the module view writes, so the two
+            // screens never disagree about the same module.
+            const sections = parseSections(m.meta.module_blocks);
+            const percent = moduleProgressPercent(
+              sections,
+              readCompletedSectionIds(m.id),
+              p?.passed ?? null,
+              p?.status ?? 'not_started',
+            );
             return (
               <ModuleCard
                 key={m.id}
                 module={m}
                 progress={p}
+                percentComplete={percent}
                 dueDate={formatDueDate(dueDates.get(m.id))}
               />
             );

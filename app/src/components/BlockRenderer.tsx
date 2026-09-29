@@ -1,8 +1,9 @@
 import {
   Alert, Box, FormControlLabel, Paper, Radio, RadioGroup, TextField, Typography,
 } from '@mui/material';
-import type { Block } from '../types';
+import type { Block, ImageSource } from '../types';
 import { renderBlockContent } from '../blocks/renderContent';
+import ZoomableImage from './ZoomableImage';
 
 interface Props {
   blocks: Block[];
@@ -10,14 +11,16 @@ interface Props {
   onAnswer: (blockId: string, answer: string) => void;
   showResults: Record<string, boolean> | null;
   disabled?: boolean;
+  /** Responsive sources keyed by attachment id, straight from the module. */
+  imageSources?: Record<string, ImageSource>;
 }
 
-export default function BlockRenderer({ blocks, answers, onAnswer, showResults, disabled }: Props) {
+export default function BlockRenderer({ blocks, answers, onAnswer, showResults, disabled, imageSources }: Props) {
   return (
     <Box>
       {blocks.map((block) => (
         <Box key={block.id} sx={{ mb: 2.5 }}>
-          {renderBlock(block, answers, onAnswer, showResults, disabled ?? false)}
+          {renderBlock(block, answers, onAnswer, showResults, disabled ?? false, imageSources)}
         </Box>
       ))}
     </Box>
@@ -30,6 +33,7 @@ function renderBlock(
   onAnswer: (blockId: string, answer: string) => void,
   showResults: Record<string, boolean> | null,
   disabled: boolean,
+  imageSources?: Record<string, ImageSource>,
 ) {
   switch (block.type) {
     case 'multiple_choice': {
@@ -40,11 +44,16 @@ function renderBlock(
         <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2, borderColor: 'divider' }}>
           <Typography sx={{ fontWeight: 600, mb: 1.5 }}>{block.data.question}</Typography>
           {block.data.imageUrl && (
-            <Box
-              component="img"
+            <ZoomableImage
               src={block.data.imageUrl}
               alt=""
-              sx={{ display: 'block', maxWidth: '100%', maxHeight: 320, borderRadius: 1.5, mb: 1.5 }}
+              srcSet={imageSources?.[String(block.data.imageMediaId)]?.srcset}
+              sizes={imageSources?.[String(block.data.imageMediaId)]?.sizes}
+              enabled
+              wrapperSx={{ display: 'inline-block', maxWidth: '100%', mb: 1.5 }}
+              // Capped at 320px inline, which is exactly why these need to
+              // open: a question's diagram is often unreadable at that size.
+              imgSx={{ width: 'auto', maxWidth: '100%', maxHeight: 320, borderRadius: 1.5 }}
             />
           )}
           <RadioGroup
@@ -118,6 +127,8 @@ function renderBlock(
       );
     }
     default:
-      return renderBlockContent(block);
+      // Staff-facing only (StaffModuleViewPage is the sole caller), so this
+      // is the safe place to turn image zoom on without affecting the editor.
+      return renderBlockContent(block, undefined, { zoomImages: true, imageSources });
   }
 }

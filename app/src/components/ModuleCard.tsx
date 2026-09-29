@@ -14,18 +14,22 @@ interface Props {
   module:    Module;
   progress?: ProgressRecord;
   dueDate?:  string;
+  /**
+   * How far through the module this person is, 0-100. Passed in rather than
+   * derived from `status`, which only knows "started": this card used to report
+   * a flat 60% for every in-progress module, so three sections done out of ten
+   * and nine out of ten looked identical.
+   */
+  percentComplete?: number;
 }
 
-const PERCENT_BY_STATUS = { completed: 100, in_progress: 60, not_started: 0 };
-
-export default function ModuleCard({ module, progress, dueDate }: Props) {
+export default function ModuleCard({ module, progress, dueDate, percentComplete = 0 }: Props) {
   const navigate    = useNavigate();
   const status      = progress?.status ?? 'not_started';
   const completed   = status === 'completed';
   const Icon        = getModuleIcon(module);
   const heroUrl     = getModuleHero(module);
   const excerpt = stripHtml(module.excerpt);
-  const percentComplete = PERCENT_BY_STATUS[status];
 
   return (
     <Card sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>

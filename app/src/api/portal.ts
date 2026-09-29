@@ -12,6 +12,7 @@ interface WPPortalModule {
   date: string;
   modified: string;
   hero_image_url?: string;
+  image_sources?: Record<string, { srcset: string; sizes: string }>;
   meta: {
     module_role_targets: string[];
     module_estimated_minutes: number;
@@ -62,6 +63,7 @@ function normaliseModule(wp: WPPortalModule): Module {
     date: wp.date,
     modified: wp.modified,
     heroImageUrl: wp.hero_image_url ?? '',
+    imageSources: wp.image_sources ?? {},
     meta: {
       module_role_targets: wp.meta.module_role_targets ?? [],
       module_estimated_minutes: wp.meta.module_estimated_minutes ?? 0,
