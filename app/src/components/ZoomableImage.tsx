@@ -38,11 +38,9 @@ interface Props {
  * already switch on. On a desktop the image renders exactly as it did before —
  * no wrapper button, no handler, nothing to tab through.
  *
- * The viewer shows the image at its natural size inside a scrollable box. That
- * is the whole point: a dialog that constrains the image to the viewport is the
- * same size as the page it was opened from, which solves nothing on a 375px
- * screen. Panning a full-size image is what lets someone actually read a
- * diagram.
+ * The viewer opens with the whole image visible, scaled to fit, and the
+ * browser'''s pinch-zoom takes it from there. It loads the full-size file rather
+ * than the responsive variant shown inline, so zooming in stays sharp.
  */
 export default function ZoomableImage({
   src, alt, srcSet, sizes, caption, wrapperSx, imgSx, enabled = false,
@@ -94,17 +92,35 @@ export default function ZoomableImage({
           </IconButton>
 
           {/*
-            Centred with `margin: auto` rather than flex centring: a flex-centred
-            child that overflows its container has its top and left edges
-            clipped and unreachable by scrolling, which would hide exactly the
-            part of a large image someone opened this to see.
+            Opens showing the whole image, scaled to fit. An earlier version
+            rendered it at natural size, reasoning that a fit-to-viewport dialog
+            is no bigger than the page behind it — which was wrong twice over:
+            the viewer is edge-to-edge and full-height where the inline image is
+            boxed in by column padding and card width, and the browser's own
+            pinch-zoom magnifies whatever is on screen. Starting at natural size
+            meant opening part-way into a large image with no way to get back
+            out to the whole thing.
+
+            `src` is still the full-size file, not the responsive variant used
+            inline, so pinching in stays sharp.
+
+            Centred with `margin: auto` rather than flex centring: once zoomed,
+            a flex-centred child that overflows has its top and left edges
+            clipped and unreachable by scrolling.
           */}
           <Box sx={{ height: '100%', overflow: 'auto', display: 'flex' }}>
             <Box
               component="img"
               src={src}
               alt={alt}
-              sx={{ m: 'auto', display: 'block', maxWidth: 'none' }}
+              sx={{
+                m: 'auto',
+                display: 'block',
+                maxWidth: '100%',
+                maxHeight: '100%',
+                width: 'auto',
+                height: 'auto',
+              }}
             />
           </Box>
 
