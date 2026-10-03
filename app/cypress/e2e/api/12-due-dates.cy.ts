@@ -141,6 +141,46 @@ describe('Due dates', () => {
     });
   });
 
+  function setDuration(moduleId: number, durationDays: number) {
+    cy.api('POST', `induction/v1/modules/${moduleId}`, { meta: { module_duration_days: durationDays } })
+      .its('status').should('eq', 200);
+  }
+
+  it('moves a duration-based due date when the duration changes', () => {
+    createModule(14).then((moduleId) => {
+      cy.api('POST', 'induction/v1/assignments/bulk', {
+        module_id: moduleId,
+        user_ids: [staffId],
+      }).its('status').should('eq', 200);
+
+      dueDateFor(moduleId).then(({ dueDate: before }) => {
+        setDuration(moduleId, 30);
+        dueDateFor(moduleId).then(({ dueDate: after }) => {
+          expect(daysBetween(asDate(after as string), asDate(before as string)), 'pushed out by 16 days').to.eq(16);
+        });
+        setDuration(moduleId, 0);
+        dueDateFor(moduleId).then(({ dueDate }) => {
+          expect(dueDate, 'no duration means no due date').to.eq(null);
+        });
+      });
+    });
+  });
+
+  it('leaves a picked due date alone when the duration changes', () => {
+    createModule(14).then((moduleId) => {
+      cy.api('POST', 'induction/v1/assignments/bulk', {
+        module_id: moduleId,
+        user_ids: [staffId],
+        due_date: '2030-03-10 09:00:00',
+      }).its('status').should('eq', 200);
+
+      setDuration(moduleId, 30);
+      dueDateFor(moduleId).then(({ dueDate: due }) => {
+        expect(due).to.match(/^2030-03-10/);
+      });
+    });
+  });
+
   it('reports an overdue module and not a future one', () => {
     createModule(0).then((moduleId) => {
       cy.api('POST', 'induction/v1/assignments/bulk', {

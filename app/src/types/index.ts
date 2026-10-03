@@ -508,6 +508,7 @@ export type QuizBlock = MultipleChoiceBlock | TrueFalseBlock | ShortAnswerBlock;
 export interface Section {
   id: string;
   heroImage: string;
+  heroImageMediaId?: number;
   title: string;
   description: string;
   blocks: Block[];

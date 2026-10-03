@@ -43,9 +43,19 @@ interface Props {
 export default function SectionEditor({ section, index, onChange, onRemove }: Props) {
   const [deleteQuestionIndex, setDeleteQuestionIndex] = useState<number | null>(null);
   const uploadMedia = useUploadMedia();
+  const uploadHero = useUploadMedia();
 
   function set<K extends keyof Section>(key: K, value: Section[K]) {
     onChange({ ...section, [key]: value });
+  }
+
+  function handleHeroFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    uploadHero.mutate(file, {
+      onSuccess: (media) => onChange({ ...section, heroImage: media.sourceUrl, heroImageMediaId: media.id }),
+    });
   }
 
   function setBlocks(blocks: Block[]) {
@@ -104,29 +114,36 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
       </Box>
 
       {/* Hero image */}
-      <TextField
-        label="Hero Image URL"
-        value={section.heroImage}
-        onChange={(e) => set('heroImage', e.target.value)}
-        fullWidth
-        placeholder="https://…"
-        sx={{ mb: 2 }}
-      />
-
       {section.heroImage ? (
-        <Box
-          component="img"
-          src={section.heroImage}
-          alt=""
-          sx={{
-            width: '100%',
-            height: { xs: 160, md: 220 },
-            objectFit: 'cover',
-            borderRadius: 1,
-            display: 'block',
-            mb: 2.5,
-          }}
-        />
+        <Box sx={{ mb: 2.5 }}>
+          <Box
+            component="img"
+            src={section.heroImage}
+            alt=""
+            sx={{
+              width: '100%',
+              height: { xs: 160, md: 220 },
+              objectFit: 'cover',
+              borderRadius: 1,
+              display: 'block',
+              mb: 1,
+            }}
+          />
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button component="label" variant="outlined" size="small" disabled={uploadHero.isLoading} sx={roundedButtonSx}>
+              {uploadHero.isLoading ? 'Uploading…' : 'Replace Image'}
+              <input type="file" accept="image/*" hidden onChange={handleHeroFile} />
+            </Button>
+            <Button
+              size="small"
+              color="error"
+              onClick={() => onChange({ ...section, heroImage: '', heroImageMediaId: 0 })}
+              sx={roundedButtonSx}
+            >
+              Remove Image
+            </Button>
+          </Box>
+        </Box>
       ) : (
         <Box
           sx={{
@@ -145,8 +162,16 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
           }}
         >
           <ImageOutlinedIcon sx={{ fontSize: 36 }} />
-          <Typography variant="body2">No hero image set</Typography>
+          <Button component="label" variant="outlined" size="small" disabled={uploadHero.isLoading} sx={roundedButtonSx}>
+            {uploadHero.isLoading ? 'Uploading…' : 'Upload Hero Image'}
+            <input type="file" accept="image/*" hidden onChange={handleHeroFile} />
+          </Button>
         </Box>
+      )}
+      {uploadHero.isError && (
+        <Typography variant="body2" color="error" sx={{ mt: -1.5, mb: 2 }}>
+          The image could not be uploaded. Try again, or try a different file.
+        </Typography>
       )}
 
       {/* Title + Description */}

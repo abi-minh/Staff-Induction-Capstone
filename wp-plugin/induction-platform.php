@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.5.3
+ * Version:     1.7.0
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.5.3' );
+define( 'INDUCTION_VERSION', '1.7.0' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -74,11 +74,13 @@ define( 'INDUCTION_MODULE_VERSION_LIMIT', 30 );
 define( 'INDUCTION_EXPORT_FORMAT',                'induction-platform-export' );
 define( 'INDUCTION_EXPORT_FORMAT_VERSION',        2 );
 define( 'INDUCTION_EXPORT_LINK_TTL',              10 * MINUTE_IN_SECONDS );
+define( 'INDUCTION_EXPORT_REPORT_EVERY',          8 * 1024 * 1024 );
 define( 'INDUCTION_TRANSFER_DISK_MARGIN',         256 * 1024 * 1024 );
-define( 'INDUCTION_IMPORT_STEP_SECONDS',          15 );
+define( 'INDUCTION_IMPORT_STEP_SECONDS',          5 );
 define( 'INDUCTION_IMPORT_URL_TIMEOUT',           30 );
 define( 'INDUCTION_IMPORT_KEEP_UNFINISHED_DAYS',  30 );
-define( 'INDUCTION_MEDIA_ID_KEYS',                [ 'mediaId', 'imageMediaId', 'heroImage' ] );
+define( 'INDUCTION_IMPORT_ARCHIVE',               'archive.zip' );
+define( 'INDUCTION_MEDIA_ID_KEYS',                [ 'mediaId', 'imageMediaId', 'heroImage', 'heroImageMediaId' ] );
 
 // Location map markers. The colour list must stay in step with MARKER_COLORS
 // in app/src/components/LocationMap.tsx — it's the palette the admin can pick.
@@ -574,11 +576,26 @@ function induction_create_tables(): void {
             module_id    BIGINT UNSIGNED NOT NULL,
             assigned_at  DATETIME NOT NULL,
             due_date     DATETIME NULL,
+            due_overridden TINYINT(1) NOT NULL DEFAULT 0,
             assigned_by  BIGINT UNSIGNED NULL,
             UNIQUE KEY user_module (user_id, module_id),
             KEY idx_user_id (user_id),
             KEY idx_module_id (module_id)
         ) $charset;" );
+    }
+
+    // due_overridden marks a picked date. Older rows count as picked unless they match assigned_at + duration.
+    $cols = $wpdb->get_col( "DESCRIBE $assignments_table", 0 );
+    if ( ! in_array( 'due_overridden', $cols, true ) ) {
+        $wpdb->query( "ALTER TABLE $assignments_table ADD COLUMN due_overridden TINYINT(1) NOT NULL DEFAULT 0 AFTER due_date" );
+        $wpdb->query(
+            "UPDATE $assignments_table a
+             LEFT JOIN {$wpdb->postmeta} d ON d.post_id = a.module_id AND d.meta_key = 'module_duration_days'
+             SET a.due_overridden = 1
+             WHERE a.due_date IS NOT NULL
+               AND ( COALESCE( CAST( d.meta_value AS UNSIGNED ), 0 ) = 0
+                     OR a.due_date <> DATE_ADD( a.assigned_at, INTERVAL CAST( d.meta_value AS UNSIGNED ) DAY ) )"
+        );
     }
 }
 
@@ -824,6 +841,18 @@ function induction_register_routes(): void {
         'args'                => [ 'id' => [ 'type' => 'integer', 'required' => true ] ],
     ] );
 
+    register_rest_route( $ns, '/media/section-images', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_count_linked_section_images',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    register_rest_route( $ns, '/media/section-images/copy', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_copy_linked_section_images',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
     // POST /media/{id}/category — file the attachment under a category
     register_rest_route( $ns, '/media/(?P<id>\d+)/category', [
         'methods'             => 'POST',
@@ -896,6 +925,18 @@ function induction_register_routes(): void {
         'methods'             => 'GET',
         'callback'            => 'induction_export_site',
         'permission_callback' => 'induction_export_permission',
+    ] );
+
+    register_rest_route( $ns, '/transfer/export/status', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_export_status',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
+    register_rest_route( $ns, '/transfer/export/discard', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_export_discard',
+        'permission_callback' => 'induction_is_admin_user',
     ] );
 
     register_rest_route( $ns, '/transfer/import/chunk', [
@@ -1254,10 +1295,8 @@ function induction_calculate_due_date( int $module_id, $explicit_due, string $no
     return null;
 }
 
-// Creates the tracked assignment row if it doesn't exist yet; if it does,
-// only touches the due date when a non-null one was actually computed (so
-// re-syncing an already-tracked user never blanks out an existing due date).
-function induction_ensure_assignment_row( int $user_id, int $module_id, ?string $due_date, string $now ): void {
+// Re-syncing never moves an existing deadline, or overdue staff would drop off the report.
+function induction_ensure_assignment_row( int $user_id, int $module_id, ?string $due_date, string $now, bool $explicit_due = false ): void {
     global $wpdb;
     $assignments_table = $wpdb->prefix . 'induction_assignments';
     $existing = $wpdb->get_var( $wpdb->prepare(
@@ -1265,17 +1304,41 @@ function induction_ensure_assignment_row( int $user_id, int $module_id, ?string 
         $user_id, $module_id
     ) );
     if ( $existing ) {
-        if ( $due_date !== null ) {
-            $wpdb->update( $assignments_table, [ 'due_date' => $due_date ], [ 'id' => (int) $existing ] );
+        if ( $explicit_due && $due_date !== null ) {
+            $wpdb->update( $assignments_table, [ 'due_date' => $due_date, 'due_overridden' => 1 ], [ 'id' => (int) $existing ] );
         }
     } else {
         $wpdb->insert( $assignments_table, [
-            'user_id'     => $user_id,
-            'module_id'   => $module_id,
-            'assigned_at' => $now,
-            'due_date'    => $due_date,
-            'assigned_by' => get_current_user_id(),
+            'user_id'        => $user_id,
+            'module_id'      => $module_id,
+            'assigned_at'    => $now,
+            'due_date'       => $due_date,
+            'due_overridden' => $explicit_due && $due_date !== null ? 1 : 0,
+            'assigned_by'    => get_current_user_id(),
         ] );
+    }
+}
+
+// Durations count from each person's assigned date. Picked dates stay put.
+add_action( 'added_post_meta', 'induction_refresh_due_dates', 10, 4 );
+add_action( 'updated_post_meta', 'induction_refresh_due_dates', 10, 4 );
+add_action( 'deleted_post_meta', 'induction_refresh_due_dates', 10, 4 );
+
+function induction_refresh_due_dates( $meta_id, $module_id, $meta_key, $meta_value ): void {
+    if ( 'module_duration_days' !== $meta_key || 'induction_module' !== get_post_type( (int) $module_id ) ) {
+        return;
+    }
+    global $wpdb;
+    $table = $wpdb->prefix . 'induction_assignments';
+    $days  = doing_action( 'deleted_post_meta' ) ? 0 : (int) $meta_value;
+    if ( $days > 0 ) {
+        $wpdb->query( $wpdb->prepare(
+            "UPDATE $table SET due_date = DATE_ADD( assigned_at, INTERVAL %d DAY ) WHERE module_id = %d AND due_overridden = 0",
+            $days,
+            (int) $module_id
+        ) );
+    } else {
+        $wpdb->query( $wpdb->prepare( "UPDATE $table SET due_date = NULL WHERE module_id = %d AND due_overridden = 0", (int) $module_id ) );
     }
 }
 
@@ -1287,7 +1350,7 @@ function induction_sync_role_assignments( int $module_id, string $role, $explici
     $now      = current_time( 'mysql' );
     $due_date = induction_calculate_due_date( $module_id, $explicit_due, $now );
     foreach ( get_users( [ 'role' => $role, 'fields' => 'ID' ] ) as $uid ) {
-        induction_ensure_assignment_row( (int) $uid, $module_id, $due_date, $now );
+        induction_ensure_assignment_row( (int) $uid, $module_id, $due_date, $now, (bool) $explicit_due );
     }
 }
 
@@ -1312,7 +1375,7 @@ function induction_bulk_assign( WP_REST_Request $request ): WP_REST_Response {
     $now      = current_time( 'mysql' );
     $due_date = induction_calculate_due_date( $module_id, $request->get_param( 'due_date' ), $now );
     foreach ( $user_ids as $uid ) {
-        induction_ensure_assignment_row( $uid, $module_id, $due_date, $now );
+        induction_ensure_assignment_row( $uid, $module_id, $due_date, $now, (bool) $request->get_param( 'due_date' ) );
     }
 
     return new WP_REST_Response( [ 'assigned' => count( $user_ids ) ] );
@@ -2570,6 +2633,7 @@ function induction_media_ids_in_sections( array $sections ): array {
         foreach ( (array) ( $section['quizBlocks'] ?? [] ) as $qb ) {
             if ( ( $qb['type'] ?? '' ) === 'multiple_choice' ) $ids[] = (int) ( $qb['data']['imageMediaId'] ?? 0 );
         }
+        $ids[] = (int) ( $section['heroImageMediaId'] ?? 0 );
     }
     return array_values( array_unique( array_filter( $ids, fn( $v ) => $v > 0 ) ) );
 }
@@ -2680,7 +2744,8 @@ function induction_get_media(): WP_REST_Response {
                     }
                 }
                 if ( ! empty( $section['heroImage'] ) ) {
-                    $add( attachment_url_to_postid( (string) $section['heroImage'] ), array_merge( $entry, [ 'where' => 'section image' ] ) );
+                    $hero_id = (int) ( $section['heroImageMediaId'] ?? 0 ) ?: attachment_url_to_postid( (string) $section['heroImage'] );
+                    $add( $hero_id, array_merge( $entry, [ 'where' => 'section image' ] ) );
                 }
             }
         }
@@ -3582,6 +3647,26 @@ function induction_attachment_id_from_url( string $url ): int {
     return (int) $cache[ $url ];
 }
 
+// induction_attachment_id_from_url() with one query for every path instead of one per URL.
+function induction_export_url_to_id( string $url ): int {
+    static $by_file = null;
+    static $base    = '';
+    if ( null === $by_file ) {
+        global $wpdb;
+        $by_file = [];
+        foreach ( $wpdb->get_results( "SELECT post_id, meta_value FROM {$wpdb->postmeta} WHERE meta_key = '_wp_attached_file'" ) as $row ) {
+            $by_file[ $row->meta_value ] = (int) $row->post_id;
+        }
+        $base = preg_replace( '#^https?:#i', '', wp_get_upload_dir()['baseurl'] ) . '/';
+    }
+    $url = preg_replace( '#^https?:#i', '', (string) strtok( $url, '?#' ) );
+    if ( 0 !== strpos( $url, $base ) ) {
+        return 0;
+    }
+    $file = preg_replace( '/-\d+x\d+(?=\.[a-z0-9]+$)/i', '', substr( $url, strlen( $base ) ) );
+    return $by_file[ $file ] ?? $by_file[ preg_replace( '/(\.[a-z0-9]+)$/i', '-scaled$1', $file ) ] ?? 0;
+}
+
 function induction_export_posts( string $type ): array {
     return get_posts( [
         'post_type'      => $type,
@@ -3593,7 +3678,7 @@ function induction_export_posts( string $type ): array {
 }
 
 // Returns [ modules, refs by post id ].
-function induction_export_modules( array &$media, array &$budget ): array {
+function induction_export_modules( array &$media_ids ): array {
     $modules = [];
     $refs    = [];
     foreach ( induction_export_posts( 'induction_module' ) as $post ) {
@@ -3603,11 +3688,8 @@ function induction_export_modules( array &$media, array &$budget ): array {
         $blocks = is_array( $blocks ) ? $blocks : [];
         $hero   = (int) get_post_meta( $post->ID, 'module_hero_image', true );
 
-        $ids = [ $hero ];
-        induction_media_ids_in_value( [ $blocks, $post->post_content ], $ids, 'induction_attachment_id_from_url' );
-        foreach ( array_unique( $ids ) as $id ) {
-            induction_export_collect_media( $id, $media, $budget );
-        }
+        $media_ids[] = $hero;
+        induction_media_ids_in_value( [ $blocks, $post->post_content ], $media_ids, 'induction_export_url_to_id' );
 
         $modules[] = [
             'ref'     => $refs[ $post->ID ],
@@ -3630,11 +3712,11 @@ function induction_export_modules( array &$media, array &$budget ): array {
     return [ $modules, $refs ];
 }
 
-function induction_export_locations( array &$media, array &$budget ): array {
+function induction_export_locations( array &$media_ids ): array {
     $locations = [];
     foreach ( induction_export_posts( 'induction_location' ) as $post ) {
-        $thumb = (int) get_post_meta( $post->ID, 'location_thumbnail_id', true );
-        induction_export_collect_media( $thumb, $media, $budget );
+        $thumb       = (int) get_post_meta( $post->ID, 'location_thumbnail_id', true );
+        $media_ids[] = $thumb;
         $locations[] = [
             'title'        => $post->post_title,
             'status'       => $post->post_status,
@@ -3651,11 +3733,11 @@ function induction_export_locations( array &$media, array &$budget ): array {
     return $locations;
 }
 
-function induction_export_documents( array &$media, array &$budget ): array {
+function induction_export_documents( array &$media_ids ): array {
     $documents = [];
     foreach ( induction_export_posts( 'induction_document' ) as $post ) {
-        $file_id = (int) get_post_meta( $post->ID, 'document_file_id', true );
-        induction_export_collect_media( $file_id, $media, $budget );
+        $file_id     = (int) get_post_meta( $post->ID, 'document_file_id', true );
+        $media_ids[] = $file_id;
         $documents[] = [
             'title'                 => $post->post_title,
             'status'                => $post->post_status,
@@ -3691,12 +3773,18 @@ function induction_export_rows( string $table, array $module_refs, array $drop =
 }
 
 function induction_export_collect(): array {
+    $media_ids = [];
+    [ $modules, $module_refs ] = induction_export_modules( $media_ids );
+    $locations = induction_export_locations( $media_ids );
+    $documents = induction_export_documents( $media_ids );
+
+    $media_ids = array_values( array_unique( array_filter( array_map( 'intval', $media_ids ) ) ) );
+    _prime_post_caches( $media_ids, false, true );
     $media  = [];
     $budget = [ 'used' => 0, 'skipped' => [] ];
-
-    [ $modules, $module_refs ] = induction_export_modules( $media, $budget );
-    $locations = induction_export_locations( $media, $budget );
-    $documents = induction_export_documents( $media, $budget );
+    foreach ( $media_ids as $id ) {
+        induction_export_collect_media( $id, $media, $budget );
+    }
 
     // Never leak absolute server paths into the archive.
     $manifest = [];
@@ -3740,58 +3828,51 @@ function induction_export_collect(): array {
     ];
 }
 
-// A short-lived token stands in for the auth header, so the browser downloads the zip itself.
-function induction_export_prepare(): WP_REST_Response|WP_Error {
-    $export = induction_export_collect();
-    if ( '' === $export['content'] ) {
-        return new WP_Error( 'induction_export_encode', 'The site content could not be encoded for export.', [ 'status' => 500 ] );
-    }
-    $token = bin2hex( random_bytes( 32 ) );
-    set_transient( 'induction_export_' . hash( 'sha256', $token ), get_current_user_id(), INDUCTION_EXPORT_LINK_TTL );
-
-    return rest_ensure_response( [
-        'token'        => $token,
-        'files'        => count( $export['media'] ),
-        'bytes'        => $export['bytes'],
-        'skippedMedia' => $export['skipped'],
-    ] );
-}
-
-function induction_export_permission( WP_REST_Request $request ): bool {
-    if ( induction_is_admin_user() ) {
-        return true;
-    }
-    $token = (string) $request->get_param( 'token' );
-    if ( ! preg_match( '/^[a-f0-9]{64}$/', $token ) ) {
-        return false;
-    }
-    $key     = 'induction_export_' . hash( 'sha256', $token );
-    $user_id = (int) get_transient( $key );
-    if ( ! $user_id ) {
-        return false;
-    }
-    delete_transient( $key ); // single use: the URL may end up in history or access logs
-    wp_set_current_user( $user_id );
-    return induction_is_admin_user();
-}
-
-function induction_export_site(): WP_REST_Response|WP_Error {
+// The token stands in for the auth header, so the browser can download the zip itself.
+function induction_export_prepare( WP_REST_Request $request ): WP_REST_Response|WP_Error {
     induction_transfer_no_time_limit();
     if ( ! class_exists( 'ZipArchive' ) ) {
         return new WP_Error( 'induction_no_zip', 'The server is missing the Zip extension needed to build an export.', [ 'status' => 500 ] );
     }
+    $job = induction_import_id( $request->get_param( 'job' ) ) ?: str_replace( '-', '', wp_generate_uuid4() );
+    induction_export_set_status( $job, [ 'phase' => 'collecting' ] );
+
     $export = induction_export_collect();
     if ( '' === $export['content'] ) {
-        return new WP_Error( 'induction_export_encode', 'The site content could not be encoded for export.', [ 'status' => 500 ] );
+        return induction_export_fail( $job, new WP_Error( 'induction_export_encode', 'The site content could not be encoded for export.', [ 'status' => 500 ] ) );
     }
     $shortfall = induction_transfer_disk_shortfall( $export['bytes'] );
     if ( $shortfall ) {
-        return new WP_Error( 'induction_disk_full', $shortfall, [ 'status' => 507 ] );
+        return induction_export_fail( $job, new WP_Error( 'induction_disk_full', $shortfall, [ 'status' => 507 ] ) );
+    }
+    $size = induction_export_build_zip( $job, $export );
+    if ( is_wp_error( $size ) ) {
+        return induction_export_fail( $job, $size );
     }
 
-    $path = induction_transfer_dir() . 'induction-export-' . wp_generate_uuid4() . '.zip';
+    $token = bin2hex( random_bytes( 32 ) );
+    set_transient( 'induction_export_' . hash( 'sha256', $token ), [ 'user' => get_current_user_id(), 'job' => $job ], INDUCTION_EXPORT_LINK_TTL );
+    induction_export_set_status( $job, [ 'phase' => 'ready', 'size' => $size ] );
+
+    return rest_ensure_response( [
+        'token'        => $token,
+        'job'          => $job,
+        'files'        => count( $export['media'] ),
+        'bytes'        => $export['bytes'],
+        'size'         => $size,
+        'skippedMedia' => $export['skipped'],
+    ] );
+}
+
+function induction_export_fail( string $job, WP_Error $error ): WP_Error {
+    induction_export_set_status( $job, [ 'phase' => 'failed', 'message' => $error->get_error_message() ] );
+    return $error;
+}
+
+function induction_export_build_zip( string $job, array $export ): int|WP_Error {
+    $path = induction_export_path( $job, 'zip' );
     $zip  = new ZipArchive();
-    if ( true !== $zip->open( $path, ZipArchive::CREATE ) ) {
+    if ( true !== $zip->open( $path, ZipArchive::CREATE | ZipArchive::OVERWRITE ) ) {
         return new WP_Error( 'induction_zip_failed', 'Could not create the export archive.', [ 'status' => 500 ] );
     }
     $zip->addFromString( 'content.json', $export['content'] );
@@ -3802,12 +3883,74 @@ function induction_export_site(): WP_REST_Response|WP_Error {
             $zip->setCompressionName( $file['file'], ZipArchive::CM_STORE );
         }
     }
+    // close() does the copying, so that is what gets reported.
+    induction_export_set_status( $job, [ 'phase' => 'zipping', 'progress' => 0 ] );
+    if ( method_exists( $zip, 'registerProgressCallback' ) ) {
+        $zip->registerProgressCallback( 0.01, static function ( float $progress ) use ( $job ): void {
+            induction_export_set_status( $job, [ 'phase' => 'zipping', 'progress' => $progress ] );
+        } );
+    }
     if ( ! $zip->close() ) {
         @unlink( $path );
         return new WP_Error( 'induction_zip_failed', 'Could not write the export archive (the server may be out of disk space).', [ 'status' => 500 ] );
     }
+    return (int) filesize( $path );
+}
 
-    // Send the file and exit. Keep running if the browser disconnects, so the temp zip is deleted.
+function induction_export_path( string $job, string $ext ): string {
+    return induction_transfer_dir() . "induction-export-{$job}.{$ext}";
+}
+
+function induction_export_set_status( string $job, array $status ): void {
+    @file_put_contents( induction_export_path( $job, 'json' ), wp_json_encode( $status ), LOCK_EX );
+}
+
+function induction_export_status( WP_REST_Request $request ): WP_REST_Response {
+    $job    = induction_import_id( $request->get_param( 'job' ) );
+    $raw    = '' !== $job ? @file_get_contents( induction_export_path( $job, 'json' ) ) : false;
+    $status = $raw ? json_decode( $raw, true ) : null;
+    return rest_ensure_response( is_array( $status ) ? $status : [ 'phase' => 'unknown' ] );
+}
+
+function induction_export_discard( WP_REST_Request $request ): WP_REST_Response {
+    $job = induction_import_id( $request->get_param( 'job' ) );
+    if ( '' !== $job ) {
+        @unlink( induction_export_path( $job, 'zip' ) );
+        @unlink( induction_export_path( $job, 'json' ) );
+    }
+    return rest_ensure_response( [ 'discarded' => true ] );
+}
+
+function induction_export_permission( WP_REST_Request $request ): bool {
+    if ( induction_is_admin_user() ) {
+        return true;
+    }
+    $token = (string) $request->get_param( 'token' );
+    if ( ! preg_match( '/^[a-f0-9]{64}$/', $token ) ) {
+        return false;
+    }
+    $key   = 'induction_export_' . hash( 'sha256', $token );
+    $grant = get_transient( $key );
+    if ( ! is_array( $grant ) ) {
+        return false;
+    }
+    delete_transient( $key ); // single use: the URL may end up in history or access logs
+    wp_set_current_user( (int) $grant['user'] );
+    $request->set_param( 'job', (string) $grant['job'] );
+    return induction_is_admin_user();
+}
+
+function induction_export_site( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    induction_transfer_no_time_limit();
+    $job  = induction_import_id( $request->get_param( 'job' ) );
+    $path = '' !== $job ? induction_export_path( $job, 'zip' ) : '';
+    $in   = '' !== $path && is_file( $path ) ? @fopen( $path, 'rb' ) : false;
+    if ( ! $in ) {
+        return new WP_Error( 'induction_export_missing', 'This export has already been downloaded or has expired. Export again.', [ 'status' => 404 ] );
+    }
+    $size = (int) filesize( $path );
+
+    // Keep going after a disconnect so the zip still gets deleted.
     ignore_user_abort( true );
     while ( ob_get_level() > 0 ) {
         ob_end_clean();
@@ -3815,8 +3958,28 @@ function induction_export_site(): WP_REST_Response|WP_Error {
     nocache_headers();
     header( 'Content-Type: application/zip' );
     header( 'Content-Disposition: attachment; filename="induction-export-' . gmdate( 'Y-m-d' ) . '.zip"' );
-    header( 'Content-Length: ' . filesize( $path ) );
-    readfile( $path );
+    header( 'Content-Length: ' . $size );
+    // Otherwise nginx buffers the file and "sent" runs ahead of the browser.
+    header( 'X-Accel-Buffering: no' );
+
+    $sent     = 0;
+    $reported = 0;
+    induction_export_set_status( $job, [ 'phase' => 'sending', 'sent' => 0, 'size' => $size ] );
+    while ( ! feof( $in ) && ! connection_aborted() ) {
+        $chunk = fread( $in, 1024 * 1024 );
+        if ( false === $chunk || '' === $chunk ) {
+            break;
+        }
+        echo $chunk;
+        flush();
+        $sent += strlen( $chunk );
+        if ( $sent - $reported >= INDUCTION_EXPORT_REPORT_EVERY ) {
+            induction_export_set_status( $job, [ 'phase' => 'sending', 'sent' => $sent, 'size' => $size ] );
+            $reported = $sent;
+        }
+    }
+    fclose( $in );
+    induction_export_set_status( $job, [ 'phase' => $sent >= $size ? 'done' : 'cancelled', 'sent' => $sent, 'size' => $size ] );
     @unlink( $path );
     exit;
 }
@@ -3847,7 +4010,7 @@ function induction_import_sweep_stale(): void {
     $unfinished  = time() - INDUCTION_IMPORT_KEEP_UNFINISHED_DAYS * DAY_IN_SECONDS;
     $older_than  = static fn( string $path, int $cutoff ): bool => (int) @filemtime( $path ) < $cutoff;
 
-    foreach ( [ 'induction-upload-*.zip.part', 'induction-session-*.tmp', 'induction-export-*.zip' ] as $pattern ) {
+    foreach ( [ 'induction-upload-*.zip.part', 'induction-session-*.tmp', 'induction-export-*.zip', 'induction-export-*.json' ] as $pattern ) {
         foreach ( glob( $dir . $pattern ) ?: [] as $path ) {
             if ( $older_than( $path, $day_ago ) ) {
                 @unlink( $path );
@@ -3985,7 +4148,59 @@ function induction_import_safe_extracted_path( string $extract_dir, string $rel 
         return '';
     }
     $path = rtrim( $extract_dir, '/\\' ) . '/' . $rel;
-    return is_file( $path ) ? $path : '';
+    return is_file( $path ) || induction_import_extract_entry( $extract_dir, $rel, $path ) ? $path : '';
+}
+
+// Held open for the request: reopening rereads the whole file list.
+function induction_import_archive( string $extract_dir, bool $close = false ): ?ZipArchive {
+    static $open = [];
+    $key = rtrim( $extract_dir, '/\\' );
+    if ( $close ) {
+        if ( ! empty( $open[ $key ] ) ) {
+            $open[ $key ]->close();
+        }
+        unset( $open[ $key ] );
+        return null;
+    }
+    if ( ! array_key_exists( $key, $open ) ) {
+        $zip          = class_exists( 'ZipArchive' ) ? new ZipArchive() : null;
+        $archive      = $key . '/' . INDUCTION_IMPORT_ARCHIVE;
+        $open[ $key ] = $zip && is_file( $archive ) && true === $zip->open( $archive ) ? $zip : null;
+    }
+    return $open[ $key ];
+}
+
+function induction_import_extract_media( string $extract_dir, $entry ): void {
+    if ( ! is_array( $entry ) ) {
+        return;
+    }
+    $files = array_merge( [ $entry['file'] ?? '' ], array_column( array_filter( (array) ( $entry['sizes'] ?? [] ), 'is_array' ), 'file' ) );
+    foreach ( array_filter( $files, 'is_string' ) as $rel ) {
+        if ( '' !== $rel ) {
+            induction_import_safe_extracted_path( $extract_dir, $rel );
+        }
+    }
+}
+
+// Via .part, so a copy cut short by a killed worker never looks complete.
+function induction_import_extract_entry( string $extract_dir, string $rel, string $target ): bool {
+    $zip = induction_import_archive( $extract_dir );
+    $in  = $zip && false !== $zip->locateName( $rel ) ? $zip->getStream( $rel ) : false;
+    if ( ! $in ) {
+        return false;
+    }
+    wp_mkdir_p( dirname( $target ) );
+    $out = @fopen( $target . '.part', 'wb' );
+    $ok  = $out && false !== stream_copy_to_stream( $in, $out );
+    fclose( $in );
+    if ( $out ) {
+        fclose( $out );
+    }
+    if ( $ok && @rename( $target . '.part', $target ) ) {
+        return true;
+    }
+    @unlink( $target . '.part' );
+    return false;
 }
 
 function induction_import_read_payload( string $extract_dir ): ?array {
@@ -4048,7 +4263,7 @@ function induction_import_session_delete( string $id ): void {
 function induction_import_new_session( string $extract_dir ): array {
     return [
         'extract_dir'     => $extract_dir,
-        'phase'           => 'media',
+        'phase'           => 'extract',
         'cursor'          => 0,
         'processed'       => 0,
         'total'           => 0,
@@ -4118,18 +4333,26 @@ function induction_import_begin_locked( string $id, int $expected_size ): WP_RES
         return new WP_Error( 'induction_incomplete_upload', 'The upload was incomplete; please try again.', [ 'status' => 400 ] );
     }
 
+    // Nothing is unzipped yet: the extract phase takes only what was picked.
     $extract_dir = induction_transfer_dir() . 'induction-import-' . $id;
     induction_rrmdir( $extract_dir );
-    $unzipped = induction_unzip_streaming( $part, $extract_dir );
+    $archive = $extract_dir . '/' . INDUCTION_IMPORT_ARCHIVE;
+    $moved   = wp_mkdir_p( $extract_dir ) && ( @rename( $part, $archive ) || @copy( $part, $archive ) );
     @unlink( $part );
-    if ( is_wp_error( $unzipped ) ) {
+    if ( ! $moved ) {
         induction_rrmdir( $extract_dir );
-        return $unzipped;
+        return new WP_Error( 'induction_extract_dir', 'Could not create a working directory for the import.', [ 'status' => 500 ] );
     }
+    if ( ! induction_import_archive( $extract_dir ) ) {
+        induction_rrmdir( $extract_dir );
+        return new WP_Error( 'induction_bad_zip', 'That file could not be read as a zip archive.', [ 'status' => 400 ] );
+    }
+    induction_import_safe_extracted_path( $extract_dir, 'content.json' );
 
     $payload = induction_import_read_payload( $extract_dir );
     $invalid = induction_import_check_format( $payload );
     if ( $invalid ) {
+        induction_import_archive( $extract_dir, true );
         induction_rrmdir( $extract_dir );
         return $invalid;
     }
@@ -4183,7 +4406,7 @@ function induction_import_select_locked( string $id, array $picked ): WP_REST_Re
     if ( ! is_array( $session ) ) {
         return new WP_Error( 'induction_no_session', 'Import session not found.', [ 'status' => 404 ] );
     }
-    if ( 'media' !== $session['phase'] || $session['processed'] > 0 ) {
+    if ( 'extract' !== $session['phase'] || $session['processed'] > 0 ) {
         return new WP_Error( 'induction_import_started', 'This import has already started.', [ 'status' => 409 ] );
     }
     $payload = induction_import_read_payload( (string) ( $session['extract_dir'] ?? '' ) );
@@ -4271,6 +4494,7 @@ function induction_import_step_locked( string $id ): WP_REST_Response|WP_Error {
     }
 
     if ( 'done' === $session['phase'] ) {
+        induction_import_archive( $extract_dir, true );
         induction_rrmdir( $extract_dir ); // only now: the session is already saved as done
         return rest_ensure_response( [ 'done' => true, 'summary' => $session['summary'] ] );
     }
@@ -4315,7 +4539,7 @@ function induction_import_undo( WP_REST_Request $request ): WP_REST_Response|WP_
     return induction_import_with_lock( $id, fn() => induction_import_undo_locked( $id ) );
 }
 
-// Removes exactly what one import created, in ~15s slices like /step.
+// Removes exactly what one import created, in ~5s slices like /step.
 function induction_import_undo_locked( string $id ): WP_REST_Response|WP_Error {
     global $wpdb;
     $session = induction_import_session_load( $id );
@@ -4419,8 +4643,10 @@ function induction_import_from_payload( array $payload, string $extract_dir ): W
 
 // ── Import: engine ──────────────────────────────────────────────────────────
 
-// Content references media by id, and records reference modules by ref.
+// Content references media by id, and records reference modules by ref. Media is unzipped
+// in bulk first: unzipping each file just before use was ~40% slower on Windows.
 const INDUCTION_IMPORT_NEXT_PHASE = [
+    'extract'        => 'media',
     'media'          => 'modules',
     'modules'        => 'locations',
     'locations'      => 'documents',
@@ -4442,7 +4668,7 @@ function induction_import_phase_items( array $payload, string $phase ): array {
     if ( isset( $cache[ $phase ] ) ) {
         return $cache[ $phase ];
     }
-    if ( 'media' === $phase ) {
+    if ( 'media' === $phase || 'extract' === $phase ) {
         $items = [];
         foreach ( (array) ( $payload['media'] ?? [] ) as $old_id => $entry ) {
             $items[] = [ $old_id, $entry ];
@@ -4521,7 +4747,7 @@ function induction_import_is_selected( array $session, string $phase, int $index
     if ( null === $selection ) {
         return true;
     }
-    if ( 'media' === $phase ) {
+    if ( 'media' === $phase || 'extract' === $phase ) {
         return in_array( (int) $item[0], $selection['media'], true );
     }
     if ( isset( INDUCTION_IMPORT_POST_TYPES[ $phase ] ) ) {
@@ -4574,6 +4800,10 @@ function induction_import_forget( array &$session, string $key, int $id ): void 
 }
 
 function induction_import_one_item( array &$session, array $payload, string $phase, $item ): void {
+    if ( 'extract' === $phase ) {
+        induction_import_extract_media( (string) $session['extract_dir'], $item[1] );
+        return;
+    }
     if ( 'media' === $phase ) {
         induction_import_one_media( $session, $item );
         return;
@@ -4841,6 +5071,9 @@ function induction_import_remap_content( $value, array $media_map, array $url_ma
     }
     if ( ! empty( $value['mediaId'] ) && isset( $value['url'] ) ) {
         $value['url'] = (string) wp_get_attachment_url( (int) $value['mediaId'] );
+    }
+    if ( ! empty( $value['heroImageMediaId'] ) && isset( $value['heroImage'] ) ) {
+        $value['heroImage'] = (string) wp_get_attachment_url( (int) $value['heroImageMediaId'] );
     }
     return $value;
 }
@@ -5179,6 +5412,119 @@ function induction_restore_module_version( WP_REST_Request $request ): WP_REST_R
     induction_snapshot_module_blocks( $module_id, $encoded );
 
     return rest_ensure_response( induction_format_module( get_post( $module_id ) ) );
+}
+
+// ─── Section header images ──────────────────────────────────────────────────
+// Section heroes used to be typed-in URLs that a backup can't carry.
+
+// [ module id => [ section index => url ] ] for heroes with no media id yet.
+function induction_linked_section_images(): array {
+    $found = [];
+    $ids   = get_posts( [ 'post_type' => 'induction_module', 'post_status' => 'any', 'posts_per_page' => -1, 'fields' => 'ids' ] );
+    foreach ( $ids as $module_id ) {
+        $sections = json_decode( (string) ( get_post_meta( $module_id, 'module_blocks', true ) ?: '[]' ), true );
+        foreach ( induction_normalize_sections( $sections ) as $i => $section ) {
+            $url = is_array( $section ) ? trim( (string) ( $section['heroImage'] ?? '' ) ) : '';
+            if ( '' !== $url && empty( $section['heroImageMediaId'] ) ) {
+                $found[ (int) $module_id ][ $i ] = $url;
+            }
+        }
+    }
+    return $found;
+}
+
+function induction_count_linked_section_images(): WP_REST_Response {
+    return rest_ensure_response( [ 'count' => array_sum( array_map( 'count', induction_linked_section_images() ) ) ] );
+}
+
+// `skip` holds URLs that already failed this run, so dead links aren't retried.
+function induction_copy_linked_section_images( WP_REST_Request $request ): WP_REST_Response {
+    $deadline = microtime( true ) + INDUCTION_IMPORT_STEP_SECONDS;
+    $skip     = array_map( 'strval', (array) ( $request->get_param( 'skip' ) ?? [] ) );
+    $copied   = 0;
+    $failed   = [];
+
+    foreach ( induction_linked_section_images() as $module_id => $heroes ) {
+        $sections = induction_normalize_sections( json_decode( (string) get_post_meta( $module_id, 'module_blocks', true ), true ) );
+        $changed  = false;
+
+        foreach ( $heroes as $i => $url ) {
+            if ( in_array( $url, $skip, true ) || microtime( true ) > $deadline ) {
+                continue;
+            }
+            $id = induction_section_image_attachment( $url );
+            if ( is_wp_error( $id ) ) {
+                $skip[]   = $url;
+                $failed[] = [ 'url' => $url, 'module' => get_the_title( $module_id ) ?: '(Untitled module)', 'error' => $id->get_error_message() ];
+                continue;
+            }
+            $sections[ $i ]['heroImageMediaId'] = $id;
+            $sections[ $i ]['heroImage']        = (string) wp_get_attachment_url( $id );
+            $changed                            = true;
+            $copied++;
+        }
+
+        $encoded = $changed ? induction_encode_meta_json( $sections ) : null;
+        if ( null !== $encoded ) {
+            induction_seed_module_version_history( $module_id );
+            update_post_meta( $module_id, 'module_blocks', induction_slash_meta( $encoded ) );
+            induction_snapshot_module_blocks( $module_id, $encoded );
+        }
+    }
+
+    $remaining = 0;
+    foreach ( induction_linked_section_images() as $heroes ) {
+        $remaining += count( array_diff( $heroes, $skip ) );
+    }
+
+    return rest_ensure_response( [ 'copied' => $copied, 'failed' => $failed, 'remaining' => $remaining ] );
+}
+
+// Sections often share an image, so each URL is downloaded once.
+function induction_section_image_attachment( string $url ): int|WP_Error {
+    $existing = induction_attachment_id_from_url( $url );
+    if ( $existing ) {
+        return $existing;
+    }
+    $copies = get_posts( [
+        'post_type'      => 'attachment',
+        'post_status'    => 'inherit',
+        'posts_per_page' => 1,
+        'fields'         => 'ids',
+        'meta_key'       => '_induction_source_url',
+        'meta_value'     => $url,
+    ] );
+    if ( $copies ) {
+        return (int) $copies[0];
+    }
+
+    require_once ABSPATH . 'wp-admin/includes/file.php';
+    require_once ABSPATH . 'wp-admin/includes/media.php';
+    require_once ABSPATH . 'wp-admin/includes/image.php';
+
+    $tmp = download_url( $url, 30 );
+    if ( is_wp_error( $tmp ) ) {
+        return $tmp;
+    }
+
+    // Stock-photo URLs often have no extension.
+    $extensions = [ 'image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp' ];
+    $ext        = $extensions[ (string) wp_get_image_mime( $tmp ) ] ?? '';
+    if ( '' === $ext ) {
+        wp_delete_file( $tmp );
+        return new WP_Error( 'not_an_image', 'The address did not return an image.' );
+    }
+    $name = sanitize_file_name( pathinfo( (string) wp_parse_url( $url, PHP_URL_PATH ), PATHINFO_FILENAME ) ) ?: 'section-image';
+
+    $id = media_handle_sideload( [ 'name' => "$name.$ext", 'tmp_name' => $tmp ], 0 );
+    if ( is_wp_error( $id ) ) {
+        wp_delete_file( $tmp );
+        return $id;
+    }
+    update_post_meta( $id, '_induction_source_url', $url );
+    induction_set_media_category( $id, INDUCTION_RESOURCE_CATEGORY_DEFAULT );
+    induction_tag_media( [ $id ] );
+    return (int) $id;
 }
 
 // ─── Locations ──────────────────────────────────────────────────────────────

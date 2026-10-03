@@ -6,6 +6,7 @@ import {
 import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined';
 import ExportPanel from '../components/ExportPanel';
 import ImportChecklist from '../components/ImportChecklist';
+import SectionImagesPanel from '../components/SectionImagesPanel';
 import {
   ImportCancelledError, ImportInterruptedError, clearPendingImport, getImportStatus, getPendingImport,
   importSelected, resumeImport, selectEverything, undoImport, uploadImport,
@@ -117,6 +118,7 @@ export default function BackupPage() {
     const controller = new AbortController();
     cancelRef.current = controller;
     setStage('importing');
+    setProgress(0);
     try {
       setSummary(await importSelected(backup.sessionId, file.name, selection, setProgress, controller.signal));
       closeDialog();
@@ -183,7 +185,9 @@ export default function BackupPage() {
     ? 'Cancelling, finishing the current step'
     : cancelling === 'undoing'
       ? 'Cancelling, removing what was imported'
-      : stage === 'uploading' ? 'Uploading' : 'Importing';
+      : stage === 'uploading'
+        ? `Step 1 of 2: Uploading ${formatMegabytes(progress * (file?.size ?? 0))} of ${formatMegabytes(file?.size ?? 0)}`
+        : 'Step 2 of 2: Importing';
 
   return (
     <Box>
@@ -192,6 +196,7 @@ export default function BackupPage() {
         Move training content between sites, or take a copy you can restore from.
       </Typography>
 
+      <SectionImagesPanel />
       <ExportPanel />
 
       <Paper variant="outlined" sx={{ p: 3, borderRadius: 2, maxWidth: 820 }}>
@@ -283,6 +288,10 @@ export default function BackupPage() {
       </Dialog>
     </Box>
   );
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${Math.round(bytes / 1024 ** 2)} MB`;
 }
 
 function ProgressLine({ value, label, note = '' }: { value: number; label: string; note?: string }) {

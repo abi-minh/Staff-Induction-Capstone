@@ -128,6 +128,7 @@ export function createSection(): Section {
   return {
     id: `section-${Date.now()}-${sectionCounter++}`,
     heroImage: '',
+    heroImageMediaId: 0,
     title: '',
     description: '',
     blocks: [],

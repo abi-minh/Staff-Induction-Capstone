@@ -83,3 +83,34 @@ export async function uploadMedia(file: File): Promise<WPMedia> {
     title: data.title.rendered,
   };
 }
+
+export interface SectionImageFailure {
+  url: string;
+  module: string;
+  error: string;
+}
+
+export async function countLinkedSectionImages(): Promise<number> {
+  const { data } = await client.get<{ count: number }>('induction/v1/media/section-images');
+  return data.count;
+}
+
+// Failed URLs go back as `skip` so one dead link can't stall the loop.
+export async function copyLinkedSectionImages(
+  onProgress: (done: number) => void,
+): Promise<{ copied: number; failed: SectionImageFailure[] }> {
+  let copied = 0;
+  const failed: SectionImageFailure[] = [];
+  for (;;) {
+    const { data } = await client.post<{ copied: number; failed: SectionImageFailure[]; remaining: number }>(
+      'induction/v1/media/section-images/copy',
+      { skip: failed.map((f) => f.url) },
+    );
+    copied += data.copied;
+    failed.push(...data.failed);
+    onProgress(copied + failed.length);
+    if (data.remaining === 0 || data.copied + data.failed.length === 0) {
+      return { copied, failed };
+    }
+  }
+}

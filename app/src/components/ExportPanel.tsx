@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Alert, Button, CircularProgress, Paper, Typography } from '@mui/material';
+import { Alert, Box, Button, LinearProgress, Paper, Typography } from '@mui/material';
 import type { AlertColor } from '@mui/material';
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
-import { startExportDownload } from '../api/transfer';
+import { runExport } from '../api/transfer';
+import type { ExportStatus } from '../api/transfer';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -10,28 +11,47 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
 }
 
+function describe(status: ExportStatus): { step: string; label: string; value: number | null } {
+  switch (status.phase) {
+    case 'collecting':
+      return { step: 'Step 1 of 2', label: 'Gathering content', value: null };
+    case 'zipping':
+      return { step: 'Step 1 of 2', label: `Building the archive… ${Math.round(status.progress * 100)}%`, value: status.progress };
+    case 'ready':
+      return { step: 'Step 2 of 2', label: `Starting the download (${formatBytes(status.size)})`, value: null };
+    case 'sending':
+      return {
+        step: 'Step 2 of 2',
+        label: `Downloading… ${formatBytes(status.sent)} of ${formatBytes(status.size)}`,
+        value: status.size ? status.sent / status.size : null,
+      };
+  }
+}
+
 export default function ExportPanel() {
-  const [exporting, setExporting] = useState(false);
+  const [status, setStatus] = useState<ExportStatus | null>(null);
   const [message, setMessage] = useState<{ severity: AlertColor; text: string } | null>(null);
 
   async function handleExport() {
-    setExporting(true);
     setMessage(null);
+    setStatus({ phase: 'collecting' });
     try {
-      const { files, bytes, skippedMedia } = await startExportDownload();
+      const { files, size, skippedMedia } = await runExport(setStatus);
       const skipped = skippedMedia
         ? ` ${skippedMedia} media file(s) were missing from this server and are included as links only.`
         : '';
       setMessage({
         severity: skippedMedia ? 'warning' : 'success',
-        text: `Your download is starting (about ${formatBytes(bytes)}, ${files} media file(s)). Your browser's downloads show its progress.${skipped}`,
+        text: `Export downloaded (${formatBytes(size)}, ${files} media file(s)). It's in your browser's downloads.${skipped}`,
       });
     } catch (err) {
       setMessage({ severity: 'error', text: err instanceof Error ? err.message : 'Export failed.' });
     } finally {
-      setExporting(false);
+      setStatus(null);
     }
   }
+
+  const progress = status ? describe(status) : null;
 
   return (
     <Paper variant="outlined" sx={{ p: 3, borderRadius: 2, mb: 3, maxWidth: 820 }}>
@@ -46,15 +66,26 @@ export default function ExportPanel() {
         The file contains staff names, emails and their training results. Treat it
         as personal data: store it somewhere access-controlled.
       </Alert>
-      <Button
-        variant="contained"
-        startIcon={exporting ? <CircularProgress size={16} /> : <DownloadOutlinedIcon />}
-        onClick={handleExport}
-        disabled={exporting}
-        sx={{ borderRadius: 999 }}
-      >
-        {exporting ? 'Preparing…' : 'Export everything'}
-      </Button>
+      {progress ? (
+        <Box>
+          <LinearProgress
+            variant={progress.value === null ? 'indeterminate' : 'determinate'}
+            value={(progress.value ?? 0) * 100}
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+            {progress.step}: {progress.label}. Stay on this page until it finishes.
+          </Typography>
+        </Box>
+      ) : (
+        <Button
+          variant="contained"
+          startIcon={<DownloadOutlinedIcon />}
+          onClick={handleExport}
+          sx={{ borderRadius: 999 }}
+        >
+          Export everything
+        </Button>
+      )}
       {message && <Alert severity={message.severity} sx={{ mt: 2 }}>{message.text}</Alert>}
     </Paper>
   );

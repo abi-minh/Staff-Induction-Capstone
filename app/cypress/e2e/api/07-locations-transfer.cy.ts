@@ -96,12 +96,34 @@ describe('Backup and migration', () => {
   // The export body itself isn't downloaded here: a whole-site zip can exceed
   // Cypress's string limit. The import checks use the JSON back-compat path.
 
-  it('prepares an export download link sized to the archive', () => {
-    cy.api('POST', 'induction/v1/transfer/export/prepare').then(({ status, body }) => {
+  it('builds an export, reports it ready, and discards it on request', () => {
+    const job = `cy${Date.now()}`;
+    cy.api('POST', 'induction/v1/transfer/export/prepare', { job }).then(({ status, body }) => {
       expect(status, `prepare failed, server said: ${serverMessage(body)}`).to.eq(200);
       expect(body.token).to.match(/^[a-f0-9]{64}$/);
+      expect(body.job).to.eq(job);
       expect(body.bytes).to.be.greaterThan(0);
+      expect(body.size).to.be.greaterThan(0);
       expect(body.files).to.be.a('number');
+    });
+    cy.api('GET', `induction/v1/transfer/export/status?job=${job}`).then(({ body }) => {
+      expect(body.phase).to.eq('ready');
+      expect(body.size).to.be.greaterThan(0);
+    });
+    cy.api('POST', 'induction/v1/transfer/export/discard', { job });
+    cy.api('GET', `induction/v1/transfer/export?job=${job}`).then(({ status, body }) => {
+      expect(status).to.eq(404);
+      expect(body.code).to.eq('induction_export_missing');
+    });
+  });
+
+  it('keeps export progress from staff', () => {
+    cy.loginAs('staff').then((token) => {
+      cy.request({
+        url: `${testEnv().wpUrl}/wp-json/induction/v1/transfer/export/status?job=anything`,
+        headers: { Authorization: `Bearer ${token}` },
+        failOnStatusCode: false,
+      }).its('status').should('be.oneOf', [401, 403]);
     });
   });
 

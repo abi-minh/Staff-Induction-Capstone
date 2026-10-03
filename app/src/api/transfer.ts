@@ -44,18 +44,71 @@ async function messageFrom(res: Response, fallback: string): Promise<string> {
 
 export interface ExportResult {
   files: number;
-  bytes: number; // approximate: the media files, before zip overhead
+  size: number;
   skippedMedia: number; // missing from the server's disk, so exported by URL only
 }
 
+export type ExportStatus =
+  | { phase: 'collecting' }
+  | { phase: 'zipping'; progress: number }
+  | { phase: 'ready'; size: number }
+  | { phase: 'sending'; sent: number; size: number };
+
+type ServerExportStatus =
+  | ExportStatus
+  | { phase: 'done' | 'cancelled'; sent: number; size: number }
+  | { phase: 'unknown' };
+
+const EXPORT_POLL_MS = 700;
+// A poll queued behind the export request is dropped so the next can reach a free worker.
+const EXPORT_POLL_TIMEOUT_MS = 2000;
+const DOWNLOAD_START_TIMEOUT_MS = 30_000;
+
 let downloadFrame: HTMLIFrameElement | null = null;
 
-// The browser downloads the export from a short-lived link (a fetched Blob would sit in
-// memory). The hidden iframe keeps a failed link from navigating the app away.
-export async function startExportDownload(): Promise<ExportResult> {
-  const res = await transferFetch('export/prepare', { method: 'POST' });
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function newJobId(): string {
+  // crypto.randomUUID() only exists on https or localhost.
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function getExportStatus(job: string): Promise<ServerExportStatus> {
+  try {
+    const res = await transferFetch(`export/status?job=${job}`, { signal: AbortSignal.timeout(EXPORT_POLL_TIMEOUT_MS) });
+    return res.ok ? ((await res.json()) as ServerExportStatus) : { phase: 'unknown' };
+  } catch {
+    return { phase: 'unknown' };
+  }
+}
+
+// The browser downloads from a one-time link, not a fetched Blob that would sit in memory.
+// The iframe keeps a failed link from navigating the app away.
+export async function runExport(onStatus: (status: ExportStatus) => void): Promise<ExportResult> {
+  const job = newJobId();
+  let building = true;
+  void (async () => {
+    while (building) {
+      await sleep(EXPORT_POLL_MS);
+      const status = await getExportStatus(job);
+      if (building && (status.phase === 'collecting' || status.phase === 'zipping')) onStatus(status);
+    }
+  })();
+
+  let res: Response;
+  try {
+    onStatus({ phase: 'collecting' });
+    res = await transferFetch('export/prepare', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job }),
+    });
+  } finally {
+    building = false;
+  }
   if (!res.ok) throw new Error(await messageFrom(res, 'Export failed.'));
-  const { token, files, bytes, skippedMedia } = (await res.json()) as ExportResult & { token: string };
+  const { token, files, size, skippedMedia } = (await res.json()) as ExportResult & { token: string };
+  onStatus({ phase: 'ready', size });
 
   if (!downloadFrame) {
     downloadFrame = document.createElement('iframe');
@@ -64,15 +117,31 @@ export async function startExportDownload(): Promise<ExportResult> {
   }
   downloadFrame.src = transferUrl(`export?token=${encodeURIComponent(token)}`);
 
-  return { files, bytes, skippedMedia };
+  const linkOpened = Date.now();
+  for (;;) {
+    await sleep(EXPORT_POLL_MS);
+    const status = await getExportStatus(job);
+    if (status.phase === 'sending') onStatus(status);
+    if (status.phase === 'done') return { files, size, skippedMedia };
+    if (status.phase === 'cancelled') {
+      throw new Error('The download stopped before it finished. Export again to get a complete copy.');
+    }
+    if (status.phase === 'ready' && Date.now() - linkOpened > DOWNLOAD_START_TIMEOUT_MS) {
+      void transferFetch('export/discard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job }),
+      });
+      throw new Error("The download didn't start. Check the browser isn't blocking downloads from this site, then export again.");
+    }
+  }
 }
 
 // ── Import ────────────────────────────────────────────────────────────────────
 
 const CHUNK_SIZE = 5 * 1024 * 1024; // under any realistic upload_max_filesize
-const UPLOAD_WEIGHT = 0.15; // share of the progress bar given to the upload
 const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000];
-const REQUEST_TIMEOUT_MS = 180_000; // steps take ~15s; this catches a silent connection
+const REQUEST_TIMEOUT_MS = 180_000; // steps take ~5s; this catches a silent connection
 
 // Network errors, timeouts and 5xx are retried with backoff; a 4xx is returned as-is.
 // Safe only because the server makes every stage idempotent (chunk offsets, session lock).
@@ -156,8 +225,6 @@ export class ImportCancelledError extends Error {
 async function driveSteps(
   sessionId: string,
   onProgress?: (fraction: number) => void,
-  offset = 0,
-  weight = 1,
   signal?: AbortSignal,
 ): Promise<ImportSummary> {
   for (;;) {
@@ -182,7 +249,7 @@ async function driveSteps(
       onProgress?.(1);
       return data.summary;
     }
-    onProgress?.(offset + (data.total > 0 ? data.processed / data.total : 0) * weight);
+    onProgress?.(data.total > 0 ? data.processed / data.total : 0);
   }
 }
 
@@ -226,7 +293,7 @@ export async function uploadImport(
       'application/octet-stream',
     );
     if (!res.ok) throw new Error(await messageFrom(res, 'Upload failed.'));
-    onProgress?.(((index + 1) / chunks) * UPLOAD_WEIGHT);
+    onProgress?.((index + 1) / chunks);
   }
 
   if (signal?.aborted) throw new ImportCancelledError(null);
@@ -246,7 +313,7 @@ export async function importSelected(
   const res = await postWithRetry('import/select', JSON.stringify({ sessionId, ...selection }));
   if (!res.ok) throw new Error(await messageFrom(res, 'Import failed.'));
   setPendingImport({ sessionId, fileName });
-  return driveSteps(sessionId, onProgress, UPLOAD_WEIGHT, 1 - UPLOAD_WEIGHT, signal);
+  return driveSteps(sessionId, onProgress, signal);
 }
 
 export interface ImportStatus {
