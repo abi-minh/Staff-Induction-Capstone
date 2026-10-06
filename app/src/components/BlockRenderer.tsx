@@ -9,18 +9,20 @@ interface Props {
   blocks: Block[];
   answers: Record<string, string>;
   onAnswer: (blockId: string, answer: string) => void;
-  showResults: Record<string, boolean> | null;
+  showResults: Record<string, boolean | null> | null;
+  /** Short-answer guidance by block id, revealed once the learner has answered. */
+  answerGuidance?: Record<string, string>;
   disabled?: boolean;
   /** Responsive sources keyed by attachment id, straight from the module. */
   imageSources?: Record<string, ImageSource>;
 }
 
-export default function BlockRenderer({ blocks, answers, onAnswer, showResults, disabled, imageSources }: Props) {
+export default function BlockRenderer({ blocks, answers, onAnswer, showResults, disabled, imageSources, answerGuidance }: Props) {
   return (
     <Box>
       {blocks.map((block) => (
         <Box key={block.id} sx={{ mb: 2.5 }}>
-          {renderBlock(block, answers, onAnswer, showResults, disabled ?? false, imageSources)}
+          {renderBlock(block, answers, onAnswer, showResults, disabled ?? false, imageSources, answerGuidance)}
         </Box>
       ))}
     </Box>
@@ -31,9 +33,10 @@ function renderBlock(
   block: Block,
   answers: Record<string, string>,
   onAnswer: (blockId: string, answer: string) => void,
-  showResults: Record<string, boolean> | null,
+  showResults: Record<string, boolean | null> | null,
   disabled: boolean,
   imageSources?: Record<string, ImageSource>,
+  answerGuidance?: Record<string, string>,
 ) {
   switch (block.type) {
     case 'multiple_choice': {
@@ -104,8 +107,8 @@ function renderBlock(
     }
     case 'short_answer': {
       const currentAnswer = answers[block.id] ?? '';
-      const questionResult = showResults?.[block.id];
-      const hasResult = questionResult !== undefined;
+      const hasResult = showResults?.[block.id] !== undefined;
+      const guidance = answerGuidance?.[block.id];
       return (
         <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2, borderColor: 'divider' }}>
           <Typography sx={{ fontWeight: 600, mb: 1.5 }}>{block.data.question}</Typography>
@@ -118,8 +121,17 @@ function renderBlock(
             fullWidth
           />
           {hasResult && (
-            <Alert severity={questionResult ? 'success' : 'error'} sx={{ mt: 1.5 }}>
-              <strong>{questionResult ? 'Correct!' : 'Incorrect.'}</strong>
+            // No verdict. A written answer is self-marked against what a
+            // complete one should cover — calling it "Incorrect" on the
+            // strength of a string comparison was worse than saying nothing.
+            <Alert severity="info" sx={{ mt: 1.5 }}>
+              {guidance ? (
+                <>
+                  <strong>A complete answer covers:</strong> {guidance}
+                </>
+              ) : (
+                <strong>Compare your answer with the module content.</strong>
+              )}
               {block.data.explanation && ` ${block.data.explanation}`}
             </Alert>
           )}

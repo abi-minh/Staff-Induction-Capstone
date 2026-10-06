@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link as RouterLink } from 'react-router-dom';
+import EditCalendarOutlinedIcon from '@mui/icons-material/EditCalendarOutlined';
 import {
-  Alert, Avatar, Box, Button, Checkbox, Chip, Divider, FormControlLabel, IconButton, Link, MenuItem,
+  Alert, Avatar, Box, Button, Checkbox, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
+  Divider, FormControlLabel, IconButton, Link, MenuItem,
   Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -10,6 +12,7 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutlined';
 import {
   useStaffMember, useStaffProgress, useStaffAssignments, useRoles, useUpdateStaffRole,
+  useSetAssignmentDueDate,
   useUpdateTeamProfile,
 } from '../hooks/useStaff';
 import { useModules } from '../hooks/useModules';
@@ -71,6 +74,13 @@ export default function StaffDetailPage() {
   const uploadMedia = useUploadMedia();
   const updateTeamProfile = useUpdateTeamProfile();
   const currentUserId = useAuthStore((s) => s.user?.id);
+
+  // Which module's deadline is being moved, and to when. Held here rather than
+  // in a child so the dialog survives the table re-rendering after a save.
+  const [dueDateFor, setDueDateFor] = useState<{ moduleId: number; title: string } | null>(null);
+  const [dueDateDraft, setDueDateDraft] = useState('');
+  const [dueDateError, setDueDateError] = useState('');
+  const setDueDate = useSetAssignmentDueDate(userId);
 
   const [editingRole, setEditingRole] = useState(false);
   const [roleError, setRoleError] = useState('');
@@ -208,6 +218,23 @@ export default function StaffDetailPage() {
     const existing = progressMap.get(p.moduleId);
     if (!existing || p.id > existing.id) progressMap.set(p.moduleId, p);
   });
+  function openDueDate(moduleId: number, title: string, current: string | null) {
+    setDueDateError('');
+    // The input wants Y-m-d; stored values carry a time component.
+    setDueDateDraft(current ? current.slice(0, 10) : '');
+    setDueDateFor({ moduleId, title });
+  }
+
+  async function saveDueDate() {
+    if (!dueDateFor) return;
+    try {
+      await setDueDate.mutateAsync({ moduleId: dueDateFor.moduleId, dueDate: dueDateDraft });
+      setDueDateFor(null);
+    } catch (err) {
+      setDueDateError(err instanceof Error ? err.message : 'Could not update the due date.');
+    }
+  }
+
   const assignmentMap  = new Map(assignments.map((a) => [a.moduleId, a]));
   const completedCount = Array.from(progressMap.values()).filter((p) => p.status === 'completed').length;
   const totalModules   = modules?.length ?? 0;
@@ -516,7 +543,23 @@ export default function StaffDetailPage() {
                     <Chip label={STATUS_LABELS[status]} color={STATUS_COLORS[status]} size="small" variant="outlined" sx={{ borderRadius: 999, fontWeight: 500 }} />
                   </TableCell>
                   <TableCell>{a ? formatDate(a.assignedAt) : '—'}</TableCell>
-                  <TableCell>{a?.dueDate ? formatDate(a.dueDate) : '—'}</TableCell>
+                  <TableCell>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      {a?.dueDate ? formatDate(a.dueDate) : '—'}
+                      {/* Only assigned modules have a row to carry a date. */}
+                      {a && (
+                        <Tooltip title="Change due date">
+                          <IconButton
+                            size="small"
+                            aria-label={`Change the due date for ${m.title || 'this module'}`}
+                            onClick={() => openDueDate(m.id, m.title || '(Untitled)', a.dueDate)}
+                          >
+                            <EditCalendarOutlinedIcon sx={{ fontSize: 16 }} />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                    </Box>
+                  </TableCell>
                   <TableCell>{p?.completedAt ? new Date(p.completedAt).toLocaleDateString() : '—'}</TableCell>
                   <TableCell>{p?.timeSpent ? `${Math.round(p.timeSpent / 60)} min` : '—'}</TableCell>
                   <TableCell>
@@ -565,7 +608,18 @@ export default function StaffDetailPage() {
                 </Box>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
                   <Typography variant="body2" color="text.secondary">Due</Typography>
-                  <Typography variant="body2">{a?.dueDate ? formatDate(a.dueDate) : '—'}</Typography>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                    <Typography variant="body2">{a?.dueDate ? formatDate(a.dueDate) : '—'}</Typography>
+                    {a && (
+                      <IconButton
+                        size="small"
+                        aria-label={`Change the due date for ${m.title || 'this module'}`}
+                        onClick={() => openDueDate(m.id, m.title || '(Untitled)', a.dueDate)}
+                      >
+                        <EditCalendarOutlinedIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    )}
+                  </Box>
                 </Box>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
                   <Typography variant="body2" color="text.secondary">Completed</Typography>
@@ -592,6 +646,32 @@ export default function StaffDetailPage() {
           <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>No modules found.</Typography>
         )}
       </Box>
+
+      <Dialog open={!!dueDateFor} onClose={() => setDueDateFor(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Due date — {dueDateFor?.title}</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>
+          <Typography variant="body2" color="text.secondary">
+            Changes the deadline for this staff member only. Everyone else keeps the
+            date set by the module's duration.
+          </Typography>
+          <TextField
+            label="Due date"
+            type="date"
+            value={dueDateDraft}
+            onChange={(e) => setDueDateDraft(e.target.value)}
+            fullWidth
+            slotProps={{ inputLabel: { shrink: true } }}
+            helperText="Leave empty to remove the deadline entirely."
+          />
+          {dueDateError && <Alert severity="error">{dueDateError}</Alert>}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={() => setDueDateFor(null)} disabled={setDueDate.isLoading}>Cancel</Button>
+          <Button variant="contained" onClick={saveDueDate} disabled={setDueDate.isLoading}>
+            {setDueDate.isLoading ? 'Saving…' : 'Save'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

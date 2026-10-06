@@ -94,10 +94,14 @@ export default function StaffModuleViewPage() {
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  // null for a short answer: revealed, but not judged.
   const [showResults, setShowResults] = useState<Record<
     string,
-    boolean
+    boolean | null
   > | null>(null);
+  // Short-answer guidance, returned by the check endpoint rather than sent with
+  // the module, so it is not readable before the learner attempts the question.
+  const [answerGuidance, setAnswerGuidance] = useState<Record<string, string>>({});
   const [checkingQuiz, setCheckingQuiz] = useState(false);
 
   const { sections, hasQuiz, moduleQuizBlockIds, hasAnyQuiz } = useMemo(() => {
@@ -223,11 +227,14 @@ export default function StaffModuleViewPage() {
           checkQuizAnswer(userId, moduleId, bid, answers[bid]),
         ),
       );
-      const resultMap: Record<string, boolean> = {};
+      const resultMap: Record<string, boolean | null> = {};
+      const guidanceMap: Record<string, string> = {};
       answeredIds.forEach((bid, i) => {
         resultMap[bid] = results[i].isCorrect;
+        if (results[i].guidance) guidanceMap[bid] = results[i].guidance as string;
       });
       setShowResults((prev) => ({ ...prev, ...resultMap }));
+      setAnswerGuidance((prev) => ({ ...prev, ...guidanceMap }));
     } finally {
       setCheckingQuiz(false);
     }
@@ -387,6 +394,7 @@ export default function StaffModuleViewPage() {
               answers={answers}
               onAnswer={handleAnswer}
               showResults={showResults}
+              answerGuidance={answerGuidance}
             />
           </Paper>
         )}
@@ -450,6 +458,7 @@ export default function StaffModuleViewPage() {
                   answers={answers}
                   onAnswer={handleAnswer}
                   showResults={showResults}
+                  answerGuidance={answerGuidance}
                 />
                 <Button
                   variant="contained"

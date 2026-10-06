@@ -375,3 +375,21 @@ export async function fetchStaffAssignments(userId: number): Promise<AssignmentR
   );
   return data;
 }
+
+/**
+ * Move one staff member's due date for one module.
+ *
+ * Send '' to clear it. Only the assignment row changes — the module's duration
+ * still governs everyone else.
+ */
+export async function setAssignmentDueDate(
+  userId: number,
+  moduleId: number,
+  dueDate: string,
+): Promise<void> {
+  await client.post('induction/v1/assignments/due-date', {
+    user_id: userId,
+    module_id: moduleId,
+    due_date: dueDate,
+  });
+}

@@ -226,7 +226,6 @@ export default function StaffPage() {
   const [search, setSearch] = useState("");
   const [assigningUserId, setAssigningUserId] = useState<number | null>(null);
   const [selectedModules, setSelectedModules] = useState<number[]>([]);
-  const [dueDate, setDueDate] = useState("");
   const [moduleSearch, setModuleSearch] = useState("");
   const [sortBy, setSortBy] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
@@ -413,14 +412,12 @@ export default function StaffPage() {
       .map((m) => m.id);
     setAssigningUserId(userId);
     setSelectedModules(assignedIds);
-    setDueDate("");
     setModuleSearch("");
   }
 
   function closeAssign() {
     setAssigningUserId(null);
     setSelectedModules([]);
-    setDueDate("");
     setModuleSearch("");
   }
 
@@ -449,7 +446,6 @@ export default function StaffPage() {
         bulkAssign.mutateAsync({
           moduleId: mid,
           userIds: [assigningUserId],
-          dueDate: dueDate || undefined,
         }),
       ),
       ...toUnassign.map((mid) =>
@@ -1005,14 +1001,6 @@ export default function StaffPage() {
             </Box>
           )}
 
-          <TextField
-            label="Due date for new assignments (optional)"
-            type="date"
-            value={dueDate}
-            onChange={(e) => setDueDate(e.target.value)}
-            fullWidth
-            slotProps={{ inputLabel: { shrink: true } }}
-          />
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3 }}>
           <Button onClick={closeAssign}>Cancel</Button>

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.7.0
+ * Version:     1.8.0
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.7.0' );
+define( 'INDUCTION_VERSION', '1.8.0' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -646,6 +646,21 @@ function induction_register_routes(): void {
         'methods'             => 'POST',
         'callback'            => 'induction_bulk_assign',
         'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+    ] );
+
+    // POST /assignments/due-date — move one person's deadline for one module.
+    // Separate from the assign call on purpose: assigning is a bulk action
+    // across many people, while a deadline is almost always moved for one
+    // person who had a reason.
+    register_rest_route( $ns, '/assignments/due-date', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_set_assignment_due_date',
+        'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+        'args'                => [
+            'user_id'   => [ 'type' => 'integer', 'required' => true ],
+            'module_id' => [ 'type' => 'integer', 'required' => true ],
+            'due_date'  => [ 'type' => 'string',  'required' => true ],
+        ],
     ] );
 
     // POST /assignments/remove — unassign module(s) from user(s) (admin only)
@@ -1354,6 +1369,70 @@ function induction_sync_role_assignments( int $module_id, string $role, $explici
     }
 }
 
+/**
+ * Move the due date on one person's assignment.
+ *
+ * Only ever touches the assignment row, never module_duration_days: the module
+ * still says "14 days" for everyone else, and one person's extension does not
+ * quietly become the new rule.
+ *
+ * An empty string clears the date, which is how an admin removes a deadline
+ * that should not have been there.
+ */
+function induction_set_assignment_due_date( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    global $wpdb;
+
+    $user_id   = (int) $request->get_param( 'user_id' );
+    $module_id = (int) $request->get_param( 'module_id' );
+    $raw       = trim( (string) $request->get_param( 'due_date' ) );
+
+    $table = $wpdb->prefix . 'induction_assignments';
+    $row   = $wpdb->get_var( $wpdb->prepare(
+        "SELECT id FROM $table WHERE user_id = %d AND module_id = %d",
+        $user_id,
+        $module_id
+    ) );
+
+    if ( ! $row ) {
+        return new WP_Error(
+            'assignment_not_found',
+            'That module is not assigned to this staff member, so it has no due date to move.',
+            [ 'status' => 404 ]
+        );
+    }
+
+    $due_date = null;
+    if ( '' !== $raw ) {
+        // The picker sends Y-m-d. Stored at the end of that day so a module due
+        // "on the 15th" is not reported overdue at one minute past midnight on
+        // the 15th — the overdue report compares due_date against now.
+        if ( ! preg_match( '/^(\d{4})-(\d{2})-(\d{2})$/', $raw, $m ) ) {
+            return new WP_Error( 'invalid_due_date', 'Give the due date as YYYY-MM-DD.', [ 'status' => 400 ] );
+        }
+        if ( ! checkdate( (int) $m[2], (int) $m[3], (int) $m[1] ) ) {
+            return new WP_Error( 'invalid_due_date', 'That is not a real date.', [ 'status' => 400 ] );
+        }
+        $due_date = $raw . ' 23:59:59';
+    }
+
+    // due_overridden is set either way, including when the date is cleared.
+    // Everything this endpoint does is a deliberate human decision, and
+    // induction_refresh_due_dates() only recomputes rows that are not marked —
+    // without this, editing the module's duration later would quietly undo an
+    // extension, or resurrect a deadline an admin had removed on purpose.
+    $wpdb->update(
+        $table,
+        [ 'due_date' => $due_date, 'due_overridden' => 1 ],
+        [ 'id' => (int) $row ]
+    );
+
+    return new WP_REST_Response( [
+        'user_id'   => $user_id,
+        'module_id' => $module_id,
+        'due_date'  => $due_date,
+    ] );
+}
+
 function induction_bulk_assign( WP_REST_Request $request ): WP_REST_Response {
     $module_id = (int) $request->get_param( 'module_id' );
     $user_ids  = array_map( 'intval', (array) $request->get_param( 'user_ids' ) );
@@ -1672,12 +1751,24 @@ function induction_grade_quiz_answer( array $quiz_block, $answer ): bool {
         $correct_val = ! empty( $quiz_block['data']['correctAnswer'] );
         return ( $answer === 'true' ) === $correct_val;
     }
-    if ( $quiz_block['type'] === 'short_answer' ) {
-        // Case-insensitive, whitespace-trimmed exact match.
-        $expected = trim( (string) ( $quiz_block['data']['correctAnswer'] ?? '' ) );
-        return $expected !== '' && strcasecmp( trim( (string) $answer ), $expected ) === 0;
-    }
+    // short_answer is deliberately absent: a written answer is not something a
+    // string comparison can judge. It is self-marked against guidance now, and
+    // induction_quiz_check() returns before reaching here.
     return false;
+}
+
+/**
+ * What a complete answer to a short-answer question should cover.
+ *
+ * Reads the new field, falling back to the old correctAnswer for questions
+ * written while these were auto-marked — the text an author typed as "the
+ * correct answer" is exactly the guidance a learner needs, so old content
+ * keeps working without migrating any stored JSON.
+ */
+function induction_short_answer_guidance( array $quiz_block ): string {
+    $data = $quiz_block['data'] ?? [];
+    $guidance = trim( (string) ( $data['answerGuidance'] ?? '' ) );
+    return '' !== $guidance ? $guidance : trim( (string) ( $data['correctAnswer'] ?? '' ) );
 }
 
 function induction_quiz_save( WP_REST_Request $request ): WP_REST_Response {
@@ -1783,6 +1874,19 @@ function induction_quiz_check( WP_REST_Request $request ): WP_REST_Response {
 
     if ( ! $quiz_block ) {
         return new WP_REST_Response( [ 'message' => 'Quiz question not found' ], 404 );
+    }
+
+    // A short answer is recorded but not judged: is_correct stays NULL, which
+    // this table already uses to mean "not graded". The learner gets the
+    // guidance back and marks themselves against it.
+    if ( ( $quiz_block['type'] ?? '' ) === 'short_answer' ) {
+        induction_upsert_quiz_response( $table, $user_id, $module_id, $block_id, $answer, null );
+
+        return new WP_REST_Response( [
+            'isCorrect'   => null,
+            'guidance'    => induction_short_answer_guidance( $quiz_block ),
+            'explanation' => $quiz_block['data']['explanation'] ?? '',
+        ] );
     }
 
     $is_correct = induction_grade_quiz_answer( $quiz_block, $answer );
@@ -2104,7 +2208,9 @@ function induction_strip_answers_from_blocks_json( string $blocks_json ): string
 
 // Strips answer keys at any depth, whatever the shape, so malformed data can't leak them.
 function induction_strip_answer_keys( array &$node ): void {
-    unset( $node['correctIndex'], $node['correctAnswer'] );
+    // answerGuidance joins the answer keys: it is meant to be revealed after an
+    // attempt, by the check endpoint, not sitting in the page source beforehand.
+    unset( $node['correctIndex'], $node['correctAnswer'], $node['answerGuidance'] );
     foreach ( $node as &$child ) {
         if ( is_array( $child ) ) {
             induction_strip_answer_keys( $child );

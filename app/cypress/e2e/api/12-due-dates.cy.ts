@@ -1,5 +1,6 @@
 /// <reference types="cypress" />
 import { sectionsJson } from '../../support/fixtures';
+import { testEnv } from '../../support/testEnv';
 
 // Due dates. Named in the test plan and, until now, covered by nothing: the
 // string "due" appeared in no spec, while both the Overdue report and the
@@ -194,6 +195,146 @@ describe('Due dates', () => {
         const ids = (body as { moduleId?: number; module_id?: number }[])
           .map((r) => r.moduleId ?? r.module_id);
         expect(ids, 'a module past its due date is overdue').to.include(moduleId);
+      });
+    });
+  });
+
+  // Moving one person's deadline after the fact. This replaced the date picker
+  // that used to sit in the assign dialog: assigning is a bulk action across
+  // many people, while a deadline is almost always moved for one person who
+  // had a reason.
+  describe('extending a due date', () => {
+    it('moves the date for one staff member without touching the module', () => {
+      createModule(14).then((moduleId) => {
+        cy.api('POST', 'induction/v1/assignments/bulk', {
+          module_id: moduleId, user_ids: [staffId],
+        }).its('status').should('eq', 200);
+
+        cy.api('POST', 'induction/v1/assignments/due-date', {
+          user_id: staffId, module_id: moduleId, due_date: '2030-06-15',
+        }).then(({ status, body }) => {
+          expect(status).to.eq(200);
+          // Stored at end of day, so a module due "on the 15th" is not overdue
+          // at one minute past midnight on the 15th.
+          expect(body.due_date).to.eq('2030-06-15 23:59:59');
+        });
+
+        dueDateFor(moduleId).then(({ dueDate: due }) => {
+          expect(asDate(due as string).getUTCFullYear()).to.eq(2030);
+          expect(asDate(due as string).getUTCDate()).to.eq(15);
+        });
+
+        // The module's own duration is untouched, so the next person assigned
+        // still gets 14 days.
+        cy.api('GET', `induction/v1/modules/${moduleId}`).then(({ body }) => {
+          expect(body.meta.module_duration_days).to.eq(14);
+        });
+      });
+    });
+
+    it('clears the deadline when given an empty date', () => {
+      createModule(14).then((moduleId) => {
+        cy.api('POST', 'induction/v1/assignments/bulk', {
+          module_id: moduleId, user_ids: [staffId],
+        }).its('status').should('eq', 200);
+
+        cy.api('POST', 'induction/v1/assignments/due-date', {
+          user_id: staffId, module_id: moduleId, due_date: '',
+        }).its('status').should('eq', 200);
+
+        dueDateFor(moduleId).then(({ dueDate: due }) => {
+          expect(due, 'deadline removed').to.eq(null);
+        });
+      });
+    });
+
+    it('rejects a date that is not a real one', () => {
+      createModule(0).then((moduleId) => {
+        cy.api('POST', 'induction/v1/assignments/bulk', {
+          module_id: moduleId, user_ids: [staffId],
+        }).its('status').should('eq', 200);
+
+        cy.api('POST', 'induction/v1/assignments/due-date', {
+          user_id: staffId, module_id: moduleId, due_date: '2030-02-31',
+        }).then(({ status, body }) => {
+          expect(status).to.eq(400);
+          expect(body.code).to.eq('invalid_due_date');
+        });
+
+        cy.api('POST', 'induction/v1/assignments/due-date', {
+          user_id: staffId, module_id: moduleId, due_date: '15/06/2030',
+        }).its('status').should('eq', 400);
+      });
+    });
+
+    it('404s for a module the staff member is not assigned', () => {
+      createModule(0).then((moduleId) => {
+        cy.api('POST', 'induction/v1/assignments/due-date', {
+          user_id: staffId, module_id: moduleId, due_date: '2030-06-15',
+        }).then(({ status, body }) => {
+          expect(status).to.eq(404);
+          expect(body.code).to.eq('assignment_not_found');
+        });
+      });
+    });
+
+    // The two features meet here: a manually set date must survive a later
+    // change to the module's duration. The refresh hook only recomputes rows
+    // that are not marked as overridden, so an endpoint that forgot to mark
+    // them would quietly undo every extension the next time an author edited
+    // the module.
+    it('survives a change to the module duration', () => {
+      createModule(14).then((moduleId) => {
+        cy.api('POST', 'induction/v1/assignments/bulk', {
+          module_id: moduleId, user_ids: [staffId],
+        }).its('status').should('eq', 200);
+
+        cy.api('POST', 'induction/v1/assignments/due-date', {
+          user_id: staffId, module_id: moduleId, due_date: '2030-06-15',
+        }).its('status').should('eq', 200);
+
+        cy.api('POST', `induction/v1/modules/${moduleId}`, {
+          meta: { module_duration_days: 3 },
+        }).its('status').should('eq', 200);
+
+        dueDateFor(moduleId).then(({ dueDate: due }) => {
+          expect(asDate(due as string).getUTCFullYear(), 'extension kept').to.eq(2030);
+          expect(asDate(due as string).getUTCDate()).to.eq(15);
+        });
+      });
+    });
+
+    // Likewise a deliberately removed deadline: changing the duration must not
+    // bring one back.
+    it('does not resurrect a deadline that was cleared', () => {
+      createModule(14).then((moduleId) => {
+        cy.api('POST', 'induction/v1/assignments/bulk', {
+          module_id: moduleId, user_ids: [staffId],
+        }).its('status').should('eq', 200);
+
+        cy.api('POST', 'induction/v1/assignments/due-date', {
+          user_id: staffId, module_id: moduleId, due_date: '',
+        }).its('status').should('eq', 200);
+
+        cy.api('POST', `induction/v1/modules/${moduleId}`, {
+          meta: { module_duration_days: 7 },
+        }).its('status').should('eq', 200);
+
+        dueDateFor(moduleId).then(({ dueDate: due }) => {
+          expect(due, 'still no deadline').to.eq(null);
+        });
+      });
+    });
+
+    it('refuses a staff token', () => {
+      cy.loginAs('staff').then((token) => {
+        cy.request({
+          method: 'POST',
+          url: `${testEnv().wpUrl}/wp-json/induction/v1/assignments/due-date`,
+          headers: { Authorization: `Bearer ${token}` },
+          body: { user_id: staffId, module_id: 1, due_date: '2030-06-15' },
+          failOnStatusCode: false,
+        }).its('status').should('be.oneOf', [401, 403]);
       });
     });
   });

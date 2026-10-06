@@ -161,7 +161,7 @@ export function createBlock(type: BlockType): Block {
     case 'true_false':
       return { id, type, data: { question: '', correctAnswer: true, explanation: '' } };
     case 'short_answer':
-      return { id, type, data: { question: '', correctAnswer: '', explanation: '' } };
+      return { id, type, data: { question: '', answerGuidance: '', explanation: '' } };
     case 'callout':
       return { id, type, data: { variant: 'info', title: '', body: '' } };
     case 'row':

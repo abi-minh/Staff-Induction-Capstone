@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, assignRole, unassignRole, fetchRoles, createStaffRole, deleteStaffRole, createStaff, removeStaff, updateStaffRole, updateTeamProfile, fetchReminderContext, fetchReminderContexts, sendTrainingReminder, sendBulkReminders } from '../api/staff';
+import { fetchStaff, fetchStaffMember, fetchStaffProgress, fetchStaffAssignments, bulkAssign, unassign, assignRole, unassignRole, fetchRoles, createStaffRole, deleteStaffRole, createStaff, removeStaff, updateStaffRole, updateTeamProfile, fetchReminderContext, fetchReminderContexts, sendTrainingReminder, sendBulkReminders, setAssignmentDueDate } from '../api/staff';
 import type { TeamProfileUpdate, ReminderDraft, BulkReminderMessage } from '../api/staff';
 import type { NewStaffInput } from '../types';
 
@@ -205,6 +205,20 @@ export function useUnassignRole() {
       qc.invalidateQueries({ queryKey: ['staffAssignments'] });
       qc.invalidateQueries({ queryKey: ['portal', 'module', variables.moduleId] });
       qc.invalidateQueries({ queryKey: ['portal', 'modules', 'assigned'] });
+    },
+  });
+}
+
+export function useSetAssignmentDueDate(userId: number) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ moduleId, dueDate }: { moduleId: number; dueDate: string }) =>
+      setAssignmentDueDate(userId, moduleId, dueDate),
+    // The staff detail page reads due dates from the assignment rows, and the
+    // portal card reads the same endpoint, so both have to be refetched.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['staffAssignments', userId] });
+      queryClient.invalidateQueries({ queryKey: ['portal', 'assignments'] });
     },
   });
 }

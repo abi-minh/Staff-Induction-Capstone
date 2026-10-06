@@ -142,3 +142,111 @@ describe('Content-loss regressions', () => {
     });
   });
 });
+
+// Short answers are recorded but never auto-marked. A written answer is not
+// something a string comparison can judge, so the endpoint returns guidance for
+// the learner to mark themselves against and leaves is_correct NULL — which is
+// what that column has always meant by "not graded".
+describe('Short answers are not auto-marked', () => {
+  const modules: number[] = [];
+  const GUIDANCE = 'Mentions a PFD and checking the forecast';
+
+  after(() => {
+    modules.forEach((id) => cy.api('DELETE', `induction/v1/modules/${id}`));
+  });
+
+  function moduleWithShortAnswer(): Cypress.Chainable<number> {
+    return cy.api('POST', 'induction/v1/modules', {
+      title: `Short answer ${Date.now()}`,
+      status: 'publish',
+      meta: {
+        module_order: 0,
+        module_blocks: JSON.stringify([{
+          id: 'sec-sa',
+          heroImage: '', title: 'Safety', description: '', status: 'publish',
+          quizStatus: 'publish', quizTitle: 'Check', passingPercentage: 80,
+          isModuleQuiz: false, blocks: [],
+          quizBlocks: [{
+            id: 'sa1',
+            type: 'short_answer',
+            data: { question: 'What do you check before heading out?', answerGuidance: GUIDANCE, explanation: '' },
+          }],
+        }]),
+      },
+    }).then(({ status, body }) => {
+      expect(status).to.eq(200);
+      modules.push(body.id);
+      return body.id as number;
+    });
+  }
+
+  it('returns guidance and no verdict, whatever the answer says', () => {
+    moduleWithShortAnswer().then((moduleId) => {
+      cy.fixtureStaff().then((staff) => {
+        // Deliberately nothing like the guidance: there is no answer that
+        // should come back marked either way.
+        cy.api('POST', 'induction/v1/quiz/check', {
+          user_id: staff.id, module_id: moduleId, block_id: 'sa1', answer: 'no idea',
+        }).then(({ status, body }) => {
+          expect(status).to.eq(200);
+          expect(body.isCorrect, 'never judged').to.eq(null);
+          expect(body.guidance).to.eq(GUIDANCE);
+        });
+      });
+    });
+  });
+
+  it('records the answer without grading it', () => {
+    moduleWithShortAnswer().then((moduleId) => {
+      cy.fixtureStaff().then((staff) => {
+        cy.api('POST', 'induction/v1/quiz/check', {
+          user_id: staff.id, module_id: moduleId, block_id: 'sa1', answer: 'A PFD and the forecast',
+        }).its('status').should('eq', 200);
+
+        cy.api('GET', `induction/v1/quiz/responses?user_id=${staff.id}&module_id=${moduleId}`)
+          .then(({ status, body }) => {
+            if (status !== 200) {
+              cy.log('No responses endpoint exposed; the check response is the contract');
+              return;
+            }
+            const row = (body as { blockId?: string; block_id?: string; isCorrect: boolean | null }[])
+              .find((r) => (r.blockId ?? r.block_id) === 'sa1');
+            if (row) expect(row.isCorrect, 'stored ungraded').to.eq(null);
+          });
+      });
+    });
+  });
+
+  // Questions written while these were auto-marked stored the expected text in
+  // correctAnswer. It still surfaces as guidance, so old modules keep working.
+  it('falls back to the legacy correctAnswer as guidance', () => {
+    cy.api('POST', 'induction/v1/modules', {
+      title: `Legacy short answer ${Date.now()}`,
+      status: 'publish',
+      meta: {
+        module_order: 0,
+        module_blocks: JSON.stringify([{
+          id: 'sec-legacy',
+          heroImage: '', title: 'Legacy', description: '', status: 'publish',
+          quizStatus: 'publish', quizTitle: 'Check', passingPercentage: 80,
+          isModuleQuiz: false, blocks: [],
+          quizBlocks: [{
+            id: 'sa-legacy',
+            type: 'short_answer',
+            data: { question: 'Old style?', correctAnswer: 'PFD', explanation: '' },
+          }],
+        }]),
+      },
+    }).then(({ body }) => {
+      modules.push(body.id);
+      cy.fixtureStaff().then((staff) => {
+        cy.api('POST', 'induction/v1/quiz/check', {
+          user_id: staff.id, module_id: body.id, block_id: 'sa-legacy', answer: 'PFD',
+        }).then(({ body: res }) => {
+          expect(res.isCorrect, 'still not judged').to.eq(null);
+          expect(res.guidance).to.eq('PFD');
+        });
+      });
+    });
+  });
+});

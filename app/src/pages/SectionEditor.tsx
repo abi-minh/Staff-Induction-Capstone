@@ -321,7 +321,7 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
                       return {
                         id: current.id,
                         type: 'short_answer',
-                        data: { question: current.data.question, correctAnswer: '', explanation: '' },
+                        data: { question: current.data.question, answerGuidance: '', explanation: '' },
                       } as ShortAnswerBlock;
                     }
                     return {
@@ -515,15 +515,20 @@ export default function SectionEditor({ section, index, onChange, onRemove }: Pr
               </Box>
             ) : block.type === 'short_answer' ? (
               <TextField
-                label="Correct Answer"
-                value={block.data.correctAnswer}
+                label="What a complete answer covers"
+                // Falls back to the old correctAnswer, so a question written
+                // while these were auto-marked still shows its text, and
+                // editing it moves the value to the new field.
+                value={block.data.answerGuidance ?? block.data.correctAnswer ?? ''}
                 onChange={(e) =>
                   updateQuestion(qi, (current) => ({
                     ...(current as ShortAnswerBlock),
-                    data: { ...(current as ShortAnswerBlock).data, correctAnswer: e.target.value },
+                    data: { ...(current as ShortAnswerBlock).data, answerGuidance: e.target.value },
                   }))
                 }
-                helperText="Graded as a case-insensitive exact match against the student's answer."
+                helperText="Not marked automatically. Shown to the staff member after they answer, so they can check their own against it."
+                multiline
+                minRows={2}
                 fullWidth
               />
             ) : null}

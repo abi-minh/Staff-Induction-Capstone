@@ -150,7 +150,10 @@ export async function saveQuizAnswer(
 }
 
 export interface QuizCheckResult {
-  isCorrect: boolean;
+  /** null for a short answer: recorded, deliberately not judged. */
+  isCorrect: boolean | null;
+  /** What a complete short answer covers. Absent for graded question types. */
+  guidance?: string;
   explanation: string;
 }
 

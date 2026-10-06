@@ -436,7 +436,19 @@ export interface ShortAnswerBlock {
   type: "short_answer";
   data: {
     question: string;
-    correctAnswer: string;
+    /**
+     * What a complete answer needs to cover. Shown to the learner after they
+     * attempt the question so they can mark themselves — these are not graded
+     * automatically, because a written answer is not something a string
+     * comparison can judge.
+     */
+    answerGuidance?: string;
+    /**
+     * Legacy. Questions written while short answers were auto-marked stored
+     * the expected text here; it is still read as guidance so old content
+     * keeps working, but nothing writes it any more.
+     */
+    correctAnswer?: string;
     explanation: string;
   };
 }
