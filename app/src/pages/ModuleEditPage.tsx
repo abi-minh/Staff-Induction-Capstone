@@ -476,12 +476,26 @@ export default function ModuleEditPage() {
                 variant="outlined"
                 sx={{ p: 2, borderRadius: 2 }}
               >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                {/* Reorder, Edit and Delete need ~190px between them, which a
+                    360px phone cannot spare alongside a title — the controls
+                    used to run off the right of the card and take the page's
+                    horizontal scrollbar with them. Below sm they get a row of
+                    their own under the title. */}
+                <Box
+                  sx={{
+                    display: 'flex',
+                    flexDirection: { xs: 'column', sm: 'row' },
+                    alignItems: { xs: 'stretch', sm: 'center' },
+                    gap: { xs: 1.5, sm: 2 },
+                  }}
+                >
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Typography variant="overline" sx={{ color: 'text.secondary', fontSize: '0.68rem', lineHeight: 1 }}>
                       Section {index + 1}
                     </Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.25 }}>
+                    {/* Wraps: a long title plus up to three status chips is
+                        well past one line on a phone. */}
+                    <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1, mt: 0.25, minWidth: 0 }}>
                       <Typography variant="subtitle1" sx={{ fontWeight: 600 }} noWrap>
                         {section.title || 'Untitled section'}
                       </Typography>
@@ -509,46 +523,56 @@ export default function ModuleEditPage() {
                       {section.blocks.length} block{section.blocks.length !== 1 ? 's' : ''} · {section.quizBlocks.length} question{section.quizBlocks.length !== 1 ? 's' : ''}
                     </Typography>
                   </Box>
-                  {/* Buttons rather than a drag handle. Sections are few and
-                      the list is short, so a nudge is no slower; unlike a drag
-                      gesture it works from the keyboard and on a phone, it can
-                      be covered by the Cypress suite, and it does not add a
-                      second dnd-kit surface while the block editor's
-                      "Invalid instance type" crash is still unresolved. */}
-                  <Box sx={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
-                    <IconButton
+                  <Box
+                    sx={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                      flexShrink: 0,
+                      justifyContent: { xs: 'flex-end', sm: 'flex-start' },
+                    }}
+                  >
+                    {/* Buttons rather than a drag handle. Sections are few and
+                        the list is short, so a nudge is no slower; unlike a drag
+                        gesture it works from the keyboard and on a phone, it can
+                        be covered by the Cypress suite, and it does not add a
+                        second dnd-kit surface while the block editor's
+                        "Invalid instance type" crash is still unresolved. */}
+                    <Box sx={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+                      <IconButton
+                        size="small"
+                        aria-label={`Move "${section.title || 'Untitled section'}" up`}
+                        disabled={index === 0}
+                        onClick={() => handleMoveSection(index, index - 1)}
+                      >
+                        <ArrowUpwardIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                      <IconButton
+                        size="small"
+                        aria-label={`Move "${section.title || 'Untitled section'}" down`}
+                        disabled={index === sections.length - 1}
+                        onClick={() => handleMoveSection(index, index + 1)}
+                      >
+                        <ArrowDownwardIcon sx={{ fontSize: 16 }} />
+                      </IconButton>
+                    </Box>
+                    <Button
+                      variant="outlined"
                       size="small"
-                      aria-label={`Move "${section.title || 'Untitled section'}" up`}
-                      disabled={index === 0}
-                      onClick={() => handleMoveSection(index, index - 1)}
+                      startIcon={<EditOutlinedIcon sx={{ fontSize: 14 }} />}
+                      onClick={() => navigate(`/modules/${id}/sections/${section.id}`)}
+                      sx={{ ...roundedButtonSx, flexShrink: 0 }}
                     >
-                      <ArrowUpwardIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
+                      Edit
+                    </Button>
                     <IconButton
+                      color="error"
                       size="small"
-                      aria-label={`Move "${section.title || 'Untitled section'}" down`}
-                      disabled={index === sections.length - 1}
-                      onClick={() => handleMoveSection(index, index + 1)}
+                      onClick={() => setSections((current) => current.filter((_, i) => i !== index))}
                     >
-                      <ArrowDownwardIcon sx={{ fontSize: 16 }} />
+                      <DeleteOutlineIcon fontSize="small" />
                     </IconButton>
                   </Box>
-                  <Button
-                    variant="outlined"
-                    size="small"
-                    startIcon={<EditOutlinedIcon sx={{ fontSize: 14 }} />}
-                    onClick={() => navigate(`/modules/${id}/sections/${section.id}`)}
-                    sx={{ ...roundedButtonSx, flexShrink: 0 }}
-                  >
-                    Edit
-                  </Button>
-                  <IconButton
-                    color="error"
-                    size="small"
-                    onClick={() => setSections((current) => current.filter((_, i) => i !== index))}
-                  >
-                    <DeleteOutlineIcon fontSize="small" />
-                  </IconButton>
                 </Box>
               </Paper>
             ))}

@@ -5,7 +5,8 @@ import type {
   ListBlock, RowBlock, RowChildBlock, TextBlock, VideoBlock,
 } from '../types';
 import ZoomableImage from '../components/ZoomableImage';
-import { alignedListSx, blockLayoutSx, layoutOf } from './utils';
+import { alignedListSx, blockLayoutSx, calloutBodyHtml, layoutOf } from './utils';
+import { fontSizeSx } from './fontSize';
 
 export type PresentationalBlock =
   | HeadingBlock | TextBlock | ImageBlock | VideoBlock | ListBlock | CalloutBlock | RowBlock;
@@ -63,7 +64,7 @@ export function renderBlockContent(
       return (
         <Box
           sx={[
-            { color: 'text.primary', lineHeight: 1.7, '& p': { margin: 0 }, '& p + p': { mt: 1.5 }, '& img': { maxWidth: '100%', height: 'auto' } },
+            { color: 'text.primary', lineHeight: 1.7, '& p': { margin: 0 }, '& p + p': { mt: 1.5 }, '& img': { maxWidth: '100%', height: 'auto' }, ...fontSizeSx() },
             blockLayoutSx(block.layout),
             {
               textAlign: block.textAlign ?? 'left',
@@ -153,7 +154,26 @@ export function renderBlockContent(
           {block.data.title && (
             <Typography sx={{ fontWeight: 600, mb: 0.5 }}>{block.data.title}</Typography>
           )}
-          {block.data.body && <Typography sx={{ color: 'inherit' }}>{block.data.body}</Typography>}
+          {/* Same treatment as a text block: the body is authored rich text,
+              so paragraphs need room between them and lists need their
+              indent. Without these a callout rendered every paragraph flush
+              against the next. */}
+          {block.data.body && (
+            <Box
+              sx={{
+                color: 'inherit',
+                lineHeight: 1.7,
+                '& p': { margin: 0 },
+                '& p + p': { mt: 1.5 },
+                '& ul, & ol': { pl: 3, my: 1 },
+                '& li > p': { margin: 0 },
+                '& li + li': { mt: 0.5 },
+                '& a': { color: 'inherit', textDecoration: 'underline' },
+                ...fontSizeSx(),
+              }}
+              dangerouslySetInnerHTML={{ __html: calloutBodyHtml(block.data.body) }}
+            />
+          )}
         </Box>
       );
     }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   Alert,
   Box,
@@ -13,6 +13,7 @@ import {
   LinearProgress,
   MenuItem,
   Paper,
+  Snackbar,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
@@ -33,6 +34,7 @@ import {
   useMyAssignments,
   useModuleProgress,
   useMarkComplete,
+  useSetCompletedSections,
   useSubmitQuizForReview,
 } from "../../hooks/usePortal";
 import {
@@ -49,10 +51,11 @@ import { formatDueDate } from "../../util/dates";
 import {
   isSectionComplete as sectionIsComplete,
   moduleProgressPercent,
+  readCompletedSectionIds,
   sectionCompletionKey,
 } from "../../util/sectionProgress";
 import HeroBanner from "../../components/HeroBanner";
-import { parseSections, sectionToSpeechText } from "../../blocks/utils";
+import { sectionToSpeechText, visibleSections } from "../../blocks/utils";
 import type { Section } from "../../types";
 
 // Fallback gradients for sections without a hero image
@@ -86,21 +89,27 @@ export default function StaffModuleViewPage() {
   // the section dropdown and "Attempt Now" are all covered by one rule.
   const viewTopRef = useRef<HTMLDivElement>(null);
 
+  // "Continue" on a module card links straight to a section. Read once, as
+  // the initial value rather than in an effect: `sections` is derived from the
+  // module in the same render it arrives, so there is no window in which the
+  // overview paints first and then jumps. An id that no longer matches a
+  // section — one deleted or unpublished since the card was drawn — simply
+  // leaves this at the overview.
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(
-    null,
+    searchParams.get("section"),
   );
   const [sectionView, setSectionView] = useState<"all" | "completed" | "todo">(
     "all",
   );
-  const [completedSectionIds, setCompletedSectionIds] = useState<string[]>(
-    () => {
-      try {
-        return JSON.parse(localStorage.getItem(lsKey) ?? "[]") as string[];
-      } catch {
-        return [];
-      }
-    },
-  );
+  // Mirrors the server. Held locally as well so the tick and the progress bar
+  // move the moment someone presses Next, rather than after a round trip.
+  const [completedSectionIds, setCompletedSectionIds] = useState<string[]>([]);
+  const { mutate: saveSections } = useSetCompletedSections(moduleId);
+  // A failed save leaves the tick on screen but not on the server, so it has
+  // to be said out loud — silently losing someone's place is how a staff
+  // member ends up reading a module twice.
+  const [saveFailed, setSaveFailed] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -123,13 +132,7 @@ export default function StaffModuleViewPage() {
         hasAnyQuiz: false,
       };
     }
-    const parsed = parseSections(module.meta.module_blocks)
-      .filter((s) => (s.status ?? "publish") === "publish")
-      .map((s) =>
-        (s.quizStatus ?? "publish") === "publish"
-          ? s
-          : { ...s, quizBlocks: [], isModuleQuiz: false },
-      );
+    const parsed = visibleSections(module.meta.module_blocks);
     const moduleQuizSection = parsed.find((s) => s.isModuleQuiz) ?? null;
     const moduleQuizBlockIds =
       moduleQuizSection?.quizBlocks.map((b) => b.id) ?? [];
@@ -153,9 +156,49 @@ export default function StaffModuleViewPage() {
     scrollAncestorsToTop(viewTopRef.current);
   }, [selectedSectionId]);
 
+  // Keep ?section= pointing at whatever is open, so a refresh or a shared link
+  // lands where the reader actually is rather than where they came in. Keyed
+  // on the section id for the same reason the scroll reset above is: Next,
+  // Previous, the dropdown and the back arrow all change sections, and wiring
+  // each of them separately is how one gets missed.
+  //
+  // replace, not push: moving between sections never added history entries
+  // before, and turning Back into "previous section" would strand someone
+  // several presses from the dashboard. The equality check keeps this from
+  // looping on its own update.
   useEffect(() => {
-    localStorage.setItem(lsKey, JSON.stringify(completedSectionIds));
-  }, [completedSectionIds, lsKey]);
+    const next = new URLSearchParams(searchParams);
+    if (selectedSectionId) {
+      next.set("section", selectedSectionId);
+    } else {
+      next.delete("section");
+    }
+    if (next.toString() !== searchParams.toString()) {
+      setSearchParams(next, { replace: true });
+    }
+  }, [selectedSectionId, searchParams, setSearchParams]);
+
+  useEffect(() => {
+    // Seed from the server, then adopt anything this browser recorded before
+    // section progress moved server-side. Local wins only where the server has
+    // nothing: once a person has progress on their account, a stale copy in
+    // some old browser must not resurrect sections they have since unmarked.
+    if (!progress) return;
+
+    const fromServer = progress.completedSections ?? [];
+    if (fromServer.length > 0) {
+      setCompletedSectionIds(fromServer);
+      localStorage.removeItem(lsKey);
+      return;
+    }
+
+    const local = readCompletedSectionIds(moduleId);
+    if (local.length > 0) {
+      setCompletedSectionIds(local);
+      saveSections(local);
+      localStorage.removeItem(lsKey);
+    }
+  }, [progress, moduleId, lsKey, saveSections]);
 
   // Stop any in-progress narration when the viewer moves to a different
   // section (or back to the overview) rather than letting it keep reading.
@@ -198,6 +241,32 @@ export default function StaffModuleViewPage() {
   }
   if (error) return <Alert severity="error">{(error as Error).message}</Alert>;
   if (!module) return <Alert severity="warning">Module not found.</Alert>;
+
+  // No autoHideDuration: this is not a confirmation that can be missed
+  // harmlessly. It stays until it is retried or dismissed. Rendered by both
+  // the section view and the overview, since finishing the last section fails
+  // on one screen and lands you on the other.
+  const saveErrorToast = (
+    <Snackbar
+      open={saveFailed}
+      onClose={() => setSaveFailed(false)}
+      anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+    >
+      <Alert
+        severity="warning"
+        onClose={() => setSaveFailed(false)}
+        action={
+          <Button color="inherit" size="small" onClick={retrySaveSections}>
+            Retry
+          </Button>
+        }
+        sx={{ boxShadow: "0 14px 40px rgba(15, 23, 42, 0.18)" }}
+      >
+        Couldn't save your progress. You may have to redo this section next
+        time you open the module.
+      </Alert>
+    </Snackbar>
+  );
 
   const isCompleted = progress?.status === "completed";
   // The module-level quiz is graded by an admin, not self-checked — it's only
@@ -259,19 +328,51 @@ export default function StaffModuleViewPage() {
     await submitQuizReview.mutateAsync(moduleId);
   }
 
-  function handleMarkSectionComplete() {
-    if (!selectedSectionId) return;
-    setCompletedSectionIds((prev) =>
-      prev.includes(selectedSectionId) ? prev : [...prev, selectedSectionId],
-    );
-    setSelectedSectionId(null);
+  // One place that records a tick, so the optimistic state and the server
+  // cannot be updated from one path and not the other.
+  //
+  // The tick stays on screen when the save fails. Pulling it back out from
+  // under someone who has already moved to the next section would be worse
+  // than a notice they can act on — and because every save sends the whole
+  // set, the next successful one repairs the record anyway.
+  function recordSections(next: string[]) {
+    setCompletedSectionIds(next);
+    saveSections(next, {
+      onSuccess: () => setSaveFailed(false),
+      onError: () => setSaveFailed(true),
+    });
+  }
+
+  // Retries with the current set rather than the payload that failed: if a
+  // save failed and the reader has since unmarked something, the server
+  // should get where they actually are, not where they were.
+  function retrySaveSections() {
+    saveSections(completedSectionIds, {
+      onSuccess: () => setSaveFailed(false),
+    });
+  }
+
+  /**
+   * Moving on from a section is what marks it done.
+   *
+   * Pressing Next used to leave no trace, so someone could read a whole module
+   * and still sit at 0% — while the one button that did record anything threw
+   * them back to the overview. Advancing is the natural signal, so it is the
+   * one we record; Previous deliberately does not, since going back is not
+   * progress.
+   *
+   * A section's own quiz does not gate this: advancing always ticks.
+   */
+  function goToSection(target: string | null) {
+    if (selectedSectionId && !completedSectionIds.includes(selectedSectionId)) {
+      recordSections([...completedSectionIds, selectedSectionId]);
+    }
+    setSelectedSectionId(target);
   }
 
   function handleUnmarkSectionComplete() {
     if (!selectedSectionId) return;
-    setCompletedSectionIds((prev) =>
-      prev.filter((id) => id !== selectedSectionId),
-    );
+    recordSections(completedSectionIds.filter((id) => id !== selectedSectionId));
   }
 
   async function handleMarkComplete() {
@@ -493,34 +594,19 @@ export default function StaffModuleViewPage() {
           </Paper>
         )}
 
-        {/* Section complete */}
-        {currentSection.isModuleQuiz ? null : (
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "flex-end",
-              gap: 2,
-            }}
-          >
-            {isSectionDone ? (
-              <Button
-                variant="outlined"
-                color="error"
-                sx={{ borderRadius: "10px" }}
-                onClick={handleUnmarkSectionComplete}
-              >
-                Unmark as complete
-              </Button>
-            ) : (
-              <Button
-                variant="contained"
-                sx={{ borderRadius: "10px" }}
-                onClick={handleMarkSectionComplete}
-              >
-                Mark section complete
-              </Button>
-            )}
+        {/* Taking a tick back. There is no matching "mark complete": moving
+            on is what records a section, so a second control competing with
+            Next — and throwing the reader back to the overview — is gone. */}
+        {!currentSection.isModuleQuiz && isSectionDone && (
+          <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+            <Button
+              variant="outlined"
+              color="error"
+              sx={{ borderRadius: "10px" }}
+              onClick={handleUnmarkSectionComplete}
+            >
+              Unmark as complete
+            </Button>
           </Box>
         )}
 
@@ -565,19 +651,20 @@ export default function StaffModuleViewPage() {
               />
             </Box>
 
+            {/* The primary action on the page now that it is the one that
+                records progress — it used to be outlined while a button that
+                ejected you to the overview was solid blue. */}
             <Button
-              variant="outlined"
-              onClick={() =>
-                nextSection
-                  ? setSelectedSectionId(nextSection.id)
-                  : setSelectedSectionId(null)
-              }
+              variant="contained"
+              onClick={() => goToSection(nextSection ? nextSection.id : null)}
               sx={{ borderRadius: 999, order: { xs: 3, sm: 0 }, ml: { xs: "auto", sm: 0 } }}
             >
-              {nextSection ? "Next →" : "Back to Overview"}
+              {nextSection ? "Next →" : "Finish section"}
             </Button>
           </Box>
         </Paper>
+
+        {saveErrorToast}
       </Box>
     );
   }
@@ -905,6 +992,11 @@ export default function StaffModuleViewPage() {
           Complete all other sections before attempting the module-level quiz.
         </Alert>
       )}
+      {!hasQuiz && !otherSectionsComplete && !isCompleted && (
+        <Alert severity="warning">
+          Work through every section before marking this module complete.
+        </Alert>
+      )}
       {hasQuiz && otherSectionsComplete && quizPending && !isCompleted && (
         <Alert severity="info">
           Your module-level quiz has been submitted and is awaiting review by an
@@ -968,11 +1060,20 @@ export default function StaffModuleViewPage() {
             </Button>
           </>
         ) : (
-          <Button variant="contained" onClick={() => setConfirming(true)}>
+          // Same bar the quiz path sets above: a module is only complete
+          // once its sections are. Without this, a module with no
+          // module-level quiz could be signed off unread.
+          <Button
+            variant="contained"
+            onClick={() => setConfirming(true)}
+            disabled={!otherSectionsComplete}
+          >
             Mark as complete
           </Button>
         )}
       </Box>
+
+      {saveErrorToast}
     </Box>
   );
 }

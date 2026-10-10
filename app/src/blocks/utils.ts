@@ -6,7 +6,7 @@ import {
 import type {
   Block, BlockAlign, BlockLayout, BlockType, PlacedBlock, QuizBlock, RowBlock, RowChildBlock, Section,
 } from '../types';
-import { stripHtml } from '../util/strings';
+import { escapeHtml, stripHtml } from '../util/strings';
 
 export function layoutOf(block: Block): BlockLayout | undefined {
   const layout = 'layout' in block ? block.layout : undefined;
@@ -28,13 +28,23 @@ export function layoutOf(block: Block): BlockLayout | undefined {
  * `padding-inline-start`, and leaving it would centre the line within a box
  * that is itself offset, which looks like a near-miss rather than a mistake.
  *
+ * And the item's paragraph has to come back inline. TipTap writes each item as
+ * `<li><p>text</p></li>`, and a marker placed inside a box whose first child is
+ * a block gets a line to itself — which put every bullet on its own row above
+ * its text. Only the first paragraph: a second one in the same item is a
+ * deliberate new line and should stay one.
+ *
  * Returned as properties to merge into an existing `ul, ol` rule rather than a
  * whole selector, so the editor and the reader can each apply it at their own
  * nesting depth and stay in step.
  */
 export function alignedListSx(align?: BlockAlign) {
   return align && align !== 'left'
-    ? { listStylePosition: 'inside' as const, paddingLeft: 0 }
+    ? {
+        listStylePosition: 'inside' as const,
+        paddingLeft: 0,
+        '& li > p:first-of-type': { display: 'inline' },
+      }
     : {};
 }
 
@@ -121,6 +131,56 @@ export function parseSections(raw: string | undefined): Section[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * A callout's body as HTML.
+ *
+ * The body used to be a plain string typed into a textarea, rendered into a
+ * single paragraph — so a line break did nothing and there was no way to bold
+ * a word. It is rich text now, but every callout written before that holds
+ * plain text, and handing plain text to a renderer that treats it as markup
+ * would both swallow the line breaks and read a stray `<` as a tag.
+ *
+ * So: anything that already looks like markup is passed through, and anything
+ * else is escaped and given the paragraphs and line breaks its blank lines and
+ * newlines were always meant to produce. A callout converts for good the first
+ * time it is opened in the editor and saved; until then it converts on the way
+ * to the screen, so nothing has to be migrated in the database.
+ */
+export function calloutBodyHtml(body: string | undefined): string {
+  if (!body) return '';
+  if (/<[a-z][^>]*>/i.test(body)) return body;
+
+  return body
+    .split(/\n\s*\n/)
+    .map((para) => para.trim())
+    .filter(Boolean)
+    .map((para) => `<p>${escapeHtml(para).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
+/**
+ * The sections a staff member is actually shown, from a module's raw meta.
+ *
+ * Draft sections are dropped, and a section whose quiz is still draft keeps
+ * its content but loses the quiz — including its claim to be the module-level
+ * quiz, which would otherwise gate completion on a quiz nobody can see.
+ *
+ * Shared because the dashboard and the module view both have to agree on what
+ * "all sections" means. They did not: the dashboard counted draft sections
+ * when working out a percentage, so a module with one draft section could sit
+ * at 80% on the card and 100% inside, and the card's resume link could point
+ * at a section the module view then refuses to render.
+ */
+export function visibleSections(raw: string | undefined): Section[] {
+  return parseSections(raw)
+    .filter((s) => (s.status ?? 'publish') === 'publish')
+    .map((s) =>
+      (s.quizStatus ?? 'publish') === 'publish'
+        ? s
+        : { ...s, quizBlocks: [], isModuleQuiz: false },
+    );
 }
 
 /**
@@ -225,7 +285,7 @@ function blockToHtml(block: Block): string {
     }
     case 'callout': {
       const title = block.data.title ? `<strong>${block.data.title}</strong> ` : '';
-      return `<aside class="callout callout-${block.data.variant}">${title}${block.data.body}</aside>`;
+      return `<aside class="callout callout-${block.data.variant}">${title}${calloutBodyHtml(block.data.body)}</aside>`;
     }
     case 'row': {
       const cells = block.data.children
@@ -261,7 +321,10 @@ function blockToSpeechText(block: Block): string {
     case 'list':
       return block.data.items.filter(Boolean).join('. ');
     case 'callout':
-      return [block.data.title, block.data.body].filter(Boolean).join('. ');
+      // Read aloud as words, not as markup, now that the body carries tags.
+      return [block.data.title, stripHtml(calloutBodyHtml(block.data.body))]
+        .filter(Boolean)
+        .join('. ');
     case 'row':
       return block.data.children.map((p) => blockToSpeechText(p.block)).filter(Boolean).join('. ');
     case 'multiple_choice':

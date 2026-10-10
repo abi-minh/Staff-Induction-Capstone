@@ -6,8 +6,8 @@ import CheckCircleOutlined from '@mui/icons-material/CheckCircleOutlined';
 import ScheduleOutlined    from '@mui/icons-material/ScheduleOutlined';
 import { useAssignedModules, useMyAssignments, useUserProgress } from '../../hooks/usePortal';
 import { formatDueDate } from '../../util/dates';
-import { parseSections } from '../../blocks/utils';
-import { moduleProgressPercent, readCompletedSectionIds } from '../../util/sectionProgress';
+import { visibleSections } from '../../blocks/utils';
+import { isSectionComplete, moduleProgressPercent } from '../../util/sectionProgress';
 import { useAuthStore }  from '../../store/authStore';
 import ModuleCard        from '../../components/ModuleCard';
 
@@ -153,14 +153,27 @@ export default function StaffDashboardPage() {
             const p = progress.find((r) => r.moduleId === m.id);
             // Empty string when the module has no duration set, which
             // ModuleCard treats as "no deadline" and hides the chip.
-            // Read from the same place the module view writes, so the two
-            // screens never disagree about the same module.
-            const sections = parseSections(m.meta.module_blocks);
+            // From the progress record, which is also what the module view
+            // reads and what reporting sees — this used to come out of the
+            // browser's own localStorage, so the same person's progress
+            // differed per device and an admin saw none of it.
+            //
+            // visibleSections, not parseSections: the module view hides draft
+            // sections, so counting them here put the card and the module at
+            // different percentages for the same work.
+            const sections = visibleSections(m.meta.module_blocks);
+            const done = p?.completedSections ?? [];
             const percent = moduleProgressPercent(
               sections,
-              readCompletedSectionIds(m.id),
+              done,
               p?.passed ?? null,
               p?.status ?? 'not_started',
+            );
+            // Where "Continue" goes. The first unfinished section in reading
+            // order, which for someone who has done everything but the
+            // module-level quiz is that quiz.
+            const nextSection = sections.find(
+              (sec) => !isSectionComplete(sec, done, p?.passed ?? null),
             );
             return (
               <ModuleCard
@@ -168,6 +181,7 @@ export default function StaffDashboardPage() {
                 module={m}
                 progress={p}
                 percentComplete={percent}
+                nextSectionId={nextSection?.id ?? null}
                 dueDate={formatDueDate(dueDates.get(m.id))}
               />
             );

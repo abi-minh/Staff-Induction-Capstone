@@ -1,13 +1,13 @@
 import type { Section } from '../types';
 
 /**
- * Which sections a staff member has ticked off, per module.
+ * The old per-browser record of which sections someone had ticked off.
  *
- * This lives in localStorage rather than on the server, so it is per browser
- * and is lost when someone switches device. That is a real limitation, not a
- * design choice worth defending — but while it is the only record there is,
- * every surface that shows a percentage has to read the same place, or the
- * dashboard and the module view disagree about the same module.
+ * Section completion now lives on the progress row, so this is read once when
+ * a module is opened and, if the server has nothing, adopted and the key
+ * deleted. Nothing writes here any more. Kept until enough time has passed
+ * that no-one is carrying unmigrated ticks in a browser they have not opened
+ * since the change.
  */
 export function sectionCompletionKey(moduleId: number): string {
   return `section-completions-${moduleId}`;
@@ -41,7 +41,7 @@ export function isSectionComplete(
 /**
  * How far through a module someone is, 0–100.
  *
- * A module recorded as completed reports 100 whatever the local ticks say —
+ * A module recorded as completed reports 100 whatever the section ticks say —
  * the server's view wins, and a staff member who finished a module on another
  * device should not be told they are half way.
  */

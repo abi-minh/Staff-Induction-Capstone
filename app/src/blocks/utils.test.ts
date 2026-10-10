@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { alignedListSx, blockLayoutSx, clampRowColumns, createBlock, createSection, isQuizBlock, layoutOf, moveItem, parseSections } from './utils';
+import { alignedListSx, blockLayoutSx, calloutBodyHtml, clampRowColumns, createBlock, createSection, isQuizBlock, layoutOf, moveItem, parseSections, visibleSections } from './utils';
 import { MAX_ROW_COLUMNS, MIN_ROW_COLUMNS } from '../types';
 import type { Block, PlacedBlock, RowChildBlock, Section } from '../types';
 
@@ -76,6 +76,101 @@ describe('parseSections', () => {
       expect(parsedRow.data.columns).toBe(2);
       expect(parsedRow.data.children).toHaveLength(1);
     }
+  });
+});
+
+// What a staff member is actually shown. The dashboard and the module view
+// both call this; they used to each decide for themselves, and disagreed.
+describe('visibleSections', () => {
+  const quizBlock = {
+    id: 'q1', type: 'true_false' as const,
+    data: { question: 'Wear a PFD?', correctAnswer: true, explanation: '' },
+  };
+
+  function raw(...sections: Section[]): string {
+    return JSON.stringify(sections);
+  }
+
+  it('drops draft sections and keeps published ones', () => {
+    const result = visibleSections(raw(
+      section({ id: 'live', status: 'publish' }),
+      section({ id: 'hidden', status: 'draft' }),
+    ));
+    expect(result.map((s) => s.id)).to.deep.eq(['live']);
+  });
+
+  // Sections authored before the status field existed carry no status at all,
+  // and must not silently vanish from every module.
+  it('treats a missing status as published', () => {
+    const legacy = section({ id: 'old' });
+    delete (legacy as Partial<Section>).status;
+    expect(visibleSections(raw(legacy)).map((s) => s.id)).to.deep.eq(['old']);
+  });
+
+  it('keeps a quiz-draft section but strips the quiz from it', () => {
+    const [result] = visibleSections(raw(section({
+      id: 's1', status: 'publish', quizStatus: 'draft',
+      quizBlocks: [quizBlock], isModuleQuiz: true,
+    })));
+
+    expect(result.blocks, 'the reading content stays').to.have.length(1);
+    expect(result.quizBlocks).to.deep.eq([]);
+    // Left set, this would gate module completion on a quiz no one can see.
+    expect(result.isModuleQuiz, 'and it stops being the module quiz').to.eq(false);
+  });
+
+  it('leaves a published quiz alone', () => {
+    const [result] = visibleSections(raw(section({
+      status: 'publish', quizStatus: 'publish',
+      quizBlocks: [quizBlock], isModuleQuiz: true,
+    })));
+    expect(result.quizBlocks).to.have.length(1);
+    expect(result.isModuleQuiz).to.eq(true);
+  });
+
+  it('returns an empty array for unusable input', () => {
+    expect(visibleSections(undefined)).to.deep.eq([]);
+    expect(visibleSections('not json')).to.deep.eq([]);
+  });
+});
+
+// The callout body became rich text. Every callout written before that holds
+// plain text, and the reader now treats the field as markup — so this is the
+// one piece of client content the change could damage.
+describe('calloutBodyHtml', () => {
+  it('passes existing markup through untouched', () => {
+    const html = '<p>Already <strong>rich</strong> text.</p>';
+    expect(calloutBodyHtml(html)).to.eq(html);
+  });
+
+  it('wraps a plain line in a paragraph', () => {
+    expect(calloutBodyHtml('Mind the rope.')).to.eq('<p>Mind the rope.</p>');
+  });
+
+  // The point of the exercise: a blank line was a paragraph break the old
+  // renderer threw away.
+  it('turns a blank line into a new paragraph', () => {
+    expect(calloutBodyHtml('First.\n\nFirst again.')).to.eq('<p>First.</p><p>First again.</p>');
+  });
+
+  it('turns a single newline into a line break', () => {
+    expect(calloutBodyHtml('Line one.\nLine two.')).to.eq('<p>Line one.<br>Line two.</p>');
+  });
+
+  // Plain text is not markup: a stray angle bracket in someone's safety note
+  // must reach the screen, not be swallowed as a tag.
+  it('escapes plain text rather than trusting it', () => {
+    expect(calloutBodyHtml('Keep load < 20kg & stay clear'))
+      .to.eq('<p>Keep load &lt; 20kg &amp; stay clear</p>');
+  });
+
+  it('is empty for an empty or missing body', () => {
+    expect(calloutBodyHtml('')).to.eq('');
+    expect(calloutBodyHtml(undefined)).to.eq('');
+  });
+
+  it('drops trailing blank lines instead of emitting empty paragraphs', () => {
+    expect(calloutBodyHtml('Only line.\n\n\n')).to.eq('<p>Only line.</p>');
   });
 });
 
@@ -270,6 +365,7 @@ describe('alignedListSx', () => {
     expect(alignedListSx('center')).to.deep.eq({
       listStylePosition: 'inside',
       paddingLeft: 0,
+      '& li > p:first-of-type': { display: 'inline' },
     });
   });
 
@@ -277,7 +373,23 @@ describe('alignedListSx', () => {
     expect(alignedListSx('right')).to.deep.eq({
       listStylePosition: 'inside',
       paddingLeft: 0,
+      '& li > p:first-of-type': { display: 'inline' },
     });
+  });
+
+  // A marker moved inside the item's box shares a line with whatever starts
+  // that box — and TipTap starts it with a <p>, which is a block. Without
+  // this every bullet sat on its own row above its text.
+  it('puts the item paragraph back inline so the marker shares its line', () => {
+    for (const align of ['center', 'right'] as const) {
+      const sx = alignedListSx(align) as unknown as Record<string, { display?: string }>;
+      expect(sx['& li > p:first-of-type'].display, align).to.eq('inline');
+    }
+  });
+
+  // Only the first: a second paragraph in one item is a deliberate new line.
+  it('leaves later paragraphs in an item as blocks', () => {
+    expect(Object.keys(alignedListSx('center'))).to.not.include('& li > p');
   });
 
   // The indent matters as much as the marker: leaving a list's default

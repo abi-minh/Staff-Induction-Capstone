@@ -1,5 +1,7 @@
 import { Box, MenuItem, TextField } from '@mui/material';
 import type { CalloutBlock, CalloutVariant } from '../../types';
+import { calloutBodyHtml } from '../utils';
+import RichTextField from './RichTextField';
 
 interface Props {
   block: CalloutBlock;
@@ -37,13 +39,17 @@ export default function CalloutBlockEditor({ block, onChange }: Props) {
           sx={{ flex: 1 }}
         />
       </Box>
-      <TextField
-        size="small"
-        label="Body"
-        value={block.data.body}
-        onChange={(e) => onChange({ ...block.data, body: e.target.value })}
-        multiline
-        minRows={3}
+
+      {/* The same editor the text block uses. A callout was a plain textarea,
+          so paragraphs and bold were not expressible in the one place authors
+          most often want to emphasise something. Seeded through
+          calloutBodyHtml so a callout written before this opens with its line
+          breaks intact rather than as one run-on paragraph. */}
+      <RichTextField
+        html={calloutBodyHtml(block.data.body)}
+        onChange={(body) => onChange({ ...block.data, body })}
+        placeholder="Callout text…"
+        minHeight={60}
       />
     </Box>
   );

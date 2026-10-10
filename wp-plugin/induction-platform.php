@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.10.3
+ * Version:     1.14.0
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.10.3' );
+define( 'INDUCTION_VERSION', '1.14.0' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -467,6 +467,7 @@ function induction_create_tables(): void {
             time_spent   INT UNSIGNED DEFAULT 0,
             score        DECIMAL(5,2) DEFAULT NULL,
             passed       TINYINT(1) DEFAULT NULL,
+            completed_sections LONGTEXT NULL,
             created_at   DATETIME NOT NULL,
             updated_at   DATETIME NOT NULL,
             UNIQUE KEY user_module (user_id, module_id),
@@ -485,6 +486,15 @@ function induction_create_tables(): void {
     }
     if ( ! in_array( 'quiz_submitted_at', $cols, true ) ) {
         $wpdb->query( "ALTER TABLE $progress_table ADD COLUMN quiz_submitted_at DATETIME DEFAULT NULL AFTER passed" );
+    }
+
+    // Section completion used to live in each browser's localStorage, so it
+    // was lost on a new device, shared between two people on one device, and
+    // invisible to reporting. It belongs on the progress row rather than in a
+    // table of its own: there is already exactly one row per user and module,
+    // which is the grain this is recorded at.
+    if ( ! in_array( 'completed_sections', $cols, true ) ) {
+        $wpdb->query( "ALTER TABLE $progress_table ADD COLUMN completed_sections LONGTEXT NULL AFTER passed" );
     }
 
     // One-time backfill: an earlier version of induction_quiz_grade() only
@@ -610,6 +620,21 @@ function induction_register_routes(): void {
         'callback'            => 'induction_get_user_progress',
         'permission_callback' => 'induction_can_view_own_progress',
         'args'                => [ 'id' => [ 'type' => 'integer' ] ],
+    ] );
+
+    // POST /progress/sections — which sections a staff member has worked
+    // through. Separate from the progress upsert so that recording a section
+    // never has to restate status or time spent, and cannot accidentally
+    // reopen a completed module.
+    register_rest_route( $ns, '/progress/sections', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_set_completed_sections',
+        'permission_callback' => 'is_user_logged_in',
+        'args'                => [
+            'user_id'     => [ 'type' => 'integer', 'required' => true ],
+            'module_id'   => [ 'type' => 'integer', 'required' => true ],
+            'section_ids' => [ 'type' => 'array', 'required' => true, 'items' => [ 'type' => 'string' ] ],
+        ],
     ] );
 
     // POST /progress
@@ -1193,6 +1218,68 @@ function induction_get_user_progress( WP_REST_Request $request ): WP_REST_Respon
     );
 
     return new WP_REST_Response( array_map( 'induction_format_progress_row', $rows ?? [] ) );
+}
+
+/**
+ * Record which sections of a module this person has worked through.
+ *
+ * Replaces the whole list rather than appending one id: the client holds the
+ * set it is showing, and sending it whole means an unmark needs no second
+ * endpoint and a lost response cannot leave the two out of step.
+ *
+ * Creates the progress row if there is not one yet — opening a module and
+ * moving through it is itself the start of progress.
+ */
+function induction_set_completed_sections( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    global $wpdb;
+
+    $user_id   = (int) $request->get_param( 'user_id' );
+    $module_id = (int) $request->get_param( 'module_id' );
+
+    // Same rule the quiz endpoints use: your own progress, or an admin's.
+    if ( get_current_user_id() !== $user_id && ! current_user_can( 'manage_induction' ) ) {
+        return new WP_Error( 'rest_forbidden', 'That is not your progress to change.', [ 'status' => 403 ] );
+    }
+
+    $ids = array_values( array_unique( array_filter(
+        array_map( 'strval', (array) $request->get_param( 'section_ids' ) ),
+        static fn( $id ) => '' !== $id
+    ) ) );
+
+    $table = $wpdb->prefix . 'induction_progress';
+    $now   = current_time( 'mysql' );
+    $json  = wp_json_encode( $ids );
+
+    $existing = $wpdb->get_row( $wpdb->prepare(
+        "SELECT * FROM $table WHERE user_id = %d AND module_id = %d",
+        $user_id,
+        $module_id
+    ), ARRAY_A );
+
+    if ( $existing ) {
+        $data = [ 'completed_sections' => $json, 'updated_at' => $now ];
+        // Working through a section is progress, but a module already marked
+        // completed stays completed — re-reading it must not reopen it.
+        if ( 'not_started' === $existing['status'] ) {
+            $data['status']     = 'in_progress';
+            $data['started_at'] = $existing['started_at'] ?: $now;
+        }
+        $wpdb->update( $table, $data, [ 'id' => (int) $existing['id'] ] );
+        $row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE id = %d", (int) $existing['id'] ), ARRAY_A );
+    } else {
+        $wpdb->insert( $table, [
+            'user_id'            => $user_id,
+            'module_id'          => $module_id,
+            'status'             => 'in_progress',
+            'started_at'         => $now,
+            'completed_sections' => $json,
+            'created_at'         => $now,
+            'updated_at'         => $now,
+        ] );
+        $row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $table WHERE id = %d", $wpdb->insert_id ), ARRAY_A );
+    }
+
+    return new WP_REST_Response( induction_format_progress_row( $row ) );
 }
 
 function induction_upsert_progress( WP_REST_Request $request ): WP_REST_Response {
@@ -2370,7 +2457,27 @@ function induction_format_progress_row( array $row ): array {
         'score'       => isset( $row['score'] ) ? (float) $row['score'] : null,
         'passed'      => isset( $row['passed'] ) ? (bool) $row['passed'] : null,
         'quiz_submitted_at' => $row['quiz_submitted_at'] ?? null,
+        'completed_sections' => induction_decode_completed_sections( $row['completed_sections'] ?? null ),
     ];
+}
+
+/**
+ * The section ids a staff member has worked through, as a list of strings.
+ *
+ * Tolerant on read: the column is JSON written by this plugin, but a row
+ * predating the column, a half-written value, or anything that is not a list
+ * of strings should read as "nothing completed" rather than break the portal
+ * for that person.
+ */
+function induction_decode_completed_sections( $raw ): array {
+    if ( ! is_string( $raw ) || '' === $raw ) {
+        return [];
+    }
+    $decoded = json_decode( $raw, true );
+    if ( ! is_array( $decoded ) ) {
+        return [];
+    }
+    return array_values( array_filter( $decoded, 'is_string' ) );
 }
 
 // ─── Shortcode + asset enqueue ───────────────────────────────────────────────

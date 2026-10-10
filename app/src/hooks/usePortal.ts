@@ -8,6 +8,7 @@ import {
   submitQuizForReview,
   fetchPortalDocuments,
   fetchTeam,
+  setCompletedSections,
 } from '../api/portal';
 import { fetchStaffAssignments } from '../api/staff';
 import type { ProgressRecord } from '../types';
@@ -107,5 +108,23 @@ export function useMyAssignments() {
     queryFn: () => fetchStaffAssignments(userId),
     enabled: userId > 0,
     staleTime: 1000 * 60 * 5,
+  });
+}
+
+/**
+ * Record which sections of a module the signed-in staff member has worked
+ * through. Replaces the whole set; the caller holds it.
+ */
+export function useSetCompletedSections(moduleId: number) {
+  const queryClient = useQueryClient();
+  const userId = useAuthStore((s) => s.user?.id ?? 0);
+
+  return useMutation({
+    mutationFn: (sectionIds: string[]) =>
+      setCompletedSections(userId, moduleId, sectionIds),
+    // The dashboard draws its progress bars from the same records.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['portal', 'progress', userId] });
+    },
   });
 }

@@ -90,7 +90,8 @@ describe('readCompletedSectionIds', () => {
   });
 
   // Whatever is in storage came from a previous build, another tab, or a user
-  // with devtools open. None of it should throw on the dashboard.
+  // with devtools open. None of it should throw during the one-time read that
+  // migrates these ticks onto the progress row.
   it('survives junk in storage', () => {
     localStorage.setItem(sectionCompletionKey(1), 'not json');
     expect(readCompletedSectionIds(1)).to.deep.eq([]);

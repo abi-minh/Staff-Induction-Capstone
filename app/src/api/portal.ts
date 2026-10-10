@@ -26,6 +26,7 @@ interface WPPortalModule {
 
 interface WPProgressRecord {
   id: number;
+  completed_sections?: string[];
   user_id: number;
   module_id: number;
   status: ProgressStatus;
@@ -88,6 +89,7 @@ function normaliseProgress(r: WPProgressRecord): ProgressRecord {
     score: r.score,
     passed: r.passed,
     quizSubmittedAt: r.quiz_submitted_at,
+    completedSections: r.completed_sections ?? [],
   };
 }
 
@@ -246,4 +248,24 @@ export async function fetchTeam(): Promise<TeamMember[]> {
     contactEmail: t.contactEmail ?? '',
     contactPhone: t.contactPhone ?? '',
   }));
+}
+
+/**
+ * Replace the set of sections this person has worked through.
+ *
+ * Sends the whole set rather than one id: unmarking needs no second endpoint,
+ * and a dropped response cannot leave client and server disagreeing about
+ * which sections are done.
+ */
+export async function setCompletedSections(
+  userId: number,
+  moduleId: number,
+  sectionIds: string[],
+): Promise<ProgressRecord> {
+  const { data } = await client.post<WPProgressRecord>('induction/v1/progress/sections', {
+    user_id: userId,
+    module_id: moduleId,
+    section_ids: sectionIds,
+  });
+  return normaliseProgress(data);
 }

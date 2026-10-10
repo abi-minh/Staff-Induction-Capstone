@@ -243,6 +243,11 @@ export interface ProgressRecord {
   score: number | null;
   passed: boolean | null;
   quizSubmittedAt: string | null;
+  /**
+   * Sections this person has worked through. Server-side since the move off
+   * localStorage, so it follows them between devices and reporting can see it.
+   */
+  completedSections: string[];
 }
 
 // ─── Quiz review (admin grading of the module-level quiz) ────────────────────

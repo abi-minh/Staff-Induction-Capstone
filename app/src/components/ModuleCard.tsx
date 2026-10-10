@@ -21,15 +21,44 @@ interface Props {
    * and nine out of ten looked identical.
    */
   percentComplete?: number;
+  /**
+   * The first section this person has not finished, or null when there is
+   * nothing left to do. Passed in rather than worked out here: the dashboard
+   * already parses the module's sections to produce `percentComplete`, and
+   * doing it twice invites the two answers to drift apart.
+   */
+  nextSectionId?: string | null;
 }
 
-export default function ModuleCard({ module, progress, dueDate, percentComplete = 0 }: Props) {
+export default function ModuleCard({
+  module, progress, dueDate, percentComplete = 0, nextSectionId = null,
+}: Props) {
   const navigate    = useNavigate();
   const status      = progress?.status ?? 'not_started';
   const completed   = status === 'completed';
+  // Opening a module records it as in_progress, so someone who looked at the
+  // overview and backed out is "started" as far as the database is concerned.
+  // There is nothing to continue to in that case, and offering Continue over
+  // Start Module would be the same journey under a word that promises you are
+  // picking something back up. Presentation only — the stored status, and so
+  // everything reporting says, is untouched.
+  const started     = !completed
+    && status !== 'not_started'
+    && (progress?.completedSections?.length ?? 0) > 0;
   const Icon        = getModuleIcon(module);
   const heroUrl     = getModuleHero(module);
   const excerpt = stripHtml(module.excerpt);
+
+  const openPath = `/portal/training/${module.id}`;
+  // Nothing unfinished means nothing to resume to — someone who has read every
+  // section but not yet pressed "Mark as complete" belongs on the overview,
+  // which is where that button is.
+  const resumePath = nextSectionId
+    ? `${openPath}?section=${encodeURIComponent(nextSectionId)}`
+    : openPath;
+
+  const primaryPath  = started ? resumePath : openPath;
+  const primaryLabel = completed ? 'Revisit' : started ? 'Continue' : 'Start Module';
 
   return (
     <Card sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
@@ -105,23 +134,35 @@ export default function ModuleCard({ module, progress, dueDate, percentComplete 
           }}
         />
 
+        {/* One button unless there is somewhere else worth going. Review and
+            Attempt Now both opened the module overview, so the card offered a
+            choice between two identical destinations.
+
+            A module in progress is the exception: Continue skips the overview
+            and resumes at the first unfinished section, which is only
+            knowable now that section completion lives on the progress record
+            rather than in one browser's localStorage. A first attempt still
+            lands on the overview, where the description, the section list and
+            the due date are — the context you want exactly once. */}
         <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
-          <Button
-            variant="outlined"
-            color="inherit"
-            endIcon={<VisibilityOutlined />}
-            onClick={() => navigate(`/portal/training/${module.id}`)}
-            sx={{ borderColor: 'divider', flexGrow: 1, color: 'text.primary' }}
-          >
-            Review
-          </Button>
+          {started && (
+            <Button
+              variant="outlined"
+              color="inherit"
+              endIcon={<VisibilityOutlined />}
+              onClick={() => navigate(openPath)}
+              sx={{ borderColor: 'divider', flexGrow: 1, color: 'text.primary' }}
+            >
+              Overview
+            </Button>
+          )}
           <Button
             variant="contained"
             endIcon={<ArrowForwardIcon />}
-            onClick={() => navigate(`/portal/training/${module.id}`)}
+            onClick={() => navigate(primaryPath)}
             sx={{ flexGrow: 1 }}
           >
-            {completed ? 'Revisit' : 'Attempt Now'}
+            {primaryLabel}
           </Button>
         </Box>
       </CardContent>
