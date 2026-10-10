@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { blockLayoutSx, clampRowColumns, createBlock, createSection, isQuizBlock, layoutOf, moveItem, parseSections } from './utils';
+import { alignedListSx, blockLayoutSx, clampRowColumns, createBlock, createSection, isQuizBlock, layoutOf, moveItem, parseSections } from './utils';
 import { MAX_ROW_COLUMNS, MIN_ROW_COLUMNS } from '../types';
 import type { Block, PlacedBlock, RowChildBlock, Section } from '../types';
 
@@ -254,5 +254,38 @@ describe('blockLayoutSx', () => {
       marginLeft: 'auto',
       marginRight: 'auto',
     });
+  });
+});
+
+// Centring a bullet list used to move the words and leave the markers pinned
+// to the far left, because a list marker is placed by the list's box rather
+// than by the text inside each item.
+describe('alignedListSx', () => {
+  it('adds nothing for left-aligned text', () => {
+    expect(alignedListSx('left')).to.deep.eq({});
+    expect(alignedListSx(undefined), 'left is the default').to.deep.eq({});
+  });
+
+  it('brings the marker inside the content box when centred', () => {
+    expect(alignedListSx('center')).to.deep.eq({
+      listStylePosition: 'inside',
+      paddingLeft: 0,
+    });
+  });
+
+  it('does the same for right-aligned text', () => {
+    expect(alignedListSx('right')).to.deep.eq({
+      listStylePosition: 'inside',
+      paddingLeft: 0,
+    });
+  });
+
+  // The indent matters as much as the marker: leaving a list's default
+  // padding would centre the line inside a box that is itself offset, which
+  // reads as a near-miss rather than a bug.
+  it('always clears the indent when it moves the marker', () => {
+    for (const align of ['center', 'right'] as const) {
+      expect(alignedListSx(align)).to.have.property('paddingLeft', 0);
+    }
   });
 });

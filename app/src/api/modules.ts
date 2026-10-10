@@ -92,3 +92,14 @@ export async function updateModule(id: number, values: Partial<ModuleFormValues>
 export async function deleteModule(id: number): Promise<void> {
   await client.delete(`induction/v1/modules/${id}`);
 }
+
+/**
+ * Set the order modules appear in, for staff and admins alike.
+ *
+ * Sends the whole list in its new order rather than "move this one up": the
+ * server renumbers from zero, so positions stay dense no matter how many times
+ * the list is shuffled.
+ */
+export async function reorderModules(ids: number[]): Promise<void> {
+  await client.post('induction/v1/modules/order', { ids });
+}

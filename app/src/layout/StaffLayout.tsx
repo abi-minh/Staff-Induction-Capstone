@@ -12,9 +12,6 @@ import ManageAccountsOutlinedIcon  from '@mui/icons-material/ManageAccountsOutli
 import AdminPanelSettingsOutlined  from '@mui/icons-material/AdminPanelSettingsOutlined';
 import LogoutOutlinedIcon          from '@mui/icons-material/LogoutOutlined';
 import { useAuthStore }            from '../store/authStore';
-import { useAssignedModules }      from '../hooks/usePortal';
-import { getModuleIcon }           from '../components/moduleVisuals';
-import { stripHtml }               from '../util/strings';
 import BrandLogo                   from '../components/BrandLogo';
 
 const DRAWER_WIDTH = 200;
@@ -27,7 +24,6 @@ export default function StaffLayout() {
   const { user, clearAuth } = useAuthStore();
   const navigate  = useNavigate();
   const location  = useLocation();
-  const { data: modules } = useAssignedModules();
   const isAdmin = isAdminUser(user?.roles ?? []);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -83,22 +79,19 @@ export default function StaffLayout() {
   }
 
   const navContent = (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, px: 1.5 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, px: 1.5, flexGrow: 1 }}>
       {/* Inside navContent so it appears in both the desktop sidebar and the
           mobile Drawer, which render the same fragment. */}
       <Box sx={{ display: 'flex', justifyContent: 'center', mb: 1.5 }}>
         <BrandLogo size={88} />
       </Box>
 
-      {renderNavItem('Dashboard', '/portal', EditOutlinedIcon)}
-
-      {modules?.map((m) => {
-        const path = `/portal/training/${m.id}`;
-        const Icon = getModuleIcon(m);
-        const label = stripHtml(m.title);
-        return renderNavItem(label, path, Icon, String(m.id));
-      })}
-
+      {/* Modules are deliberately not listed here. The dashboard is the module
+          list: it shows progress and due dates, which a 200px sidebar cannot,
+          and a per-module nav entry had no upper bound — long titles were
+          truncated to the point where two of them read identically. Inside a
+          module, "Back to Modules" returns to that list. */}
+      {renderNavItem('Modules', '/portal', EditOutlinedIcon)}
       {renderNavItem('Resources', '/portal/library', MenuBookIcon)}
       {renderNavItem('Locations', '/portal/locations', PlaceOutlinedIcon)}
       {renderNavItem('Meet Our Team', '/portal/team', PeopleAltOutlinedIcon)}
@@ -118,6 +111,10 @@ export default function StaffLayout() {
               size="small"
               startIcon={<AdminPanelSettingsOutlined />}
               onClick={() => navigate('/')}
+              // Same breakpoint the admin header's "Staff View" button uses.
+              // On a phone this lives in the drawer instead; the banner still
+              // says which portal you are in, it just does not act from here.
+              sx={{ display: { xs: 'none', sm: 'inline-flex' } }}
             >
               Return to Admin
             </Button>
@@ -151,10 +148,47 @@ export default function StaffLayout() {
           ModalProps={{ keepMounted: true }}
           sx={{
             display: { xs: 'block', md: 'none' },
-            '& .MuiDrawer-paper': { width: DRAWER_WIDTH, boxSizing: 'border-box', py: 2, pt: 'calc(16px + env(safe-area-inset-top, 0px))' },
+            '& .MuiDrawer-paper': {
+              width: DRAWER_WIDTH,
+              boxSizing: 'border-box',
+              py: 2,
+              pt: 'calc(16px + env(safe-area-inset-top, 0px))',
+              display: 'flex',
+              flexDirection: 'column',
+            },
           }}
         >
           {navContent}
+          {isAdmin && (
+            // Same wrapper as AdminLayout's "Staff View" item: the rule above
+            // is what separates a portal switch from the nav items, and
+            // without it the control reads as just another destination.
+            <Box sx={{ px: 1.5, pb: 1, borderTop: '1px solid', borderColor: 'divider', pt: 1 }}>
+              <ButtonBase
+                onClick={() => {
+                  setMobileOpen(false);
+                  navigate('/');
+                }}
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 1.5,
+                  px: 1.75,
+                  py: 1.25,
+                  borderRadius: '10px',
+                  justifyContent: 'flex-start',
+                  width: '100%',
+                  color: 'text.primary',
+                  '&:hover': { bgcolor: 'action.hover' },
+                }}
+              >
+                <AdminPanelSettingsOutlined sx={{ fontSize: 22 }} />
+                <Typography variant="body2" sx={{ fontSize: 14, fontWeight: 500 }}>
+                  Return to Admin
+                </Typography>
+              </ButtonBase>
+            </Box>
+          )}
         </Drawer>
 
         <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>

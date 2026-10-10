@@ -4,7 +4,7 @@ import {
   MIN_ROW_COLUMNS,
 } from '../types';
 import type {
-  Block, BlockLayout, BlockType, PlacedBlock, QuizBlock, RowBlock, RowChildBlock, Section,
+  Block, BlockAlign, BlockLayout, BlockType, PlacedBlock, QuizBlock, RowBlock, RowChildBlock, Section,
 } from '../types';
 import { stripHtml } from '../util/strings';
 
@@ -14,6 +14,28 @@ export function layoutOf(block: Block): BlockLayout | undefined {
     return { ...layout, width: block.data.width };
   }
   return layout;
+}
+
+/**
+ * Extra rules a `ul`/`ol` needs when the text around it is not left-aligned.
+ *
+ * A list marker is positioned by the list's own box, not by the text inside
+ * each item — so `text-align: center` moves the words and leaves the bullets
+ * pinned to the far left. Pulling the marker inside the content box makes it
+ * travel with its text.
+ *
+ * The indent has to go with it: a `ul` carries a default
+ * `padding-inline-start`, and leaving it would centre the line within a box
+ * that is itself offset, which looks like a near-miss rather than a mistake.
+ *
+ * Returned as properties to merge into an existing `ul, ol` rule rather than a
+ * whole selector, so the editor and the reader can each apply it at their own
+ * nesting depth and stay in step.
+ */
+export function alignedListSx(align?: BlockAlign) {
+  return align && align !== 'left'
+    ? { listStylePosition: 'inside' as const, paddingLeft: 0 }
+    : {};
 }
 
 export function blockLayoutSx(layout?: BlockLayout) {

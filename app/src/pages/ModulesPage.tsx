@@ -26,7 +26,10 @@ import DeleteIcon from "@mui/icons-material/Delete";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import SearchIcon from "@mui/icons-material/Search";
 import { getIconByKey } from "../components/iconLibrary";
-import { useDeleteModule, useModules } from "../hooks/useModules";
+import { useDeleteModule, useModules, useReorderModules } from "../hooks/useModules";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
+import { moveItem } from "../blocks/utils";
 
 function formatDate(value: string): string {
   const date = new Date(value);
@@ -48,9 +51,22 @@ export default function ModulesPage() {
   const deleteModule = useDeleteModule();
   const [search, setSearch] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  const reorder = useReorderModules();
+
   const [statusFilter, setStatusFilter] = useState<"all" | "publish" | "draft">(
     "all",
   );
+
+  // Reordering is disabled while a search or status filter is active: "move
+  // up" has no honest meaning when the row above is hidden, and renumbering
+  // from a filtered list would reshuffle the modules not on screen.
+  const isFiltered = search.trim() !== "" || statusFilter !== "all";
+
+  function moveModule(index: number, direction: -1 | 1) {
+    const next = moveItem(modules, index, index + direction);
+    if (next === modules) return;
+    reorder.mutate(next.map((m) => m.id));
+  }
 
   const filteredModules = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -204,6 +220,17 @@ export default function ModulesPage() {
                     fontWeight: 700,
                     borderBottom: "1px solid",
                     borderColor: "divider",
+                    width: 72,
+                  }}
+                >
+                  Order
+                </TableCell>
+                <TableCell
+                  sx={{
+                    py: 2.25,
+                    fontWeight: 700,
+                    borderBottom: "1px solid",
+                    borderColor: "divider",
                   }}
                 >
                   Module
@@ -246,6 +273,10 @@ export default function ModulesPage() {
               {filteredModules.map((module) =>
                 (() => {
                   const ModuleIcon = getIconByKey(module.meta.module_icon);
+                  // Position in the full list, not the filtered one: the
+                  // reorder call renumbers every module, so a filtered index
+                  // would move the wrong rows.
+                  const index = modules.findIndex((m) => m.id === module.id);
 
                   return (
                     <TableRow
@@ -260,6 +291,28 @@ export default function ModulesPage() {
                         },
                       }}
                     >
+                      <TableCell sx={{ width: 72 }}>
+                        <Box sx={{ display: "flex", flexDirection: "column" }}>
+                          <IconButton
+                            size="small"
+                            aria-label={`Move ${module.title || "this module"} up`}
+                            disabled={isFiltered || index === 0 || reorder.isLoading}
+                            onClick={() => moveModule(index, -1)}
+                          >
+                            <ArrowUpwardIcon sx={{ fontSize: 16 }} />
+                          </IconButton>
+                          <IconButton
+                            size="small"
+                            aria-label={`Move ${module.title || "this module"} down`}
+                            disabled={
+                              isFiltered || index === modules.length - 1 || reorder.isLoading
+                            }
+                            onClick={() => moveModule(index, 1)}
+                          >
+                            <ArrowDownwardIcon sx={{ fontSize: 16 }} />
+                          </IconButton>
+                        </Box>
+                      </TableCell>
                       <TableCell>
                         <Box
                           sx={{
@@ -328,6 +381,7 @@ export default function ModulesPage() {
           {filteredModules.map((module) => {
             const ModuleIcon = getIconByKey(module.meta.module_icon);
             const published = module.status === "publish";
+            const index = modules.findIndex((m) => m.id === module.id);
             return (
               <Paper
                 key={module.id}
@@ -340,6 +394,26 @@ export default function ModulesPage() {
                 }}
               >
                 <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
+                  <Box sx={{ display: "flex", flexDirection: "column", flexShrink: 0 }}>
+                    <IconButton
+                      size="small"
+                      aria-label={`Move ${module.title || "this module"} up`}
+                      disabled={isFiltered || index === 0 || reorder.isLoading}
+                      onClick={() => moveModule(index, -1)}
+                    >
+                      <ArrowUpwardIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                    <IconButton
+                      size="small"
+                      aria-label={`Move ${module.title || "this module"} down`}
+                      disabled={
+                        isFiltered || index === modules.length - 1 || reorder.isLoading
+                      }
+                      onClick={() => moveModule(index, 1)}
+                    >
+                      <ArrowDownwardIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Box>
                   <ModuleIcon sx={{ color: "primary.main", fontSize: 28 }} />
                   <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>
                     {module.title || "(Untitled)"}

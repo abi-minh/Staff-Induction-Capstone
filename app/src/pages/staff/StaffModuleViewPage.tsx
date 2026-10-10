@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   Alert,
   Box,
+  ButtonBase,
   Button,
   Card,
   CardContent,
@@ -29,6 +30,7 @@ import VisibilityOutlined from "@mui/icons-material/VisibilityOutlined";
 import VolumeUpOutlined from "@mui/icons-material/VolumeUpOutlined";
 import {
   usePortalModule,
+  useMyAssignments,
   useModuleProgress,
   useMarkComplete,
   useSubmitQuizForReview,
@@ -42,6 +44,8 @@ import {
 import { useAuthStore } from "../../store/authStore";
 import { useSpeech } from "../../hooks/useSpeech";
 import BlockRenderer from "../../components/BlockRenderer";
+import { scrollAncestorsToTop } from "../../util/scroll";
+import { formatDueDate } from "../../util/dates";
 import {
   isSectionComplete as sectionIsComplete,
   moduleProgressPercent,
@@ -76,6 +80,12 @@ export default function StaffModuleViewPage() {
   const lsKey = sectionCompletionKey(moduleId);
 
   const startTime = useRef(Date.now());
+  // Moving between sections swaps content without changing route, so nothing
+  // resets the scroll position — readers landed part way down the next section.
+  // Keyed on the section id rather than wired to each control, so Next, Back,
+  // the section dropdown and "Attempt Now" are all covered by one rule.
+  const viewTopRef = useRef<HTMLDivElement>(null);
+
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(
     null,
   );
@@ -132,8 +142,16 @@ export default function StaffModuleViewPage() {
     };
   }, [module]);
 
+  const { data: myAssignments = [] } = useMyAssignments();
+  const myDueDate =
+    myAssignments.find((a) => a.moduleId === moduleId)?.dueDate ?? null;
+
   const currentSection =
     sections.find((s) => s.id === selectedSectionId) ?? null;
+
+  useEffect(() => {
+    scrollAncestorsToTop(viewTopRef.current);
+  }, [selectedSectionId]);
 
   useEffect(() => {
     localStorage.setItem(lsKey, JSON.stringify(completedSectionIds));
@@ -198,9 +216,6 @@ export default function StaffModuleViewPage() {
   const otherSectionsComplete = sections
     .filter((s) => !s.isModuleQuiz)
     .every(isSectionComplete);
-  const statusColor = isCompleted ? "success.main" : "warning.main";
-  const StatusIcon = isCompleted ? CheckCircleOutlined : ScheduleOutlined;
-  const statusLabel = isCompleted ? "Completed" : "To Complete";
 
   function handleAnswer(blockId: string, answer: string) {
     setAnswers((prev) => ({ ...prev, [blockId]: answer }));
@@ -289,7 +304,7 @@ export default function StaffModuleViewPage() {
     const speechText = sectionToSpeechText(currentSection);
 
     return (
-      <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      <Box ref={viewTopRef} sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
         {/* Top bar */}
         <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
           <IconButton onClick={() => setSelectedSectionId(null)} size="small">
@@ -569,22 +584,36 @@ export default function StaffModuleViewPage() {
 
   // ── Section list view (module overview) ─────────────────────────────────
   return (
-    <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-        <IconButton onClick={() => navigate("/portal")} size="small">
-          <ArrowBackIcon />
-        </IconButton>
-        <Typography
-          sx={{ fontWeight: 600, fontSize: "0.95rem", letterSpacing: "normal" }}
+    <Box ref={viewTopRef} sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {/* One target, not an icon with a label beside it. Now that modules are
+          no longer in the sidebar this is the route between them, and on a
+          phone a 24px icon is a poor thing to have to hit. */}
+      <Box>
+        <ButtonBase
+          onClick={() => navigate("/portal")}
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+            py: 0.75,
+            pr: 1.5,
+            borderRadius: "10px",
+            "&:hover": { bgcolor: "action.hover" },
+          }}
         >
-          Back to Modules
-        </Typography>
+          <ArrowBackIcon fontSize="small" />
+          <Typography
+            sx={{ fontWeight: 600, fontSize: "0.95rem", letterSpacing: "normal" }}
+          >
+            Back to Modules
+          </Typography>
+        </ButtonBase>
       </Box>
 
       <Box sx={{ mx: { xs: -2, md: -4 } }}>
         <HeroBanner
           module={module}
-          dueDate="27th June 2026"
+          dueDate={formatDueDate(myDueDate)}
           minutes={module.meta.module_estimated_minutes}
         />
       </Box>
@@ -606,21 +635,6 @@ export default function StaffModuleViewPage() {
           />
         </Box>
       )}
-
-      <Box>
-        <Chip
-          icon={<StatusIcon />}
-          label={statusLabel}
-          variant="outlined"
-          sx={{
-            borderRadius: 999,
-            borderColor: statusColor,
-            color: statusColor,
-            fontWeight: 500,
-            "& .MuiChip-icon": { color: statusColor },
-          }}
-        />
-      </Box>
 
       {sections.length > 0 ? (
         <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>

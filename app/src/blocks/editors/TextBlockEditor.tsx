@@ -16,6 +16,7 @@ import FormatListNumberedIcon from '@mui/icons-material/FormatListNumbered';
 import LinkOffIcon from '@mui/icons-material/LinkOff';
 import type { BlockAlign, TextBlock } from '../../types';
 import TextAlignControls from '../TextAlignControls';
+import { alignedListSx } from '../utils';
 
 // Paste is left to ProseMirror.
 //
@@ -167,7 +168,7 @@ export default function TextBlockEditor({ block, onChange, onTextAlignChange }: 
             fontSize: '0.9375rem',
             lineHeight: 1.6,
             '& > p': { my: 0.5 },
-            '& ul, & ol': { pl: 3, my: 0.5 },
+            '& ul, & ol': { pl: 3, my: 0.5, ...alignedListSx(block.textAlign) },
             '& li > p': { my: 0 },
             '& code': {
               bgcolor: 'grey.100',

@@ -5,7 +5,7 @@ import type {
   ListBlock, RowBlock, RowChildBlock, TextBlock, VideoBlock,
 } from '../types';
 import ZoomableImage from '../components/ZoomableImage';
-import { blockLayoutSx, layoutOf } from './utils';
+import { alignedListSx, blockLayoutSx, layoutOf } from './utils';
 
 export type PresentationalBlock =
   | HeadingBlock | TextBlock | ImageBlock | VideoBlock | ListBlock | CalloutBlock | RowBlock;
@@ -65,7 +65,10 @@ export function renderBlockContent(
           sx={[
             { color: 'text.primary', lineHeight: 1.7, '& p': { margin: 0 }, '& p + p': { mt: 1.5 }, '& img': { maxWidth: '100%', height: 'auto' } },
             blockLayoutSx(block.layout),
-            { textAlign: block.textAlign ?? 'left' },
+            {
+              textAlign: block.textAlign ?? 'left',
+              '& ul, & ol': alignedListSx(block.textAlign),
+            },
           ]}
           dangerouslySetInnerHTML={{ __html: block.data.html }}
         />

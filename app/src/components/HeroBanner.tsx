@@ -12,6 +12,21 @@ interface Props {
   minutes?:  number;
 }
 
+// Solid white on a photographic banner rather than a tint: a translucent chip
+// over a busy hero image is unreadable at exactly the moment it matters. The
+// 2px border carries the colour that the fill used to.
+const heroChipSx = {
+  bgcolor: 'background.paper',
+  border: '2px solid',
+  borderRadius: 999,
+  fontWeight: 600,
+  height: 36,
+  px: 0.5,
+  '& .MuiChip-label': { px: 1.25 },
+  // The icon inherits the chip's colour, so each chip only sets it once.
+  '& .MuiChip-icon': { color: 'inherit', ml: 1 },
+};
+
 export default function HeroBanner({ module, subtitle, dueDate, minutes }: Props) {
   const plainTitle    = stripHtml(module.title);
   const plainSubtitle = stripHtml(subtitle ?? '');
@@ -57,16 +72,16 @@ export default function HeroBanner({ module, subtitle, dueDate, minutes }: Props
         <Box sx={{ display: 'flex', flexDirection: 'row', gap: 1, flexWrap: 'wrap' }}>
           {dueDate && (
             <Chip
-              icon={<CalendarTodayIcon sx={{ fontSize: 16 }} />}
+              icon={<CalendarTodayIcon sx={{ fontSize: 20 }} />}
               label={`Due by ${dueDate}`}
-              sx={{ bgcolor: 'chipDue.bg', color: 'chipDue.fg', fontWeight: 500, borderRadius: 999 }}
+              sx={{ ...heroChipSx, color: 'chipDue.fg', borderColor: 'chipDue.fg' }}
             />
           )}
           {(minutes ?? 0) > 0 && (
             <Chip
-              icon={<AccessTimeIcon sx={{ fontSize: 16 }} />}
+              icon={<AccessTimeIcon sx={{ fontSize: 20 }} />}
               label={`About ${minutes} minutes to complete`}
-              sx={{ bgcolor: 'chipInfo.bg', color: 'chipInfo.fg', fontWeight: 500, borderRadius: 999 }}
+              sx={{ ...heroChipSx, color: 'chipInfo.fg', borderColor: 'chipInfo.fg' }}
             />
           )}
         </Box>

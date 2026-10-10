@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchModules, fetchModule, createModule, updateModule, deleteModule } from '../api/modules';
+import { fetchModules, fetchModule, createModule, updateModule, deleteModule, reorderModules } from '../api/modules';
 import type { ModuleFormValues } from '../types';
 
 export function useModules() {
@@ -41,6 +41,19 @@ export function useDeleteModule() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['modules'] });
       qc.invalidateQueries({ queryKey: ['portal', 'modules', 'assigned'] });
+    },
+  });
+}
+
+export function useReorderModules() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (ids: number[]) => reorderModules(ids),
+    // Staff read the same order on their dashboard and sidebar, so both the
+    // admin list and the portal's copy have to be refetched.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['modules'] });
+      queryClient.invalidateQueries({ queryKey: ['portal', 'modules'] });
     },
   });
 }

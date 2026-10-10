@@ -348,7 +348,6 @@ export default function ModuleEditPage() {
 
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 2 }}>
             <TextField label="Estimated Minutes" type="number" value={form.module_estimated_minutes} onChange={(e) => set('module_estimated_minutes', Number(e.target.value))} />
-            <TextField label="Display Order" type="number" value={form.module_order} onChange={(e) => set('module_order', Number(e.target.value))} />
             <TextField label="Duration (days to complete)" type="number" value={form.module_duration_days} onChange={(e) => set('module_duration_days', Number(e.target.value))} helperText="Sets a due date when the module is assigned. 0 = no due date." />
           </Box>
 

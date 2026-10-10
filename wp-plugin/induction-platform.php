@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.8.0
+ * Version:     1.10.3
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.8.0' );
+define( 'INDUCTION_VERSION', '1.10.3' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -646,6 +646,16 @@ function induction_register_routes(): void {
         'methods'             => 'POST',
         'callback'            => 'induction_bulk_assign',
         'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+    ] );
+
+    // POST /modules/order — set the order staff see modules in.
+    register_rest_route( $ns, '/modules/order', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_reorder_modules',
+        'permission_callback' => fn() => current_user_can( 'manage_induction' ),
+        'args'                => [
+            'ids' => [ 'type' => 'array', 'required' => true, 'items' => [ 'type' => 'integer' ] ],
+        ],
     ] );
 
     // POST /assignments/due-date — move one person's deadline for one module.
@@ -6263,6 +6273,47 @@ function induction_sort_modules_by_order( array $posts ): array {
     return $posts;
 }
 
+/**
+ * Renumber modules from a list of ids given in the order they should appear.
+ *
+ * Takes the whole ordered list rather than "move module X up one": the client
+ * already holds the list it is showing, and sending it back whole means the
+ * server never has to guess what the neighbours were. Positions are rewritten
+ * as 0, 1, 2 … so the numbers stay dense however many times the list is
+ * shuffled.
+ *
+ * Only writes where the value actually changes. That keeps the post-meta hooks
+ * quiet — and matters because reordering a list of twenty modules would
+ * otherwise fire twenty update_post_meta events for no reason.
+ */
+function induction_reorder_modules( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $ids = array_values( array_unique( array_map( 'intval', (array) $request->get_param( 'ids' ) ) ) );
+
+    if ( empty( $ids ) ) {
+        return new WP_Error( 'induction_no_modules', 'No modules were given to reorder.', [ 'status' => 400 ] );
+    }
+
+    foreach ( $ids as $id ) {
+        if ( 'induction_module' !== get_post_type( $id ) ) {
+            return new WP_Error(
+                'induction_not_a_module',
+                sprintf( 'ID %d is not a training module.', $id ),
+                [ 'status' => 400 ]
+            );
+        }
+    }
+
+    $changed = 0;
+    foreach ( $ids as $position => $id ) {
+        if ( (int) get_post_meta( $id, 'module_order', true ) !== $position ) {
+            update_post_meta( $id, 'module_order', $position );
+            $changed++;
+        }
+    }
+
+    return rest_ensure_response( [ 'reordered' => count( $ids ), 'changed' => $changed ] );
+}
+
 function induction_get_modules(): WP_REST_Response {
     $posts = induction_sort_modules_by_order( get_posts( [
         'post_type'      => 'induction_module',
@@ -6304,6 +6355,17 @@ function induction_create_module( WP_REST_Request $request ): WP_REST_Response|W
     if ( is_wp_error( $id ) ) {
         return $id;
     }
+    // Append rather than default to 0: with positions numbered from zero, a
+    // new module would otherwise land at the top of a list an author had just
+    // arranged. Only when the caller did not ask for a position itself.
+    if ( ! isset( $params['meta']['module_order'] ) ) {
+        global $wpdb;
+        $max = (int) $wpdb->get_var(
+            "SELECT MAX( CAST( meta_value AS SIGNED ) ) FROM $wpdb->postmeta WHERE meta_key = 'module_order'"
+        );
+        update_post_meta( $id, 'module_order', $max + 1 );
+    }
+
     $meta_result = induction_save_module_meta( $id, $params['meta'] ?? [] );
     if ( is_wp_error( $meta_result ) ) {
         return $meta_result;
