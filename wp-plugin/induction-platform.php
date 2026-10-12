@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.14.0
+ * Version:     1.18.1
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.14.0' );
+define( 'INDUCTION_VERSION', '1.18.1' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -73,7 +73,12 @@ define( 'INDUCTION_MODULE_VERSION_LIMIT', 30 );
 // Backup / migration. Bump the format version when the shape of content.json changes.
 define( 'INDUCTION_EXPORT_FORMAT',                'induction-platform-export' );
 define( 'INDUCTION_EXPORT_FORMAT_VERSION',        2 );
-define( 'INDUCTION_EXPORT_LINK_TTL',              10 * MINUTE_IN_SECONDS );
+// Long enough to cover a download that is interrupted and resumed more than
+// once. Ten minutes was shorter than a single attempt at a large export, so a
+// resume arrived after the link had already expired. Refreshed on every
+// partial delivery, so the window follows an active download rather than the
+// moment the link was issued.
+define( 'INDUCTION_EXPORT_LINK_TTL',              2 * HOUR_IN_SECONDS );
 define( 'INDUCTION_EXPORT_REPORT_EVERY',          8 * 1024 * 1024 );
 define( 'INDUCTION_TRANSFER_DISK_MARGIN',         256 * 1024 * 1024 );
 define( 'INDUCTION_IMPORT_STEP_SECONDS',          5 );
@@ -965,6 +970,12 @@ function induction_register_routes(): void {
     ] );
 
     // Backup / migration.
+    register_rest_route( $ns, '/transfer/export/preflight', [
+        'methods'             => 'GET',
+        'callback'            => 'induction_export_preflight',
+        'permission_callback' => 'induction_is_admin_user',
+    ] );
+
     register_rest_route( $ns, '/transfer/export/prepare', [
         'methods'             => 'POST',
         'callback'            => 'induction_export_prepare',
@@ -3803,6 +3814,17 @@ function induction_export_collect_media( int $attachment_id, array &$media, arra
         return;
     }
 
+    // Left out on purpose, by the same route as a file that cannot be read:
+    // the entry still travels with its URL, so an import knows the attachment
+    // existed and where it came from. A large induction video is often the
+    // difference between an archive a host will build and one it will not.
+    $limit = (int) ( $budget['max_file_bytes'] ?? 0 );
+    if ( empty( $budget['include_media'] ) || ( $limit > 0 && $entry['size'] > $limit ) ) {
+        $budget['skipped'][]     = $entry['filename'];
+        $media[ $attachment_id ] = $entry;
+        return;
+    }
+
     $ext             = strtolower( pathinfo( $path, PATHINFO_EXTENSION ) ) ?: 'bin';
     $entry['file']   = "media/{$attachment_id}.{$ext}";
     $entry['path']   = $path;
@@ -3995,7 +4017,15 @@ function induction_export_rows( string $table, array $module_refs, array $drop =
     return $rows;
 }
 
-function induction_export_collect(): array {
+/**
+ * Gather everything an export contains.
+ *
+ * $options accepts 'include_media' (false leaves every file out, keeping only
+ * its URL) and 'max_file_bytes' (0 for no limit). Both go through the same
+ * path as a file that is missing from disk, so an import handles a
+ * deliberately omitted file exactly as it already handles an absent one.
+ */
+function induction_export_collect( array $options = [] ): array {
     $media_ids = [];
     [ $modules, $module_refs ] = induction_export_modules( $media_ids );
     $locations = induction_export_locations( $media_ids );
@@ -4004,7 +4034,12 @@ function induction_export_collect(): array {
     $media_ids = array_values( array_unique( array_filter( array_map( 'intval', $media_ids ) ) ) );
     _prime_post_caches( $media_ids, false, true );
     $media  = [];
-    $budget = [ 'used' => 0, 'skipped' => [] ];
+    $budget = [
+        'used'           => 0,
+        'skipped'        => [],
+        'include_media'  => (bool) ( $options['include_media'] ?? true ),
+        'max_file_bytes' => max( 0, (int) ( $options['max_file_bytes'] ?? 0 ) ),
+    ];
     foreach ( $media_ids as $id ) {
         induction_export_collect_media( $id, $media, $budget );
     }
@@ -4060,7 +4095,7 @@ function induction_export_prepare( WP_REST_Request $request ): WP_REST_Response|
     $job = induction_import_id( $request->get_param( 'job' ) ) ?: str_replace( '-', '', wp_generate_uuid4() );
     induction_export_set_status( $job, [ 'phase' => 'collecting' ] );
 
-    $export = induction_export_collect();
+    $export = induction_export_collect( induction_export_options( $request ) );
     if ( '' === $export['content'] ) {
         return induction_export_fail( $job, new WP_Error( 'induction_export_encode', 'The site content could not be encoded for export.', [ 'status' => 500 ] ) );
     }
@@ -4084,6 +4119,59 @@ function induction_export_prepare( WP_REST_Request $request ): WP_REST_Response|
         'bytes'        => $export['bytes'],
         'size'         => $size,
         'skippedMedia' => $export['skipped'],
+        // Where the archive sits on the server, so an admin can collect it
+        // over FTP or a file manager instead of through the browser. On a host
+        // that mangles a large download, fetching the file directly is the only
+        // route that touches neither PHP nor the web server's response
+        // handling. Admin-only endpoint, and a path is what makes the file
+        // findable, so there is nothing to withhold here.
+        'path'         => induction_export_path( $job, 'zip' ),
+    ] );
+}
+
+/** Media choices sent with an export request, defaulting to "everything". */
+function induction_export_options( WP_REST_Request $request ): array {
+    $body = $request->get_json_params();
+    $body = is_array( $body ) ? $body : [];
+    return [
+        'include_media'  => ! array_key_exists( 'includeMedia', $body ) || (bool) $body['includeMedia'],
+        'max_file_bytes' => max( 0, (int) ( $body['maxFileMb'] ?? 0 ) ) * 1024 * 1024,
+    ];
+}
+
+/**
+ * What an export would contain, without building it.
+ *
+ * Runs the same collection the export runs, so the numbers are the real ones
+ * rather than an estimate — a site whose archive will not build wants to find
+ * that out before waiting for the build, and wants to be told which files are
+ * responsible rather than just how big the total is.
+ */
+function induction_export_preflight( WP_REST_Request $request ): WP_REST_Response {
+    induction_transfer_no_time_limit();
+    $export = induction_export_collect();
+
+    $largest = [];
+    foreach ( $export['media'] as $entry ) {
+        $largest[] = [ 'name' => (string) $entry['filename'], 'bytes' => (int) ( $entry['size'] ?? 0 ) ];
+    }
+    usort( $largest, static fn( array $a, array $b ): int => $b['bytes'] <=> $a['bytes'] );
+
+    $content_bytes = strlen( $export['content'] );
+    $free          = function_exists( 'disk_free_space' ) ? @disk_free_space( induction_transfer_dir() ) : false;
+
+    return rest_ensure_response( [
+        'mediaCount'    => count( $export['media'] ),
+        'mediaBytes'    => (int) $export['bytes'],
+        'contentBytes'  => $content_bytes,
+        // Media is stored rather than deflated, so the archive lands close to
+        // the sum of its parts.
+        'estimatedBytes' => (int) $export['bytes'] + $content_bytes,
+        'missing'       => (int) $export['skipped'],
+        'largest'       => array_slice( $largest, 0, 10 ),
+        // Whole-filesystem free space on shared hosting, which can be far more
+        // than the account is actually allowed. Reported, not trusted.
+        'freeBytes'     => false === $free ? null : (int) $free,
     ] );
 }
 
@@ -4157,12 +4245,36 @@ function induction_export_permission( WP_REST_Request $request ): bool {
     if ( ! is_array( $grant ) ) {
         return false;
     }
-    delete_transient( $key ); // single use: the URL may end up in history or access logs
+    // Not single-use any more. A resumed download repeats the same URL, so
+    // burning the token on the first request made resuming impossible — and an
+    // interrupted export had to be rebuilt from scratch, which is the slow
+    // part. The link is still short-lived, and the handler revokes it the
+    // moment the last byte has been delivered, so it stops working as soon as
+    // it is no longer needed rather than as soon as it has been used once.
+    $request->set_param( 'grant_key', $key );
     wp_set_current_user( (int) $grant['user'] );
     $request->set_param( 'job', (string) $grant['job'] );
     return induction_is_admin_user();
 }
 
+/**
+ * Serve a prepared export, resuming where an earlier attempt stopped.
+ *
+ * Large exports do not survive a single HTTP response on shared hosting: the
+ * web server kills the worker after its own fixed processing time, which a
+ * script cannot raise from the inside, and the browser is left holding a
+ * truncated zip with no end-of-archive record. A 675MB export cut at five
+ * minutes is not a rare case — it is the normal case once a site has enough
+ * media.
+ *
+ * So the response supports Range. An interrupted download resumes from the
+ * byte it reached instead of starting again, and each attempt only has to
+ * survive long enough to move the file forward.
+ *
+ * Two rules make that work, and both were previously the other way round:
+ * the zip is kept unless the final byte has actually been delivered, and the
+ * one-time link is revoked at the same moment rather than on first use.
+ */
 function induction_export_site( WP_REST_Request $request ): WP_REST_Response|WP_Error {
     induction_transfer_no_time_limit();
     $job  = induction_import_id( $request->get_param( 'job' ) );
@@ -4171,25 +4283,76 @@ function induction_export_site( WP_REST_Request $request ): WP_REST_Response|WP_
     if ( ! $in ) {
         return new WP_Error( 'induction_export_missing', 'This export has already been downloaded or has expired. Export again.', [ 'status' => 404 ] );
     }
-    $size = (int) filesize( $path );
+    $size  = (int) filesize( $path );
+    $mtime = (int) filemtime( $path );
+    // A validator the client can send back with If-Range, so a resume against a
+    // rebuilt export is detected and restarted rather than stitching two
+    // different archives together into something that looks whole and is not.
+    $etag = '"' . md5( $job . ':' . $size . ':' . $mtime ) . '"';
 
-    // Keep going after a disconnect so the zip still gets deleted.
+    // Keep going after a disconnect so the final status still gets written.
     ignore_user_abort( true );
     while ( ob_get_level() > 0 ) {
         ob_end_clean();
     }
     nocache_headers();
+
+    $start   = 0;
+    $end     = $size - 1;
+    $partial = false;
+
+    $range    = isset( $_SERVER['HTTP_RANGE'] ) ? trim( (string) $_SERVER['HTTP_RANGE'] ) : '';
+    $if_range = isset( $_SERVER['HTTP_IF_RANGE'] ) ? trim( (string) $_SERVER['HTTP_IF_RANGE'] ) : '';
+
+    // An If-Range that does not match means the file changed under the client,
+    // so the range is ignored and the whole file sent instead.
+    if ( '' !== $range && ( '' === $if_range || $if_range === $etag ) ) {
+        if ( preg_match( '/^bytes=(\d*)-(\d*)$/', $range, $m ) ) {
+            if ( '' === $m[1] && '' !== $m[2] ) {
+                // bytes=-N — the last N bytes.
+                $start = max( 0, $size - (int) $m[2] );
+            } else {
+                $start = (int) $m[1];
+                if ( '' !== $m[2] ) {
+                    $end = (int) $m[2];
+                }
+            }
+            if ( $end >= $size ) {
+                $end = $size - 1;
+            }
+            if ( $start > $end || $start >= $size ) {
+                header( 'Content-Range: bytes */' . $size );
+                status_header( 416 );
+                fclose( $in );
+                exit;
+            }
+            $partial = true;
+        }
+    }
+
+    $length = $end - $start + 1;
+
     header( 'Content-Type: application/zip' );
     header( 'Content-Disposition: attachment; filename="induction-export-' . gmdate( 'Y-m-d' ) . '.zip"' );
-    header( 'Content-Length: ' . $size );
+    header( 'Content-Length: ' . $length );
+    // Without these the browser has no way to offer Resume on a failed download.
+    header( 'Accept-Ranges: bytes' );
+    header( 'ETag: ' . $etag );
+    header( 'Last-Modified: ' . gmdate( 'D, d M Y H:i:s', $mtime ) . ' GMT' );
     // Otherwise nginx buffers the file and "sent" runs ahead of the browser.
     header( 'X-Accel-Buffering: no' );
 
+    if ( $partial ) {
+        status_header( 206 );
+        header( 'Content-Range: bytes ' . $start . '-' . $end . '/' . $size );
+        fseek( $in, $start );
+    }
+
     $sent     = 0;
     $reported = 0;
-    induction_export_set_status( $job, [ 'phase' => 'sending', 'sent' => 0, 'size' => $size ] );
-    while ( ! feof( $in ) && ! connection_aborted() ) {
-        $chunk = fread( $in, 1024 * 1024 );
+    induction_export_set_status( $job, [ 'phase' => 'sending', 'sent' => $start, 'size' => $size ] );
+    while ( $sent < $length && ! connection_aborted() ) {
+        $chunk = fread( $in, (int) min( 1024 * 1024, $length - $sent ) );
         if ( false === $chunk || '' === $chunk ) {
             break;
         }
@@ -4197,13 +4360,37 @@ function induction_export_site( WP_REST_Request $request ): WP_REST_Response|WP_
         flush();
         $sent += strlen( $chunk );
         if ( $sent - $reported >= INDUCTION_EXPORT_REPORT_EVERY ) {
-            induction_export_set_status( $job, [ 'phase' => 'sending', 'sent' => $sent, 'size' => $size ] );
+            induction_export_set_status( $job, [ 'phase' => 'sending', 'sent' => $start + $sent, 'size' => $size ] );
             $reported = $sent;
         }
     }
     fclose( $in );
-    induction_export_set_status( $job, [ 'phase' => $sent >= $size ? 'done' : 'cancelled', 'sent' => $sent, 'size' => $size ] );
-    @unlink( $path );
+
+    $delivered = $start + $sent;
+    $complete  = $delivered >= $size;
+
+    induction_export_set_status( $job, [
+        // "paused", not "cancelled": the bytes so far are still good and the
+        // rest can be fetched. Only a discard throws the work away.
+        'phase' => $complete ? 'done' : 'paused',
+        'sent'  => $delivered,
+        'size'  => $size,
+    ] );
+
+    $grant_key = (string) $request->get_param( 'grant_key' );
+    if ( $complete ) {
+        if ( '' !== $grant_key ) {
+            delete_transient( $grant_key );
+        }
+        @unlink( $path );
+    } elseif ( '' !== $grant_key ) {
+        // Slide the link's window forward so a download that keeps making
+        // progress does not expire part way through.
+        $grant = get_transient( $grant_key );
+        if ( is_array( $grant ) ) {
+            set_transient( $grant_key, $grant, INDUCTION_EXPORT_LINK_TTL );
+        }
+    }
     exit;
 }
 
