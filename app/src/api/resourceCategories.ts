@@ -30,6 +30,17 @@ export async function deleteResourceCategory(value: string): Promise<{ removed: 
   return data;
 }
 
+export async function setResourceCategoryVisibility(
+  value: string,
+  hidden: boolean,
+): Promise<{ value: string; hidden: boolean }> {
+  const { data } = await client.post<{ value: string; hidden: boolean }>(
+    `induction/v1/resource-categories/${value}/visibility`,
+    { hidden },
+  );
+  return data;
+}
+
 // Moving one file. The server also carries any document record in front of the
 // file across, so the staff portal and the library stay in step.
 export async function setMediaCategory(

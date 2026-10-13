@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle,
-  IconButton, InputAdornment, MenuItem, Paper, Table, TableBody, TableCell, TableHead,
+  Checkbox, IconButton, InputAdornment, MenuItem, Paper, Table, TableBody, TableCell, TableHead,
   TableRow, TextField, Tooltip, Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
@@ -12,13 +12,17 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import AddIcon from '@mui/icons-material/Add';
 import FolderOutlinedIcon from '@mui/icons-material/FolderOutlined';
 import DriveFileMoveOutlinedIcon from '@mui/icons-material/DriveFileMoveOutlined';
+import VisibilityOutlinedIcon from '@mui/icons-material/VisibilityOutlined';
+import VisibilityOffOutlinedIcon from '@mui/icons-material/VisibilityOffOutlined';
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
 import PictureAsPdfOutlinedIcon from '@mui/icons-material/PictureAsPdfOutlined';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
 import { useMedia, useDeleteMedia } from '../hooks/useMedia';
-import { useCreateDocument, useUploadMedia } from '../hooks/useDocuments';
+import {
+  useCreateDocument, useDocuments, useSetDocumentVisibility, useUploadMedia,
+} from '../hooks/useDocuments';
 import { useRoles } from '../hooks/useStaff';
 import {
   useResourceCategories,
@@ -26,6 +30,7 @@ import {
   useRenameResourceCategory,
   useDeleteResourceCategory,
   useSetMediaCategory,
+  useSetResourceCategoryVisibility,
 } from '../hooks/useResourceCategories';
 import type { MediaItem, MediaType, MediaUsage } from '../types';
 
@@ -60,6 +65,13 @@ function usageLabel(usage: MediaUsage[]): string {
   return [...new Set(usage.map((u) => u.title))].join(', ');
 }
 
+// A file can be two things at once: the document record that wraps it, and the
+// modules that embed it. One column holding both read as a list of unrelated
+// names, so they are split — Title is what this file is filed as, Used by is
+// where it appears.
+const documentsOf = (usage: MediaUsage[]) => usage.filter((u) => u.kind === 'document');
+const modulesOf = (usage: MediaUsage[]) => usage.filter((u) => u.kind === 'module');
+
 function FileThumb({ item }: { item: MediaItem }) {
   if (item.type === 'image') {
     return (
@@ -90,11 +102,27 @@ function CategoryCell({ item }: { item: MediaItem }) {
   return <Chip label={item.categoryLabel} size="small" variant="outlined" sx={{ borderRadius: 999 }} />;
 }
 
+function DocumentTitle({ usage }: { usage: MediaUsage[] }) {
+  const docs = documentsOf(usage);
+  if (docs.length === 0) {
+    // Not a failure: a module image is a file with no document record, which
+    // is most of this table.
+    return <Typography variant="body2" color="text.disabled">—</Typography>;
+  }
+  return <Typography variant="body2">{usageLabel(docs)}</Typography>;
+}
+
 function UsedBy({ usage }: { usage: MediaUsage[] }) {
+  const modules = modulesOf(usage);
+  if (modules.length > 0) {
+    return <Typography variant="body2">{usageLabel(modules)}</Typography>;
+  }
+  // The warning is for a file nothing refers to at all — the one that is safe
+  // to delete. A document that simply is not in any module is not that.
   if (usage.length === 0) {
     return <Chip label="Not used" size="small" color="warning" variant="outlined" sx={{ borderRadius: 999 }} />;
   }
-  return <Typography variant="body2">{usageLabel(usage)}</Typography>;
+  return <Typography variant="body2" color="text.disabled">—</Typography>;
 }
 
 const headCellSx = {
@@ -160,8 +188,19 @@ export default function DocumentsPage() {
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<MediaItem | null>(null);
   const [deleteError, setDeleteError] = useState('');
+  // Deleting a file quietly detaches any document that pointed at it, so the
+  // admin is told rather than finding a document with no file later.
+  const [deleteNotice, setDeleteNotice] = useState('');
 
   // Re-filing one file.
+  // Ids rather than items: the list is refetched after every change, and
+  // holding stale objects would act on what the screen used to show.
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [visibilityOpen, setVisibilityOpen] = useState(false);
+  const [visibilityRoles, setVisibilityRoles] = useState<string[]>(['all']);
+  const [visibilityError, setVisibilityError] = useState('');
+  const [bulkCategoryOpen, setBulkCategoryOpen] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [moveTarget, setMoveTarget] = useState<MediaItem | null>(null);
   const [moveTo, setMoveTo] = useState('');
   const [moveError, setMoveError] = useState('');
@@ -259,6 +298,103 @@ export default function DocumentsPage() {
     setTypeFilter((cur) => (cur === t ? null : t));
   }
 
+  const setVisibility = useSetDocumentVisibility();
+
+  // A document with no audience is not merely unassigned — staff cannot see
+  // it at all, and nothing on this screen said so. It is an easy state to
+  // reach: a document imported from an older backup, or created outside the
+  // upload dialog, has no targets, and the category manager is where someone
+  // goes when wondering why a category looks empty to staff.
+  const { data: allDocuments = [] } = useDocuments();
+  const hiddenDocs = allDocuments.filter(
+    (d) => (d.meta.document_role_targets ?? []).length === 0,
+  );
+  const hiddenInCategory = (slug: string) =>
+    hiddenDocs.filter((d) => (d.meta.document_category || '') === slug).length;
+  const hiddenUncategorised = hiddenInCategory('');
+
+  const setCategoryVisibility = useSetResourceCategoryVisibility();
+
+  async function toggleCategoryVisibility(value: string, hidden: boolean) {
+    setManageError('');
+    try {
+      await setCategoryVisibility.mutateAsync({ value, hidden });
+    } catch (err) {
+      setManageError(err instanceof Error ? err.message : 'Could not change the category.');
+    }
+  }
+  const selectedItems = filtered.filter((m) => selectedIds.includes(m.id));
+  // Visibility is a property of the document record, not of the file, so a
+  // module image in the selection has nothing to set it on.
+  const selectedDocumentIds = selectedItems.flatMap((m) => documentsOf(m.usage).map((d) => d.id));
+  const allShownSelected = filtered.length > 0 && filtered.every((m) => selectedIds.includes(m.id));
+  const selectedInUse = selectedItems.filter((m) => m.usage.length > 0);
+
+  function toggleOne(id: number) {
+    setSelectedIds((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  }
+
+  // Only what is on screen: selecting everything should never reach rows the
+  // current filter is hiding.
+  function toggleAllShown() {
+    setSelectedIds(allShownSelected ? [] : filtered.map((m) => m.id));
+  }
+
+  function openVisibility() {
+    setVisibilityError('');
+    setVisibilityRoles(['all']);
+    setVisibilityOpen(true);
+  }
+
+  async function handleVisibility() {
+    if (!visibilityRoles.length) {
+      setVisibilityError('Choose who can see these documents.');
+      return;
+    }
+    setVisibilityError('');
+    try {
+      await setVisibility.mutateAsync({ ids: selectedDocumentIds, roles: visibilityRoles });
+      setVisibilityOpen(false);
+      setSelectedIds([]);
+    } catch (err) {
+      setVisibilityError(err instanceof Error ? err.message : 'Could not change visibility.');
+    }
+  }
+
+  async function handleBulkDelete() {
+    setDeleteError('');
+    setDeleteNotice('');
+    let unlinked = 0;
+    try {
+      // Sequential, like the other bulk actions: a burst of deletes is exactly
+      // what a security plugin throttles, and a half-applied batch is worse
+      // than a slow one.
+      for (const item of selectedItems) {
+        unlinked += (await deleteMedia.mutateAsync(item.id)).documentsUnlinked;
+      }
+      setBulkDeleteOpen(false);
+      setSelectedIds([]);
+      if (unlinked > 0) {
+        setDeleteNotice(`${unlinked} document(s) pointed at those files and now have no file attached.`);
+      }
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Could not delete the files.');
+    }
+  }
+
+  async function handleBulkCategory(category: string) {
+    setMoveError('');
+    try {
+      for (const item of selectedItems) {
+        await setMediaCategory.mutateAsync({ id: item.id, category });
+      }
+      setBulkCategoryOpen(false);
+      setSelectedIds([]);
+    } catch (err) {
+      setMoveError(err instanceof Error ? err.message : 'Could not move the files.');
+    }
+  }
+
   function openMove(m: MediaItem) {
     setMoveTarget(m);
     setMoveTo(m.category || defaultCategory);
@@ -332,7 +468,12 @@ export default function DocumentsPage() {
     if (!deleteTarget) return;
     setDeleteError('');
     try {
-      await deleteMedia.mutateAsync(deleteTarget.id);
+      const { documentsUnlinked } = await deleteMedia.mutateAsync(deleteTarget.id);
+      setDeleteNotice(
+        documentsUnlinked > 0
+          ? `${documentsUnlinked} document(s) pointed at that file and now have no file attached.`
+          : '',
+      );
       setDeleteTarget(null);
     } catch (err) {
       setDeleteError(err instanceof Error ? err.message : 'Could not delete the file.');
@@ -427,11 +568,73 @@ export default function DocumentsPage() {
           </Box>
         </Box>
 
+        {deleteNotice && (
+          <Alert severity="info" onClose={() => setDeleteNotice('')} sx={{ m: 2 }}>
+            {deleteNotice} They are still listed here, and are hidden from staff until a file is attached.
+          </Alert>
+        )}
+
+        {selectedIds.length > 0 && (
+          <Box
+            sx={{
+              display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap',
+              px: 2, py: 1.5, bgcolor: 'action.hover',
+              borderTop: '1px solid', borderBottom: '1px solid', borderColor: 'divider',
+            }}
+          >
+            <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              {selectedIds.length} selected
+            </Typography>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<DriveFileMoveOutlinedIcon />}
+              onClick={() => { setMoveTo(defaultCategory); setMoveError(''); setBulkCategoryOpen(true); }}
+              sx={{ borderRadius: 999 }}
+            >
+              Change category
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              startIcon={<VisibilityOutlinedIcon />}
+              onClick={openVisibility}
+              // Only documents have a visibility setting; a selection of module
+              // images has nothing to change.
+              disabled={selectedDocumentIds.length === 0}
+              sx={{ borderRadius: 999 }}
+            >
+              Change visibility
+            </Button>
+            <Button
+              size="small"
+              variant="outlined"
+              color="error"
+              startIcon={<DeleteOutlineIcon />}
+              onClick={() => { setDeleteError(''); setBulkDeleteOpen(true); }}
+              sx={{ borderRadius: 999 }}
+            >
+              Delete
+            </Button>
+            <Button size="small" onClick={() => setSelectedIds([])}>Clear</Button>
+          </Box>
+        )}
+
         <Box sx={{ overflowX: 'auto', display: { xs: 'none', md: 'block' } }}>
           <Table>
             <TableHead>
               <TableRow>
+                <TableCell sx={{ ...headCellSx, width: 48 }} padding="checkbox">
+                  <Checkbox
+                    size="small"
+                    checked={allShownSelected}
+                    indeterminate={selectedIds.length > 0 && !allShownSelected}
+                    onChange={toggleAllShown}
+                    slotProps={{ input: { 'aria-label': 'Select all files shown' } }}
+                  />
+                </TableCell>
                 <TableCell sx={headCellSx}>File Name</TableCell>
+                <TableCell sx={headCellSx}>Title</TableCell>
                 <TableCell sx={headCellSx}>Category</TableCell>
                 <TableCell sx={headCellSx}>Used by</TableCell>
                 <TableCell sx={headCellSx}>Uploaded</TableCell>
@@ -441,7 +644,20 @@ export default function DocumentsPage() {
             </TableHead>
             <TableBody>
               {filtered.map((m) => (
-                <TableRow key={m.id} hover sx={{ '& td': { py: 1.5, borderBottom: '1px solid', borderColor: 'divider' } }}>
+                <TableRow
+                  key={m.id}
+                  hover
+                  selected={selectedIds.includes(m.id)}
+                  sx={{ '& td': { py: 1.5, borderBottom: '1px solid', borderColor: 'divider' } }}
+                >
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      size="small"
+                      checked={selectedIds.includes(m.id)}
+                      onChange={() => toggleOne(m.id)}
+                      slotProps={{ input: { 'aria-label': `Select ${m.filename}` } }}
+                    />
+                  </TableCell>
                   <TableCell>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
                       <FileThumb item={m} />
@@ -449,6 +665,7 @@ export default function DocumentsPage() {
                       <Chip label={TYPE_LABEL[m.type]} color={TYPE_CHIP[m.type]} size="small" variant="outlined" sx={{ borderRadius: 999, flexShrink: 0 }} />
                     </Box>
                   </TableCell>
+                  <TableCell><DocumentTitle usage={m.usage} /></TableCell>
                   <TableCell><CategoryCell item={m} /></TableCell>
                   <TableCell><UsedBy usage={m.usage} /></TableCell>
                   <TableCell><Typography variant="body2">{formatDate(m.uploadedAt)}</Typography></TableCell>
@@ -475,7 +692,7 @@ export default function DocumentsPage() {
 
               {filtered.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} sx={{ py: 6 }}>
+                  <TableCell colSpan={8} sx={{ py: 6 }}>
                     <Typography color="text.secondary">No files match your search.</Typography>
                   </TableCell>
                 </TableRow>
@@ -488,6 +705,13 @@ export default function DocumentsPage() {
           {filtered.map((m) => (
             <Paper key={m.id} variant="outlined" sx={{ p: 2, borderRadius: 2 }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                <Checkbox
+                  size="small"
+                  checked={selectedIds.includes(m.id)}
+                  onChange={() => toggleOne(m.id)}
+                  slotProps={{ input: { 'aria-label': `Select ${m.filename}` } }}
+                  sx={{ p: 0.5 }}
+                />
                 <FileThumb item={m} />
                 <Box sx={{ minWidth: 0, flex: 1 }}>
                   <Typography sx={{ fontWeight: 600, wordBreak: 'break-all' }}>{m.filename}</Typography>
@@ -495,6 +719,10 @@ export default function DocumentsPage() {
                 </Box>
               </Box>
               <Box sx={{ mt: 1.5, display: 'grid', gap: 0.75 }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
+                  <Typography variant="body2" color="text.secondary">Title</Typography>
+                  <Box sx={{ textAlign: 'right', minWidth: 0 }}><DocumentTitle usage={m.usage} /></Box>
+                </Box>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 1 }}>
                   <Typography variant="body2" color="text.secondary">Category</Typography>
                   <CategoryCell item={m} />
@@ -540,6 +768,46 @@ export default function DocumentsPage() {
         </Box>
       </Paper>
 
+      <Dialog open={bulkDeleteOpen} onClose={() => setBulkDeleteOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>
+          Delete {selectedIds.length} file{selectedIds.length === 1 ? '' : 's'}?
+        </DialogTitle>
+        <DialogContent>
+          {deleteError && <Alert severity="error" sx={{ mb: 2 }}>{deleteError}</Alert>}
+          {/* The in-use list is the whole point of the confirmation: deleting
+              an unused file is housekeeping, deleting one a module depends on
+              breaks that module. Named individually rather than counted, so
+              the decision can actually be made here. */}
+          {selectedInUse.length > 0 ? (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              {selectedInUse.length} of these are still in use. Deleting them will break:
+              <Box component="ul" sx={{ m: 0, mt: 1, pl: 2.5 }}>
+                {selectedInUse.map((m) => (
+                  <li key={m.id}>
+                    <strong style={{ wordBreak: 'break-all' }}>{m.filename}</strong>
+                    {' — '}
+                    {usageLabel(m.usage)}
+                  </li>
+                ))}
+              </Box>
+            </Alert>
+          ) : (
+            <Typography color="text.secondary" sx={{ mb: 1 }}>
+              None of these files are used by a module or document.
+            </Typography>
+          )}
+          <Typography color="text.secondary">
+            This permanently removes them from WordPress storage. This can&rsquo;t be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={() => setBulkDeleteOpen(false)} disabled={deleteMedia.isLoading}>Cancel</Button>
+          <Button variant="contained" color="error" onClick={handleBulkDelete} disabled={deleteMedia.isLoading}>
+            {deleteMedia.isLoading ? 'Deleting…' : `Delete ${selectedIds.length}`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
       <Dialog open={deleteTarget !== null} onClose={() => setDeleteTarget(null)} maxWidth="xs" fullWidth>
         <DialogTitle>Delete this file?</DialogTitle>
         <DialogContent>
@@ -569,6 +837,81 @@ export default function DocumentsPage() {
           <Button onClick={() => setDeleteTarget(null)} disabled={deleteMedia.isLoading}>Cancel</Button>
           <Button variant="contained" color="error" onClick={handleDelete} disabled={deleteMedia.isLoading}>
             {deleteMedia.isLoading ? 'Deleting…' : 'Delete'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={bulkCategoryOpen} onClose={() => setBulkCategoryOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Change category</DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          {moveError && <Alert severity="error" sx={{ mb: 2 }}>{moveError}</Alert>}
+          <Typography color="text.secondary" sx={{ mb: 2 }}>
+            {selectedIds.length} file{selectedIds.length === 1 ? '' : 's'} will be moved.
+          </Typography>
+          <TextField
+            select
+            label="Category"
+            value={moveTo}
+            onChange={(e) => setMoveTo(e.target.value)}
+            fullWidth
+          >
+            {categories.map((c) => (
+              <MenuItem key={c.value} value={c.value}>{c.label}</MenuItem>
+            ))}
+            <MenuItem value="">Uncategorised</MenuItem>
+          </TextField>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={() => setBulkCategoryOpen(false)} disabled={setMediaCategory.isLoading}>Cancel</Button>
+          <Button variant="contained" onClick={() => handleBulkCategory(moveTo)} disabled={setMediaCategory.isLoading}>
+            {setMediaCategory.isLoading ? 'Moving…' : 'Move'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={visibilityOpen} onClose={() => setVisibilityOpen(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Change visibility</DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          {visibilityError && <Alert severity="error" sx={{ mb: 2 }}>{visibilityError}</Alert>}
+          <Typography color="text.secondary" sx={{ mb: 2 }}>
+            {selectedDocumentIds.length} document{selectedDocumentIds.length === 1 ? '' : 's'} will be updated.
+          </Typography>
+          {/* Said plainly rather than left to be discovered: visibility lives
+              on the document record, so a selection that includes module
+              images changes fewer things than it looks like it will. */}
+          {selectedIds.length > selectedDocumentIds.length && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              {selectedIds.length - selectedDocumentIds.length} of the selected file(s) are not
+              documents — they have no visibility setting and will be left alone.
+            </Alert>
+          )}
+          <TextField
+            select
+            label="Visible to"
+            value={visibilityRoles}
+            onChange={(e) => setVisibilityRoles(e.target.value as unknown as string[])}
+            helperText="Everyone, or specific staff roles"
+            fullWidth
+            slotProps={{
+              select: {
+                multiple: true,
+                renderValue: (selected: unknown) =>
+                  (selected as string[])
+                    .map((v) => (v === 'all' ? 'Everyone' : roles.find((r) => r.value === v)?.label ?? v))
+                    .join(', '),
+              },
+            }}
+          >
+            <MenuItem value="all">Everyone</MenuItem>
+            {roles.map((r) => (
+              <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>
+            ))}
+          </TextField>
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3 }}>
+          <Button onClick={() => setVisibilityOpen(false)} disabled={setVisibility.isLoading}>Cancel</Button>
+          <Button variant="contained" onClick={handleVisibility} disabled={setVisibility.isLoading}>
+            {setVisibility.isLoading ? 'Saving…' : 'Save'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -607,8 +950,21 @@ export default function DocumentsPage() {
           {manageError && <Alert severity="error" sx={{ mb: 2 }}>{manageError}</Alert>}
           <Typography color="text.secondary" sx={{ mb: 2 }}>
             Renaming a category re-labels it everywhere; the files in it stay put. A
-            category can only be deleted once it is empty.
+            category can only be deleted once it is empty. Hiding one keeps its
+            documents out of the staff portal without changing who each document is
+            for, so showing it again brings back exactly what was there.
           </Typography>
+
+          {hiddenDocs.length > 0 && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              {hiddenDocs.length} document{hiddenDocs.length === 1 ? ' has' : 's have'} no
+              audience set, so no staff member can see
+              {hiddenDocs.length === 1 ? ' it' : ' them'}.
+              {hiddenUncategorised > 0 && ` ${hiddenUncategorised} of those are uncategorised.`}
+              {' '}Select the files in the list behind this dialog and use{' '}
+              <strong>Change visibility</strong> to set who they are for.
+            </Alert>
+          )}
 
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
             {categories.map((c) => (
@@ -621,6 +977,34 @@ export default function DocumentsPage() {
                   fullWidth
                 />
                 <Chip label={`${c.count} file${c.count === 1 ? '' : 's'}`} size="small" variant="outlined" sx={{ borderRadius: 999, flexShrink: 0 }} />
+                {hiddenInCategory(c.value) > 0 && (
+                  <Chip
+                    label={`${hiddenInCategory(c.value)} hidden`}
+                    size="small"
+                    color="warning"
+                    variant="outlined"
+                    sx={{ borderRadius: 999, flexShrink: 0 }}
+                  />
+                )}
+                <Tooltip title={c.hidden ? 'Hidden from staff — click to show' : 'Visible to staff — click to hide'}>
+                  <span>
+                    <IconButton
+                      size="small"
+                      color={c.hidden ? 'warning' : 'default'}
+                      disabled={setCategoryVisibility.isLoading}
+                      onClick={() => toggleCategoryVisibility(c.value, !c.hidden)}
+                      aria-label={
+                        c.hidden
+                          ? `Show ${c.label} to staff`
+                          : `Hide ${c.label} from staff`
+                      }
+                    >
+                      {c.hidden
+                        ? <VisibilityOffOutlinedIcon fontSize="small" />
+                        : <VisibilityOutlinedIcon fontSize="small" />}
+                    </IconButton>
+                  </span>
+                </Tooltip>
                 <Tooltip
                   title={
                     c.protected ? 'Built-in category'

@@ -2,6 +2,8 @@
 
 import client from './client';
 import type { Module, ProgressRecord, ProgressStatus, Document, QuizResponse, TeamMember } from '../types';
+import { stripHtml } from '../util/strings';
+import { mediaTypeFromMime } from '../util/mediaType';
 
 interface WPPortalModule {
   id: number;
@@ -52,6 +54,7 @@ interface WPDocument {
 
 interface WPMedia {
   source_url: string;
+  mime_type: string;
 }
 
 function normaliseModule(wp: WPPortalModule): Module {
@@ -93,13 +96,15 @@ function normaliseProgress(r: WPProgressRecord): ProgressRecord {
   };
 }
 
-async function resolveFileUrl(attachmentId: number): Promise<string | undefined> {
-  if (!attachmentId) return undefined;
+// The mime type comes back in the same request as the URL, so naming the
+// file's kind on screen costs nothing extra.
+async function resolveFile(attachmentId: number): Promise<{ url?: string; mime?: string }> {
+  if (!attachmentId) return {};
   try {
     const { data } = await client.get<WPMedia>(`wp/v2/media/${attachmentId}`);
-    return data.source_url;
+    return { url: data.source_url, mime: data.mime_type };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -204,12 +209,16 @@ export async function fetchPortalDocuments(search?: string): Promise<Document[]>
 
   const { data } = await client.get<WPDocument[]>('wp/v2/induction_document', { params });
 
-  return Promise.all(
+  const resolved = await Promise.all(
     data.map(async (wp) => {
-      const fileUrl = await resolveFileUrl(wp.meta.document_file_id);
+      const file = await resolveFile(wp.meta.document_file_id);
       return {
         id: wp.id,
-        title: wp.title.rendered,
+        // Flattened, not raw: this is shown as text, and WordPress returns a
+        // texturised title, so "Do's and Don'ts" arrives as character
+        // references and would be read out literally.
+        title: stripHtml(wp.title.rendered),
+        fileType: mediaTypeFromMime(file.mime),
         status: wp.status,
         date: wp.date,
         meta: {
@@ -217,10 +226,17 @@ export async function fetchPortalDocuments(search?: string): Promise<Document[]>
           document_file_id: wp.meta.document_file_id ?? 0,
           document_role_targets: wp.meta.document_role_targets ?? [],
         },
-        fileUrl,
+        fileUrl: file.url,
       } as Document;
     })
   );
+
+  // A document whose attachment has gone — deleted from the media library,
+  // or never attached — renders as a card with nothing to open. There is
+  // nothing a staff member can do with one, so it is left out rather than
+  // shown as a dead end. The record still appears on the admin Documents
+  // screen, which is where it can be repointed or removed.
+  return resolved.filter((doc) => Boolean(doc.fileUrl));
 }
 
 interface WPTeamMember {

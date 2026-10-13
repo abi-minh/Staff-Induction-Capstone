@@ -1,4 +1,5 @@
 import client from './client';
+import { stripHtml } from '../util/strings';
 import type { Document, DocumentFormValues, WPMedia } from '../types';
 
 interface WPDocument {
@@ -80,7 +81,7 @@ export async function uploadMedia(file: File): Promise<WPMedia> {
     id: data.id,
     sourceUrl: data.source_url,
     mimeType: data.mime_type,
-    title: data.title.rendered,
+    title: stripHtml(data.title.rendered),
   };
 }
 

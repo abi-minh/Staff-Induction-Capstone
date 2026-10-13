@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.18.1
+ * Version:     1.25.0
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.18.1' );
+define( 'INDUCTION_VERSION', '1.25.0' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -930,6 +930,12 @@ function induction_register_routes(): void {
             'callback'            => 'induction_create_resource_category',
             'permission_callback' => 'induction_is_admin_user',
         ],
+    ] );
+
+    register_rest_route( $ns, '/resource-categories/(?P<slug>[a-z0-9_-]+)/visibility', [
+        'methods'             => 'POST',
+        'callback'            => 'induction_set_resource_category_visibility',
+        'permission_callback' => 'induction_is_admin_user',
     ] );
 
     register_rest_route( $ns, '/resource-categories/(?P<slug>[a-z0-9_-]+)', [
@@ -2436,21 +2442,69 @@ function induction_strip_unpublished_sections_json( string $blocks_json ): strin
 add_filter( 'rest_induction_document_query', 'induction_filter_portal_documents', 10, 2 );
 
 function induction_filter_portal_documents( array $args, WP_REST_Request $request ): array {
-    if ( current_user_can( 'manage_induction' ) ) {
+    $admin = current_user_can( 'manage_induction' );
+
+    // Managing, not reading. The Documents screen asks for context=edit and
+    // has to see everything — including what is hidden, which is the whole
+    // point of being able to unhide it. The staff portal asks for the default
+    // view context, and an admin previewing the portal asks for exactly the
+    // same thing, so the two are told apart by what they asked for rather
+    // than by who is asking.
+    if ( $admin && 'edit' === $request->get_param( 'context' ) ) {
         return $args;
     }
+
+    // Visible only where an admin has said who it is for. The two clauses
+    // that used to sit here — no meta at all, and an empty array — made the
+    // absence of a decision mean "show everyone", so a document uploaded
+    // outside this app, or saved before the field existed, was published to
+    // all staff by default. Everyone is still a choice an admin can make; it
+    // just has to be made.
+
+    // Whose eyes to use. A staff member gets their own roles. An admin
+    // previewing the portal gets the staff roles instead of their own —
+    // filtering on "administrator" would show a library no staff member has,
+    // and a preview that does not match what staff see is worse than no
+    // preview, because it is believed.
+    //
+    // The staff set, not one chosen role: an admin checking the portal should
+    // see anything at least one staff member can reach, so a document aimed
+    // at a single custom role is still previewable. It does mean the preview
+    // is the union rather than any one person's view — a role picker is what
+    // that would need.
+    $roles = $admin
+        ? array_values( array_diff( array_keys( induction_assignable_roles() ), [ 'induction_admin' ] ) )
+        : (array) wp_get_current_user()->roles;
+
     $clauses = [
         'relation' => 'OR',
-        [ 'key' => 'document_role_targets', 'compare' => 'NOT EXISTS' ],
-        [ 'key' => 'document_role_targets', 'value' => 'a:0:{}', 'compare' => '=' ],
         [ 'key' => 'document_role_targets', 'value' => '"all"', 'compare' => 'LIKE' ],
     ];
-    foreach ( (array) wp_get_current_user()->roles as $role ) {
+    foreach ( $roles as $role ) {
         $clauses[] = [ 'key' => 'document_role_targets', 'value' => '"' . $role . '"', 'compare' => 'LIKE' ];
     }
-    $args['meta_query'] = empty( $args['meta_query'] )
-        ? $clauses
-        : [ 'relation' => 'AND', $args['meta_query'], $clauses ];
+    $filters = [ $clauses ];
+
+    // A hidden category takes its documents with it, whatever each one's own
+    // audience says — and unlike audience, that is not relative to the
+    // viewer, so it applies to an admin previewing the portal too. Without
+    // this the preview showed shelves that had been taken down.
+    //
+    // NOT IN alone would also drop any document with no
+    // category meta at all, because the row never joins — so the absence of a
+    // category has to be spelled out as its own match.
+    $hidden = induction_hidden_resource_categories();
+    if ( $hidden ) {
+        $filters[] = [
+            'relation' => 'OR',
+            [ 'key' => 'document_category', 'compare' => 'NOT EXISTS' ],
+            [ 'key' => 'document_category', 'value' => '', 'compare' => '=' ],
+            [ 'key' => 'document_category', 'value' => $hidden, 'compare' => 'NOT IN' ],
+        ];
+    }
+
+    $existing = empty( $args['meta_query'] ) ? [] : [ $args['meta_query'] ];
+    $args['meta_query'] = array_merge( [ 'relation' => 'AND' ], $existing, $filters );
     return $args;
 }
 
@@ -2945,6 +2999,70 @@ function induction_migrate_legacy_modules(): void {
     update_option( 'induction_legacy_modules_migrated', 1 );
 }
 
+/**
+ * Media referenced only by a module's saved history, as media id => module ids.
+ *
+ * Restoring a version rewrites a module back to content that points at these
+ * files, so a file the current content no longer uses is still load-bearing.
+ * Without this the library reported it as "Not used", an admin deleted it in
+ * good faith, and the breakage only appeared later when someone restored.
+ *
+ * Cached against a fingerprint of the table rather than recomputed per
+ * request: history is append-only and the JSON is large, so a site with a
+ * long edit history would otherwise pay to parse all of it every time the
+ * media screen loads. A new version changes the count and the highest id, so
+ * the key changes with it.
+ */
+function induction_media_ids_in_versions(): array {
+    global $wpdb;
+    $table = $wpdb->prefix . 'induction_module_versions';
+
+    $shape = $wpdb->get_row( "SELECT COUNT(*) AS rows_n, COALESCE(MAX(id),0) AS last_id FROM $table", ARRAY_A );
+    $key   = 'induction_version_media_' . md5( (string) ( $shape['rows_n'] ?? 0 ) . ':' . (string) ( $shape['last_id'] ?? 0 ) );
+
+    $cached = get_transient( $key );
+    if ( is_array( $cached ) ) {
+        return $cached;
+    }
+
+    $found = [];
+    $rows  = $wpdb->get_results( "SELECT module_id, blocks_json FROM $table", ARRAY_A ) ?: [];
+    foreach ( $rows as $row ) {
+        $module_id = (int) $row['module_id'];
+        $sections  = induction_normalize_sections( json_decode( (string) $row['blocks_json'], true ) );
+        if ( ! $sections ) {
+            continue;
+        }
+        $note = static function ( $mid ) use ( &$found, $module_id ): void {
+            $mid = (int) $mid;
+            if ( $mid > 0 ) {
+                $found[ $mid ][ $module_id ] = true;
+            }
+        };
+        foreach ( $sections as $section ) {
+            foreach ( (array) ( $section['blocks'] ?? [] ) as $block ) {
+                if ( is_array( $block ) ) {
+                    induction_collect_block_media( $block, [], static function ( $mid, $entry = [] ) use ( $note ): void {
+                        unset( $entry );
+                        $note( $mid );
+                    } );
+                }
+            }
+            foreach ( (array) ( $section['quizBlocks'] ?? [] ) as $qb ) {
+                if ( ( $qb['type'] ?? '' ) === 'multiple_choice' ) {
+                    $note( $qb['data']['imageMediaId'] ?? 0 );
+                }
+            }
+            if ( ! empty( $section['heroImage'] ) ) {
+                $note( (int) ( $section['heroImageMediaId'] ?? 0 ) ?: attachment_url_to_postid( (string) $section['heroImage'] ) );
+            }
+        }
+    }
+
+    set_transient( $key, $found, DAY_IN_SECONDS );
+    return $found;
+}
+
 function induction_get_media(): WP_REST_Response {
     $usage = [];
     $add = function ( $mid, array $entry ) use ( &$usage ): void {
@@ -2994,6 +3112,18 @@ function induction_get_media(): WP_REST_Response {
         if ( $fid ) $add( $fid, [ 'kind' => 'document', 'id' => $d->ID, 'title' => get_the_title( $d->ID ) ?: '(Untitled document)', 'where' => 'attached file' ] );
     }
 
+    // History counts. A file only an old version points at is still needed.
+    foreach ( induction_media_ids_in_versions() as $mid => $module_ids ) {
+        foreach ( array_keys( $module_ids ) as $module_id ) {
+            $add( $mid, [
+                'kind'  => 'module',
+                'id'    => (int) $module_id,
+                'title' => get_the_title( (int) $module_id ) ?: '(Untitled module)',
+                'where' => 'version history',
+            ] );
+        }
+    }
+
     $referenced = array_map( 'intval', array_keys( $usage ) );
     induction_tag_media( $referenced );
     $tagged     = get_posts( [
@@ -3040,10 +3170,32 @@ function induction_delete_media( WP_REST_Request $request ): WP_REST_Response|WP
     if ( ! get_post_meta( $id, '_induction_media', true ) ) {
         return new WP_Error( 'not_induction_media', 'That file is not an induction file and cannot be deleted here.', [ 'status' => 403 ] );
     }
+    // Documents that pointed at this file are unhooked rather than removed.
+    // The record is someone's title, category and audience, and only the file
+    // has gone — so it is left for an admin to repoint or delete, and the
+    // staff portal leaves a document with no file out of the list rather than
+    // offering a card with nothing behind it.
+    $orphaned = get_posts( [
+        'post_type'      => 'induction_document',
+        'post_status'    => 'any',
+        'posts_per_page' => -1,
+        'fields'         => 'ids',
+        'meta_key'       => 'document_file_id',
+        'meta_value'     => $id,
+    ] );
+
     if ( ! wp_delete_attachment( $id, true ) ) {
         return new WP_Error( 'delete_failed', 'Could not delete the file.', [ 'status' => 500 ] );
     }
-    return rest_ensure_response( [ 'deleted' => $id ] );
+
+    foreach ( $orphaned as $doc_id ) {
+        update_post_meta( (int) $doc_id, 'document_file_id', 0 );
+    }
+
+    return rest_ensure_response( [
+        'deleted'           => $id,
+        'documentsUnlinked' => count( $orphaned ),
+    ] );
 }
 
 // ─── Resource categories ─────────────────────────────────────────────────────
@@ -3221,8 +3373,46 @@ function induction_migrate_resource_categories(): void {
     update_option( 'induction_resource_categories_migrated', 1 );
 }
 
+/**
+ * Categories whose documents are kept out of the staff portal.
+ *
+ * Its own option rather than a field on the category list, which is a flat
+ * slug => label map that several things read and the backup carries verbatim.
+ * A list of slugs can be added and removed without changing that shape.
+ *
+ * Hiding a category hides its documents outright: it is a shelf being taken
+ * off the wall, not a change to who each document is for, so the per-document
+ * audience is left exactly as it was and comes back untouched when the
+ * category is shown again.
+ */
+function induction_hidden_resource_categories(): array {
+    $stored = get_option( 'induction_hidden_resource_categories', [] );
+    if ( ! is_array( $stored ) ) {
+        return [];
+    }
+    return array_values( array_unique( array_filter( array_map( 'sanitize_key', $stored ) ) ) );
+}
+
+function induction_set_resource_category_visibility( WP_REST_Request $request ): WP_REST_Response|WP_Error {
+    $slug = sanitize_key( (string) $request->get_param( 'slug' ) );
+    if ( '' === $slug || ! array_key_exists( $slug, induction_resource_categories() ) ) {
+        return new WP_Error( 'not_found', 'That category does not exist.', [ 'status' => 404 ] );
+    }
+
+    $hidden  = induction_hidden_resource_categories();
+    $wanted  = (bool) $request->get_param( 'hidden' );
+    $hidden  = array_values( array_diff( $hidden, [ $slug ] ) );
+    if ( $wanted ) {
+        $hidden[] = $slug;
+    }
+    update_option( 'induction_hidden_resource_categories', $hidden, false );
+
+    return rest_ensure_response( [ 'value' => $slug, 'hidden' => $wanted ] );
+}
+
 function induction_get_resource_categories(): WP_REST_Response {
     $counts = induction_resource_category_counts();
+    $hidden = induction_hidden_resource_categories();
 
     $out = [];
     foreach ( induction_resource_categories() as $slug => $label ) {
@@ -3230,6 +3420,7 @@ function induction_get_resource_categories(): WP_REST_Response {
             'value'     => $slug,
             'label'     => $label,
             'count'     => (int) ( $counts[ $slug ] ?? 0 ),
+            'hidden'    => in_array( $slug, $hidden, true ),
             // The default bucket is where an upload lands when the admin picks
             // nothing, so the UI protects it the way the server already does.
             'protected' => $slug === INDUCTION_RESOURCE_CATEGORY_DEFAULT,
@@ -5580,7 +5771,13 @@ function induction_import_document_meta( int $id, array $doc, array $media_map )
     $file = (int) ( $doc['document_file_id'] ?? 0 );
     update_post_meta( $id, 'document_category', induction_slash_meta( sanitize_text_field( (string) ( $doc['document_category'] ?? '' ) ) ) );
     update_post_meta( $id, 'document_file_id', $file ? ( $media_map[ $file ] ?? 0 ) : 0 );
-    update_post_meta( $id, 'document_role_targets', (array) ( $doc['document_role_targets'] ?? [] ) );
+    // An archive written before documents had an audience holds nothing here,
+    // and those documents were visible to everyone on the site they came from.
+    // Restoring them as "no audience" would hide them instead, which is a
+    // silent change to what staff can see — so the old behaviour is recorded
+    // explicitly rather than inferred.
+    $targets = (array) ( $doc['document_role_targets'] ?? [] );
+    update_post_meta( $id, 'document_role_targets', $targets ?: [ 'all' ] );
 }
 
 // Never overwrites an existing label. Returns the slugs it added, for undo.

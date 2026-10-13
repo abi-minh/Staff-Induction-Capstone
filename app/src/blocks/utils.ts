@@ -48,6 +48,36 @@ export function alignedListSx(align?: BlockAlign) {
     : {};
 }
 
+/**
+ * How wide an image should actually be drawn.
+ *
+ * An author sets a percentage while looking at a wide editor, and that
+ * percentage is of whatever column the reader happens to have. Taken
+ * literally it makes a 33% image a third of an already-narrow column — on a
+ * laptop the picture ends up smaller than the paragraph beside it and too
+ * small to read detail in.
+ *
+ * So the chosen width is what the image reaches on a genuinely wide screen,
+ * and it grows toward full width as the viewport narrows. Below sm it is left
+ * alone entirely: the surrounding `maxWidth: 100%` already keeps it in bounds
+ * and a phone wants the natural size.
+ *
+ * Applies only to images. Text blocks keep the literal percentage — a
+ * paragraph that widened on its own would change where every line breaks.
+ */
+export function imageWidthSx(width?: number) {
+  if (!width || width >= 100) return null;
+  const grow = (factor: number) => `${Math.min(100, Math.round(width * factor))}%`;
+  return {
+    width: {
+      sm: grow(1.8),
+      md: grow(1.5),
+      lg: grow(1.25),
+      xl: `${width}%`,
+    },
+  };
+}
+
 export function blockLayoutSx(layout?: BlockLayout) {
   const width = layout?.width;
   const align = layout?.align ?? 'left';

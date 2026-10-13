@@ -83,6 +83,9 @@ export interface Document {
   date: string;
   meta: DocumentMeta;
   fileUrl?: string;
+  // Resolved from the attachment when the portal loads a document, so staff
+  // can see what they are about to open rather than a generic label.
+  fileType?: MediaType;
 }
 
 export interface DocumentMeta {
@@ -354,6 +357,13 @@ export interface ResourceCategory {
   count: number;
   /** The built-in bucket, which cannot be deleted. */
   protected: boolean;
+  /**
+   * Kept out of the staff portal entirely. Applies to the whole category,
+   * over and above each document's own audience, and changes nothing about
+   * those audiences — showing the category again restores exactly what was
+   * there before.
+   */
+  hidden: boolean;
 }
 
 // ─── Blocks (Page Builder) ───────────────────────────────────────────────────

@@ -5,6 +5,7 @@ import {
   renameResourceCategory,
   deleteResourceCategory,
   setMediaCategory,
+  setResourceCategoryVisibility,
 } from '../api/resourceCategories';
 
 export function useResourceCategories() {
@@ -43,6 +44,20 @@ export function useDeleteResourceCategory() {
   return useMutation({
     mutationFn: (value: string) => deleteResourceCategory(value),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['resourceCategories'] }),
+  });
+}
+
+export function useSetResourceCategoryVisibility() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ value, hidden }: { value: string; hidden: boolean }) =>
+      setResourceCategoryVisibility(value, hidden),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['resourceCategories'] });
+      // What staff can see has changed, so an open portal must not keep
+      // showing a shelf that has been taken down.
+      qc.invalidateQueries({ queryKey: ['portal', 'documents'] });
+    },
   });
 }
 

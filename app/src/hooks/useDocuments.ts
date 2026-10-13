@@ -25,6 +25,29 @@ export function useUpdateDocument(id: number) {
   });
 }
 
+/**
+ * Set who can see a batch of documents.
+ *
+ * Takes the ids rather than being bound to one, because the Documents screen
+ * applies this to a selection. Sequential rather than parallel: the host's
+ * firewall counts bursts of writes, and a handful of documents is not worth
+ * racing.
+ */
+export function useSetDocumentVisibility() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ ids, roles }: { ids: number[]; roles: string[] }) => {
+      for (const id of ids) {
+        await updateDocument(id, { document_role_targets: roles });
+      }
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['documents'] });
+      qc.invalidateQueries({ queryKey: ['media'] });
+    },
+  });
+}
+
 export function useDeleteDocument() {
   const qc = useQueryClient();
   return useMutation({

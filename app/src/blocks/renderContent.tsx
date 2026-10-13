@@ -5,7 +5,7 @@ import type {
   ListBlock, RowBlock, RowChildBlock, TextBlock, VideoBlock,
 } from '../types';
 import ZoomableImage from '../components/ZoomableImage';
-import { alignedListSx, blockLayoutSx, calloutBodyHtml, layoutOf } from './utils';
+import { alignedListSx, blockLayoutSx, calloutBodyHtml, imageWidthSx, layoutOf } from './utils';
 import { fontSizeSx } from './fontSize';
 
 export type PresentationalBlock =
@@ -90,7 +90,7 @@ export function renderBlockContent(
             wrapperSx={{
               display: 'inline-block',
               maxWidth: '100%',
-              ...(width && width < 100 ? { width: { sm: `${width}%` } } : null),
+              ...imageWidthSx(width),
             }}
             imgSx={{ borderRadius: 1.5 }}
           />

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { alignedListSx, blockLayoutSx, calloutBodyHtml, clampRowColumns, createBlock, createSection, isQuizBlock, layoutOf, moveItem, parseSections, visibleSections } from './utils';
+import { alignedListSx, blockLayoutSx, calloutBodyHtml, clampRowColumns, createBlock, createSection, imageWidthSx, isQuizBlock, layoutOf, moveItem, parseSections, visibleSections } from './utils';
 import { MAX_ROW_COLUMNS, MIN_ROW_COLUMNS } from '../types';
 import type { Block, PlacedBlock, RowChildBlock, Section } from '../types';
 
@@ -315,6 +315,45 @@ describe('layoutOf', () => {
       layout: { align: 'center' },
     };
     expect(layoutOf(img)).toEqual({ align: 'center', width: 60 });
+  });
+});
+
+// An author picks a percentage in a wide editor; the reader has whatever
+// column their screen gives them. Taken literally, a third-width image on a
+// laptop came out smaller than the paragraph under it.
+describe('imageWidthSx', () => {
+  it('reaches the chosen width only on the widest screens', () => {
+    const sx = imageWidthSx(33);
+    expect(sx?.width.xl, 'the chosen figure, unchanged').to.eq('33%');
+  });
+
+  it('grows the image as the viewport narrows', () => {
+    const { sm, md, lg, xl } = imageWidthSx(40)!.width;
+    const pct = (v: string) => Number(v.replace('%', ''));
+    expect(pct(sm)).to.be.greaterThan(pct(md));
+    expect(pct(md)).to.be.greaterThan(pct(lg));
+    expect(pct(lg)).to.be.greaterThan(pct(xl));
+    expect(pct(xl)).to.eq(40);
+  });
+
+  it('never grows past the column', () => {
+    const { sm, md } = imageWidthSx(80)!.width;
+    expect(sm).to.eq('100%');
+    expect(md).to.eq('100%');
+  });
+
+  // Full width and "no width set" both mean "do not constrain this", and a
+  // width rule of any kind would override the natural size.
+  it('adds no rule when there is nothing to constrain', () => {
+    expect(imageWidthSx(100)).to.eq(null);
+    expect(imageWidthSx(undefined)).to.eq(null);
+    expect(imageWidthSx(0)).to.eq(null);
+  });
+
+  // Below sm nothing is set at all, so a phone shows the natural size inside
+  // the surrounding maxWidth.
+  it('leaves the smallest screens alone', () => {
+    expect(imageWidthSx(33)!.width).to.not.have.property('xs');
   });
 });
 

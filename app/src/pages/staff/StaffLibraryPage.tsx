@@ -2,21 +2,24 @@ import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Alert, Box, Button, Card, CardContent, Chip, CircularProgress,
-  InputAdornment, TextField, ToggleButton, ToggleButtonGroup, Typography,
+  InputAdornment, TextField, Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
 import PictureAsPdfOutlinedIcon from '@mui/icons-material/PictureAsPdfOutlined';
 import InsertDriveFileOutlinedIcon from '@mui/icons-material/InsertDriveFileOutlined';
-import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
-import SchoolOutlinedIcon from '@mui/icons-material/SchoolOutlined';
-import { usePortalDocuments, useAssignedModules } from '../../hooks/usePortal';
+import { usePortalDocuments } from '../../hooks/usePortal';
 import { useResourceCategories } from '../../hooks/useResourceCategories';
-import { materialsFromModules } from '../../util/moduleMaterials';
+import { fileTypeLabel } from '../../util/mediaType';
 import type { MediaType } from '../../types';
 
+// Every resource used to arrive behind the same page icon, so a video and a
+// spreadsheet were both "a document" until you clicked one. Same icons and
+// colours the admin media list uses, so the two screens describe a file the
+// same way.
 function TypeIcon({ type }: { type: MediaType }) {
   const Icon =
     type === 'image' ? ImageOutlinedIcon
@@ -30,7 +33,6 @@ function TypeIcon({ type }: { type: MediaType }) {
           : 'text.secondary';
   return <Icon sx={{ color, flexShrink: 0 }} />;
 }
-
 function ResourceCard({ icon, title, subtitle, url }: {
   icon: ReactNode;
   title: string;
@@ -74,22 +76,12 @@ function SectionHeading({ icon, label }: { icon: ReactNode; label: string }) {
 
 export default function StaffLibraryPage() {
   const [search, setSearch] = useState('');
-  const [view, setView] = useState<'all' | 'materials' | 'documents'>('all');
   const [category, setCategory] = useState<string | null>(null);
 
   const { data: documents, isLoading: docsLoading, error: docsError } = usePortalDocuments();
-  const { data: modules, isLoading: modsLoading } = useAssignedModules();
   const { data: categories = [] } = useResourceCategories();
 
-  const materials = useMemo(() => materialsFromModules(modules ?? []), [modules]);
-
   const needle = search.trim().toLowerCase();
-  const filteredMaterials = useMemo(
-    () => materials.filter((m) => !needle
-      || m.filename.toLowerCase().includes(needle)
-      || m.moduleTitle.toLowerCase().includes(needle)),
-    [materials, needle],
-  );
   const categoryLabels = useMemo(
     () => Object.fromEntries(categories.map((c) => [c.value, c.label])),
     [categories],
@@ -118,9 +110,7 @@ export default function StaffLibraryPage() {
     return categories.filter((c) => present.has(c.value));
   }, [documents, categories]);
 
-  const isLoading = docsLoading || modsLoading;
-  const showMaterials = view === 'all' || view === 'materials';
-  const showDocuments = view === 'all' || view === 'documents';
+  const isLoading = docsLoading;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -143,45 +133,7 @@ export default function StaffLibraryPage() {
         }}
       />
 
-      <ToggleButtonGroup
-        value={view}
-        exclusive
-        onChange={(_, next) => next && setView(next)}
-        sx={{
-          flexWrap: 'wrap',
-          gap: 1,
-          '&& .MuiToggleButtonGroup-grouped': {
-            border: '1px solid',
-            borderColor: 'divider',
-            borderRadius: '999px !important',
-            marginLeft: 0,
-            px: { xs: 1.5, sm: 2 },
-            py: 0.5,
-            textTransform: 'none',
-            fontWeight: 500,
-            fontSize: { xs: 12, sm: 13 },
-            whiteSpace: 'nowrap',
-            // Scoped away from the selected pill. The group rule and each button's
-            // '&&.Mui-selected' both land on three classes, so the winner came
-            // down to emotion's insertion order — and the group won, painting
-            // slate text onto a solid primary fill. Excluding the selected
-            // state removes the race instead of out-specifying it.
-            '&:not(.Mui-selected)': { color: 'text.secondary' },
-            '&.Mui-selected': {
-              bgcolor: 'primary.main',
-              color: 'white',
-              borderColor: 'primary.main',
-              '&:hover': { bgcolor: 'primary.dark' },
-            },
-          },
-        }}
-      >
-        <ToggleButton value="all">All</ToggleButton>
-        <ToggleButton value="materials">Module Materials</ToggleButton>
-        <ToggleButton value="documents">Documents</ToggleButton>
-      </ToggleButtonGroup>
-
-      {showDocuments && docCategories.length > 1 && (
+      {docCategories.length > 1 && (
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
           <Chip
             label="All categories"
@@ -212,30 +164,7 @@ export default function StaffLibraryPage() {
 
       {!isLoading && (
         <>
-          {showMaterials && (
-            <Box component="section">
-              <SectionHeading icon={<SchoolOutlinedIcon />} label="Module Materials" />
-              {filteredMaterials.length === 0 ? (
-                <Typography color="text.secondary">
-                  {search ? 'No module materials match your search.' : 'No materials from your assigned modules yet.'}
-                </Typography>
-              ) : (
-                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-                  {filteredMaterials.map((m) => (
-                    <ResourceCard
-                      key={m.url}
-                      icon={<TypeIcon type={m.type} />}
-                      title={m.filename}
-                      subtitle={`From: ${m.moduleTitle}`}
-                      url={m.url}
-                    />
-                  ))}
-                </Box>
-              )}
-            </Box>
-          )}
-
-          {showDocuments && (
+          {(
             <Box component="section">
               <SectionHeading icon={<DescriptionOutlinedIcon />} label="Documents" />
               {filteredDocs.length === 0 ? (
@@ -249,9 +178,14 @@ export default function StaffLibraryPage() {
                   {filteredDocs.map((d) => (
                     <ResourceCard
                       key={d.id}
-                      icon={<DescriptionOutlinedIcon sx={{ color: 'primary.main', flexShrink: 0 }} />}
+                      icon={<TypeIcon type={d.fileType ?? 'other'} />}
                       title={d.title}
-                      subtitle={docCategoryLabel(d.meta.document_category || '')}
+                      // Type first: it is what decides whether this is worth
+                      // opening on a phone right now.
+                      subtitle={[
+                        fileTypeLabel(d.fileType ?? 'other', d.fileUrl),
+                        docCategoryLabel(d.meta.document_category || ''),
+                      ].filter(Boolean).join(' · ')}
                       url={d.fileUrl}
                     />
                   ))}

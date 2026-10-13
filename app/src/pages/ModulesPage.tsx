@@ -28,6 +28,7 @@ import SearchIcon from "@mui/icons-material/Search";
 import { getIconByKey } from "../components/iconLibrary";
 import { useDeleteModule, useModules, useReorderModules } from "../hooks/useModules";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import { stripHtml } from "../util/strings";
 import ArrowDownwardIcon from "@mui/icons-material/ArrowDownward";
 import { moveItem } from "../blocks/utils";
 
@@ -81,7 +82,7 @@ export default function ModulesPage() {
       }
 
       const haystack = [
-        module.title,
+        stripHtml(module.title),
         module.status,
         formatDate(module.modified),
       ]
@@ -295,7 +296,7 @@ export default function ModulesPage() {
                         <Box sx={{ display: "flex", flexDirection: "column" }}>
                           <IconButton
                             size="small"
-                            aria-label={`Move ${module.title || "this module"} up`}
+                            aria-label={`Move ${stripHtml(module.title) || "this module"} up`}
                             disabled={isFiltered || index === 0 || reorder.isLoading}
                             onClick={() => moveModule(index, -1)}
                           >
@@ -303,7 +304,7 @@ export default function ModulesPage() {
                           </IconButton>
                           <IconButton
                             size="small"
-                            aria-label={`Move ${module.title || "this module"} down`}
+                            aria-label={`Move ${stripHtml(module.title) || "this module"} down`}
                             disabled={
                               isFiltered || index === modules.length - 1 || reorder.isLoading
                             }
@@ -325,7 +326,7 @@ export default function ModulesPage() {
                             sx={{ color: "primary.main", fontSize: 26 }}
                           />
                           <Typography sx={{ fontWeight: 500 }}>
-                            {module.title || "(Untitled)"}
+                            {stripHtml(module.title) || "(Untitled)"}
                           </Typography>
                         </Box>
                       </TableCell>
@@ -397,7 +398,7 @@ export default function ModulesPage() {
                   <Box sx={{ display: "flex", flexDirection: "column", flexShrink: 0 }}>
                     <IconButton
                       size="small"
-                      aria-label={`Move ${module.title || "this module"} up`}
+                      aria-label={`Move ${stripHtml(module.title) || "this module"} up`}
                       disabled={isFiltered || index === 0 || reorder.isLoading}
                       onClick={() => moveModule(index, -1)}
                     >
@@ -405,7 +406,7 @@ export default function ModulesPage() {
                     </IconButton>
                     <IconButton
                       size="small"
-                      aria-label={`Move ${module.title || "this module"} down`}
+                      aria-label={`Move ${stripHtml(module.title) || "this module"} down`}
                       disabled={
                         isFiltered || index === modules.length - 1 || reorder.isLoading
                       }
@@ -416,7 +417,7 @@ export default function ModulesPage() {
                   </Box>
                   <ModuleIcon sx={{ color: "primary.main", fontSize: 28 }} />
                   <Typography sx={{ fontWeight: 600, flex: 1, minWidth: 0 }} noWrap>
-                    {module.title || "(Untitled)"}
+                    {stripHtml(module.title) || "(Untitled)"}
                   </Typography>
                   <Chip
                     label={published ? "Published" : "Draft"}
