@@ -32,7 +32,7 @@ import {
   useSetMediaCategory,
   useSetResourceCategoryVisibility,
 } from '../hooks/useResourceCategories';
-import type { MediaItem, MediaType, MediaUsage } from '../types';
+import type { MediaItem, MediaType, MediaUsage, ResourceCategory } from '../types';
 
 // Filter sentinel for files that are in no category at all. Not a category —
 // there is deliberately no way to *file* something here, only to find what
@@ -100,6 +100,26 @@ function CategoryCell({ item }: { item: MediaItem }) {
     return <Chip label="Uncategorised" size="small" color="warning" variant="outlined" sx={{ borderRadius: 999 }} />;
   }
   return <Chip label={item.categoryLabel} size="small" variant="outlined" sx={{ borderRadius: 999 }} />;
+}
+
+/**
+ * Shown wherever a category is chosen, when that category is hidden.
+ *
+ * Without it the dialogs quietly contradict themselves: "Visible to:
+ * Everyone" sits directly under a category no staff member can see, and the
+ * upload looks like it worked because it did — the document simply never
+ * appears. Audience and category are two separate gates, and the one being
+ * set is not the one that will decide this.
+ */
+function HiddenCategoryNote({ category }: { category?: ResourceCategory }) {
+  if (!category?.hidden) return null;
+  return (
+    <Alert severity="warning" icon={<VisibilityOffOutlinedIcon fontSize="small" />} sx={{ py: 0.5 }}>
+      <strong>{category.label}</strong> is hidden from staff, so nothing filed here
+      reaches the portal whatever its audience says. Show the category from Manage
+      Categories to release it.
+    </Alert>
+  );
 }
 
 function DocumentTitle({ usage }: { usage: MediaUsage[] }) {
@@ -860,6 +880,9 @@ export default function DocumentsPage() {
             ))}
             <MenuItem value="">Uncategorised</MenuItem>
           </TextField>
+          <Box sx={{ mt: 2 }}>
+            <HiddenCategoryNote category={categories.find((c) => c.value === moveTo)} />
+          </Box>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3 }}>
           <Button onClick={() => setBulkCategoryOpen(false)} disabled={setMediaCategory.isLoading}>Cancel</Button>
@@ -935,6 +958,9 @@ export default function DocumentsPage() {
             ))}
             <MenuItem value="">Uncategorised</MenuItem>
           </TextField>
+          <Box sx={{ mt: 2 }}>
+            <HiddenCategoryNote category={categories.find((c) => c.value === moveTo)} />
+          </Box>
         </DialogContent>
         <DialogActions sx={{ px: 3, pb: 3 }}>
           <Button onClick={() => setMoveTarget(null)} disabled={setMediaCategory.isLoading}>Cancel</Button>
@@ -1093,6 +1119,7 @@ export default function DocumentsPage() {
               <MenuItem key={c.value} value={c.value}>{c.label}</MenuItem>
             ))}
           </TextField>
+          <HiddenCategoryNote category={categories.find((c) => c.value === upCategory)} />
           <TextField
             select
             label="Visible to"

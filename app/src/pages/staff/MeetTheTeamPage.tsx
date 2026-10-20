@@ -32,8 +32,12 @@ function Region({ region }: { region: string }) {
   );
 }
 
-// The owner gets a wide, two-column treatment rather than a grid card: photo and
-// name on the left, title and bio on the right.
+// The owner gets a two-column treatment rather than a grid card: photo and name
+// on the left, title and bio on the right.
+//
+// Capped and centred rather than left to fill the page. A single short bio
+// stretched across a wide monitor left most of the panel empty, which read as
+// a layout fault rather than emphasis.
 function OwnerPanel({ owner }: { owner: TeamMember }) {
   return (
     <Box
@@ -44,13 +48,16 @@ function OwnerPanel({ owner }: { owner: TeamMember }) {
         p: { xs: 3, md: 4 },
         borderRadius: 3,
         bgcolor: 'chipInfo.bg',
+        // Wide enough for the avatar beside a readable bio column, no wider.
+        maxWidth: 720,
+        mx: 'auto',
       }}
     >
       <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1.5, flexShrink: 0 }}>
         <Avatar
           src={owner.photoUrl || undefined}
           variant="rounded"
-          sx={{ width: 220, height: 200, fontSize: 64, bgcolor: 'primary.main' }}
+          sx={{ width: 160, height: 150, fontSize: 52, bgcolor: 'primary.main' }}
         >
           {owner.name.charAt(0).toUpperCase()}
         </Avatar>
