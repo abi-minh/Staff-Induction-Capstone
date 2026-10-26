@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.26.0
+ * Version:     1.27.0
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.26.0' );
+define( 'INDUCTION_VERSION', '1.27.0' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -2757,7 +2757,14 @@ function induction_create_staff( WP_REST_Request $request ): WP_REST_Response|WP
     if ( ! isset( $assignable[ $role ] ) ) {
         return new WP_Error( 'invalid_role', 'Please choose a valid role.', [ 'status' => 400 ] );
     }
-    if ( strlen( $password ) < 8 ) {
+    // Blank is the normal case. The setup email carries a set-password link,
+    // so a password typed here is only ever a temporary one the new starter
+    // replaces — generating a strong random one instead means there is no
+    // credential for an admin to invent, write down, or send over chat.
+    $password_set = '' !== $password;
+    if ( ! $password_set ) {
+        $password = wp_generate_password( 24, true, true );
+    } elseif ( strlen( $password ) < 8 ) {
         return new WP_Error( 'weak_password', 'Password must be at least 8 characters.', [ 'status' => 400 ] );
     }
 
@@ -2779,7 +2786,7 @@ function induction_create_staff( WP_REST_Request $request ): WP_REST_Response|WP
     // opt out. A failed send must not fail the request — the account exists,
     // and the response says whether the email went so the UI can say so too.
     $notify   = null === $request->get_param( 'notify' ) ? true : (bool) $request->get_param( 'notify' );
-    $notified = $notify && induction_send_account_setup_email( get_user_by( 'id', $user_id ) );
+    $notified = $notify && induction_send_account_setup_email( get_user_by( 'id', $user_id ), $password_set );
 
     $response             = induction_format_staff_user( get_user_by( 'id', $user_id ) );
     $response['notified'] = $notified;
@@ -6463,13 +6470,47 @@ function induction_send_bulk_reminders( WP_REST_Request $request ): WP_REST_Resp
 // password the admin typed: mailing a plaintext credential is the thing this
 // replaces. It carries a WordPress password-reset link instead, so the staff
 // member sets their own and the admin never has to relay one out of band.
-function induction_send_account_setup_email( WP_User $user ): bool {
+/**
+ * Tell a new staff member their account exists.
+ *
+ * Two versions, because there are two ways an account is created and a single
+ * message cannot be honest about both. When the server generated the password
+ * the recipient needs a way to set their own, so the mail carries a reset
+ * link. When an administrator set one, that link would invalidate the password
+ * they are about to be handed — so it is left out entirely, and no reset key
+ * is minted either, rather than leaving a live one unused in the database.
+ */
+function induction_send_account_setup_email( WP_User $user, bool $password_set = false ): bool {
     if ( ! is_email( $user->user_email ) ) {
         return false;
     }
 
     $site       = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES );
     $portal_url = induction_portal_page_url();
+
+    $intro = sprintf(
+        '<p>Hi %1$s,</p><p>An induction account has been created for you at %2$s.</p><p><strong>Username:</strong> %3$s</p>',
+        esc_html( $user->display_name ),
+        esc_html( $site ),
+        esc_html( $user->user_login )
+    );
+    $signoff = sprintf( '<p>&mdash; %s</p>', esc_html( $site ) );
+
+    if ( $password_set ) {
+        $body = $intro . sprintf(
+            '<p>Your administrator has set your password and will pass it on to you. ' .
+            'Sign in to the <a href="%1$s">staff portal</a> to see the training assigned to you.</p>' .
+            '<p>You can change your password once you are signed in.</p>',
+            esc_url( $portal_url )
+        ) . $signoff;
+
+        return (bool) wp_mail(
+            $user->user_email,
+            sprintf( '[%s] Your induction account', $site ),
+            $body,
+            [ 'Content-Type: text/html; charset=UTF-8' ]
+        );
+    }
 
     $key = get_password_reset_key( $user );
     if ( is_wp_error( $key ) ) {
@@ -6480,25 +6521,17 @@ function induction_send_account_setup_email( WP_User $user ): bool {
         'login'
     );
 
-    $subject = sprintf( '[%s] Your induction account', $site );
-    $body    = sprintf(
-        '<p>Hi %1$s,</p>' .
-        '<p>An induction account has been created for you at %2$s.</p>' .
-        '<p><strong>Username:</strong> %3$s</p>' .
-        '<p><a href="%4$s">Choose your password</a> to get started, then sign in to the ' .
-        '<a href="%5$s">staff portal</a> to see the training assigned to you.</p>' .
-        '<p>If that link has expired, use the "Lost your password?" option on the sign-in page.</p>' .
-        '<p>— %2$s</p>',
-        esc_html( $user->display_name ),
-        esc_html( $site ),
-        esc_html( $user->user_login ),
+    $body = $intro . sprintf(
+        '<p><a href="%1$s">Set your password</a> to get started, then sign in to the ' .
+        '<a href="%2$s">staff portal</a> to see the training assigned to you.</p>' .
+        '<p>If that link has expired, use the "Lost your password?" option on the sign-in page.</p>',
         esc_url( $set_password_url ),
         esc_url( $portal_url )
-    );
+    ) . $signoff;
 
     return (bool) wp_mail(
         $user->user_email,
-        $subject,
+        sprintf( '[%s] Your induction account', $site ),
         $body,
         [ 'Content-Type: text/html; charset=UTF-8' ]
     );

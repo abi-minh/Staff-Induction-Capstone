@@ -58,7 +58,8 @@ export function useDeleteStaffRole() {
 export function useCreateStaff() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: NewStaffInput) => createStaff(input),
+    mutationFn: ({ input, notify = true }: { input: NewStaffInput; notify?: boolean }) =>
+      createStaff(input, notify),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['staff'] });
       qc.invalidateQueries({ queryKey: ['reports'] });

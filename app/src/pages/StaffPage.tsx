@@ -202,7 +202,12 @@ export default function StaffPage() {
     password: "",
   });
   const [addError, setAddError] = useState("");
-  const [created, setCreated] = useState<StaffMember | null>(null);
+  const [created, setCreated] = useState<
+    (StaffMember & { notified?: boolean; hadPassword?: boolean }) | null
+  >(null);
+  // On by default: the email is how a new starter sets their own password,
+  // and without it an account with a generated password is unreachable.
+  const [notifyNew, setNotifyNew] = useState(true);
   // Tracks whether the admin has typed into Username directly, so the
   // auto-fill-from-Name watcher below stops overwriting a deliberate edit.
   const usernameEditedRef = useRef(false);
@@ -330,25 +335,34 @@ export default function StaffPage() {
       !addForm.name.trim() ||
       !addForm.username.trim() ||
       !addForm.email.trim() ||
-      !addForm.role ||
-      !addForm.password
+      !addForm.role
     ) {
-      setAddError("Name, username, email, role and password are all required.");
+      setAddError("Name, username, email and role are all required.");
       return;
     }
-    if (addForm.password.length < 8) {
+    // Only checked when one was typed: blank means the server generates one.
+    if (addForm.password && addForm.password.length < 8) {
       setAddError("Password must be at least 8 characters.");
+      return;
+    }
+    if (!addForm.password && !notifyNew) {
+      setAddError(
+        "With no password and no email, nobody would be able to sign in. Set a password, or send the setup email.",
+      );
       return;
     }
     try {
       const member = await createStaff.mutateAsync({
-        name: addForm.name.trim(),
-        username: addForm.username.trim(),
-        email: addForm.email.trim(),
-        role: addForm.role,
-        password: addForm.password,
+        input: {
+          name: addForm.name.trim(),
+          username: addForm.username.trim(),
+          email: addForm.email.trim(),
+          role: addForm.role,
+          password: addForm.password || undefined,
+        },
+        notify: notifyNew,
       });
-      setCreated(member);
+      setCreated({ ...member, hadPassword: Boolean(addForm.password) });
     } catch (err) {
       setAddError(
         err instanceof Error ? err.message : "Could not add staff member.",
@@ -1023,11 +1037,19 @@ export default function StaffPage() {
           sx={{ display: "flex", flexDirection: "column", gap: 2.5, pt: 1 }}
         >
           {created ? (
-            <Alert severity="success">
-              {created.name} can now sign in with username{" "}
+            <Alert severity={created.notified === false ? "warning" : "success"}>
+              {created.name} can sign in with username{" "}
               <strong>{created.username}</strong> or email{" "}
-              <strong>{created.email}</strong>, plus the password you set. Share
-              these credentials with them.
+              <strong>{created.email}</strong>.{" "}
+              {created.hadPassword
+                ? "Pass on the password you set — it was not emailed."
+                : "They set their own password from the email."}{" "}
+              {/* Said plainly: a failed send leaves an account nobody has been
+                  told about, and the admin is the only one who can notice. */}
+              {created.notified === false &&
+                (created.hadPassword
+                  ? "No email was sent, so give them the portal link too."
+                  : "The email could not be sent — send them a password reset from WordPress, or add them again.")}
             </Alert>
           ) : (
             <>
@@ -1079,14 +1101,18 @@ export default function StaffPage() {
                 ))}
               </TextField>
               <TextField
-                label="Password"
+                label="Password (optional)"
                 type={showPassword ? "text" : "password"}
                 value={addForm.password}
                 onChange={(e) =>
                   setAddForm((f) => ({ ...f, password: e.target.value }))
                 }
                 fullWidth
-                helperText="Min 8 characters. Share these credentials with the new staff member so they can log in."
+                helperText={
+                  addForm.password
+                    ? "Min 8 characters. You will need to pass this on yourself."
+                    : "Leave blank and they set their own password from the email."
+                }
                 slotProps={{
                   input: {
                     endAdornment: (
@@ -1106,6 +1132,22 @@ export default function StaffPage() {
                     ),
                   },
                 }}
+              />
+              {/* The label names what will actually arrive, because the two
+                  paths send different mail: a link to set a password, or just
+                  the way in to a portal whose address is not guessable. */}
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={notifyNew}
+                    onChange={(e) => setNotifyNew(e.target.checked)}
+                  />
+                }
+                label={
+                  addForm.password
+                    ? "Email them the portal link"
+                    : "Email them a link to set their password"
+                }
               />
             </>
           )}

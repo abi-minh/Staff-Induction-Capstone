@@ -214,7 +214,12 @@ export interface NewStaffInput {
   username: string;
   email: string;
   role: string;
-  password: string;
+  /**
+   * Optional. Left blank, the server generates a strong random one and the
+   * setup email invites the new starter to set their own — which is what
+   * happens to any password typed here anyway, since the link replaces it.
+   */
+  password?: string;
 }
 
 export interface Assignment {
