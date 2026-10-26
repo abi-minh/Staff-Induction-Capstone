@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Induction Platform
  * Description: Staff induction portal — registers custom post types, REST endpoints, and embeds the React portal via shortcode.
- * Version:     1.27.0
+ * Version:     1.27.1
  * Requires at least: 6.0
  * Requires PHP: 8.0
  */
@@ -26,7 +26,7 @@ if ( ! isset( $_SERVER['HTTP_AUTHORIZATION'] ) ) {
 
 define( 'INDUCTION_DIR',     plugin_dir_path( __FILE__ ) );
 define( 'INDUCTION_URL',     plugin_dir_url( __FILE__ ) );
-define( 'INDUCTION_VERSION', '1.27.0' );
+define( 'INDUCTION_VERSION', '1.27.1' );
 
 // "Meet Our Team" limits. These are enforced server-side as well as in the admin
 // UI, so a direct REST call cannot store text the team page can't lay out.
@@ -6500,7 +6500,8 @@ function induction_send_account_setup_email( WP_User $user, bool $password_set =
         $body = $intro . sprintf(
             '<p>Your administrator has set your password and will pass it on to you. ' .
             'Sign in to the <a href="%1$s">staff portal</a> to see the training assigned to you.</p>' .
-            '<p>You can change your password once you are signed in.</p>',
+            '<p>If you would rather choose your own, use the "Forgot your password?" link ' .
+            'on the sign-in page.</p>',
             esc_url( $portal_url )
         ) . $signoff;
 
@@ -6524,7 +6525,7 @@ function induction_send_account_setup_email( WP_User $user, bool $password_set =
     $body = $intro . sprintf(
         '<p><a href="%1$s">Set your password</a> to get started, then sign in to the ' .
         '<a href="%2$s">staff portal</a> to see the training assigned to you.</p>' .
-        '<p>If that link has expired, use the "Lost your password?" option on the sign-in page.</p>',
+        '<p>If that link has expired, use the "Forgot your password?" link on the sign-in page.</p>',
         esc_url( $set_password_url ),
         esc_url( $portal_url )
     ) . $signoff;
@@ -7154,5 +7155,9 @@ function induction_maybe_enqueue_portal(): void {
 
     wp_localize_script( 'induction-app', 'InductionApp', [
         'restUrl' => esc_url_raw( rest_url() ),
+        // WordPress owns password recovery; the portal only has to point at
+        // it. Through the helper rather than a hardcoded wp-login.php, so a
+        // security plugin that moves the login page is still followed.
+        'lostPasswordUrl' => esc_url_raw( wp_lostpassword_url() ),
     ] );
 }

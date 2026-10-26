@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Alert, Box, Button, Card, CircularProgress, TextField, Typography,
+  Alert, Box, Button, Card, CircularProgress, Link, TextField, Typography,
 } from '@mui/material';
 import { login, fetchCurrentUser } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
@@ -9,6 +9,22 @@ import BrandLogo from '../components/BrandLogo';
 
 function isAdminRole(roles: string[]): boolean {
   return roles.some((r) => ['administrator', 'induction_admin'].includes(r));
+}
+
+/**
+ * Where WordPress handles password resets.
+ *
+ * Supplied by the plugin so a security plugin that moves wp-login.php is
+ * followed. The fallback derives it from the REST root, which is all the
+ * standalone dev and e2e builds have.
+ */
+function lostPasswordUrl(): string {
+  const supplied = window.InductionApp?.lostPasswordUrl;
+  if (supplied) return supplied;
+
+  const rest = window.InductionApp?.restUrl ?? import.meta.env.VITE_WP_REST_URL ?? '';
+  const root = String(rest).replace(/\/wp-json\/?$/, '/');
+  return `${root}wp-login.php?action=lostpassword`;
 }
 
 export default function LoginPage() {
@@ -100,6 +116,16 @@ export default function LoginPage() {
           >
             {loading ? 'Signing in…' : 'Sign in'}
           </Button>
+
+          {/* WordPress owns password recovery, and until now nothing in the
+              portal pointed at it — so a new starter whose 24-hour setup link
+              had expired had nowhere to go. The account-setup emails name
+              this link by exactly this wording. */}
+          <Box sx={{ textAlign: 'center', mt: 1 }}>
+            <Link href={lostPasswordUrl()} variant="body2" underline="hover">
+              Forgot your password?
+            </Link>
+          </Box>
         </Box>
       </Card>
     </Box>

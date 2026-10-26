@@ -2,7 +2,7 @@
 
 declare global {
   interface Window {
-    InductionApp?: { restUrl: string };
+    InductionApp?: { restUrl: string; lostPasswordUrl?: string };
   }
 }
 
